@@ -121,6 +121,10 @@ export class PGLiteEngine implements BrainEngine {
     return this._db;
   }
 
+  private activeSourceId(sourceId?: string | null): string {
+    return sourceId || process.env.GBRAIN_SOURCE || 'default';
+  }
+
   // Lifecycle
   async connect(config: EngineConfig): Promise<void> {
     const dataDir = config.database_path || undefined; // undefined = in-memory
@@ -417,11 +421,11 @@ export class PGLiteEngine implements BrainEngine {
   async getPage(slug: string, opts?: { sourceId?: string; includeDeleted?: boolean }): Promise<Page | null> {
     // v0.26.5: hide soft-deleted by default; opt-in via opts.includeDeleted.
     const includeDeleted = opts?.includeDeleted === true;
-    const sourceId = opts?.sourceId;
+    const sourceId = opts?.sourceId || process.env.GBRAIN_SOURCE;
     const where: string[] = ['slug = $1'];
     const params: unknown[] = [slug];
     if (sourceId) {
-      params.push(sourceId);
+      params.push(this.activeSourceId(sourceId));
       where.push(`source_id = $${params.length}`);
     }
     if (!includeDeleted) {
@@ -447,9 +451,10 @@ export class PGLiteEngine implements BrainEngine {
     // global UNIQUE(slug) was dropped in migration v17. Step 5+ will
     // surface an explicit sourceId param on putPage for multi-source sync.
     const pageKind = page.page_kind || 'markdown';
+    const sourceId = this.activeSourceId(page.source_id);
     const { rows } = await this.db.query(
-      `INSERT INTO pages (slug, type, page_kind, title, compiled_truth, timeline, frontmatter, content_hash, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now())
+      `INSERT INTO pages (source_id, slug, type, page_kind, title, compiled_truth, timeline, frontmatter, content_hash, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, now())
        ON CONFLICT (source_id, slug) DO UPDATE SET
          type = EXCLUDED.type,
          page_kind = EXCLUDED.page_kind,
@@ -460,13 +465,14 @@ export class PGLiteEngine implements BrainEngine {
          content_hash = EXCLUDED.content_hash,
          updated_at = now()
        RETURNING id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at`,
-      [slug, page.type, pageKind, page.title, page.compiled_truth, page.timeline || '', JSON.stringify(frontmatter), hash]
+      [sourceId, slug, page.type, pageKind, page.title, page.compiled_truth, page.timeline || '', JSON.stringify(frontmatter), hash]
     );
     return rowToPage(rows[0] as Record<string, unknown>);
   }
 
-  async deletePage(slug: string): Promise<void> {
-    await this.db.query('DELETE FROM pages WHERE slug = $1', [slug]);
+  async deletePage(slug: string, sourceId?: string): Promise<void> {
+    const src = this.activeSourceId(sourceId);
+    await this.db.query('DELETE FROM pages WHERE slug = $1 AND source_id = $2', [slug, src]);
   }
 
   async softDeletePage(slug: string, opts?: { sourceId?: string }): Promise<{ slug: string } | null> {
@@ -536,6 +542,10 @@ export class PGLiteEngine implements BrainEngine {
     if (filters?.updated_after) {
       params.push(filters.updated_after);
       where.push(`p.updated_at > $${params.length}::timestamptz`);
+    }
+    if (filters?.sourceId) {
+      params.push(this.activeSourceId(filters.sourceId));
+      where.push(`p.source_id = $${params.length}`);
     }
     // slugPrefix uses the (source_id, slug) UNIQUE btree for index range scans.
     // Escape LIKE metacharacters so the user prefix is treated as a literal.
@@ -627,6 +637,10 @@ export class PGLiteEngine implements BrainEngine {
       params.push(opts.symbolKind);
       extraFilter += ` AND cc.symbol_type = $${params.length}`;
     }
+    if (opts?.sourceId && opts.sourceId !== '__all__') {
+      params.push(opts.sourceId);
+      extraFilter += ` AND p.source_id = $${params.length}`;
+    }
 
     // v0.26.5: visibility filter (soft-deleted + archived-source).
     const visibilityClause = buildVisibilityClause('p', 's');
@@ -699,6 +713,10 @@ export class PGLiteEngine implements BrainEngine {
       params.push(opts.symbolKind);
       extraFilter += ` AND cc.symbol_type = $${params.length}`;
     }
+    if (opts?.sourceId && opts.sourceId !== '__all__') {
+      params.push(opts.sourceId);
+      extraFilter += ` AND p.source_id = $${params.length}`;
+    }
 
     // v0.26.5: visibility filter for the chunk-grain anchor primitive.
     const visibilityClause = buildVisibilityClause('p', 's');
@@ -759,6 +777,10 @@ export class PGLiteEngine implements BrainEngine {
       params.push(opts.symbolKind);
       extraFilter += ` AND cc.symbol_type = $${params.length}`;
     }
+    if (opts?.sourceId && opts.sourceId !== '__all__') {
+      params.push(opts.sourceId);
+      extraFilter += ` AND p.source_id = $${params.length}`;
+    }
 
     // v0.26.5: visibility filter applied in the inner CTE so HNSW sees the
     // same candidate count it always did. See postgres-engine.ts for rationale.
@@ -813,9 +835,10 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   // Chunks
-  async upsertChunks(slug: string, chunks: ChunkInput[]): Promise<void> {
+  async upsertChunks(slug: string, chunks: ChunkInput[], sourceId?: string): Promise<void> {
+    const src = this.activeSourceId(sourceId);
     // Get page_id
-    const pageResult = await this.db.query('SELECT id FROM pages WHERE slug = $1', [slug]);
+    const pageResult = await this.db.query('SELECT id FROM pages WHERE slug = $1 AND source_id = $2', [slug, src]);
     if (pageResult.rows.length === 0) throw new Error(`Page not found: ${slug}`);
     const pageId = (pageResult.rows[0] as { id: number }).id;
 
@@ -900,13 +923,14 @@ export class PGLiteEngine implements BrainEngine {
     );
   }
 
-  async getChunks(slug: string): Promise<Chunk[]> {
+  async getChunks(slug: string, sourceId?: string): Promise<Chunk[]> {
+    const src = this.activeSourceId(sourceId);
     const { rows } = await this.db.query(
       `SELECT cc.* FROM content_chunks cc
        JOIN pages p ON p.id = cc.page_id
-       WHERE p.slug = $1
+       WHERE p.slug = $1 AND p.source_id = $2
        ORDER BY cc.chunk_index`,
-      [slug]
+      [slug, src]
     );
     return (rows as Record<string, unknown>[]).map(r => rowToChunk(r));
   }
@@ -934,11 +958,12 @@ export class PGLiteEngine implements BrainEngine {
     return rows as unknown as StaleChunkRow[];
   }
 
-  async deleteChunks(slug: string): Promise<void> {
+  async deleteChunks(slug: string, sourceId?: string): Promise<void> {
+    const src = this.activeSourceId(sourceId);
     await this.db.query(
       `DELETE FROM content_chunks
-       WHERE page_id = (SELECT id FROM pages WHERE slug = $1)`,
-      [slug]
+       WHERE page_id = (SELECT id FROM pages WHERE slug = $1 AND source_id = $2)`,
+      [slug, src]
     );
   }
 
@@ -951,19 +976,26 @@ export class PGLiteEngine implements BrainEngine {
     linkSource?: string,
     originSlug?: string,
     originField?: string,
+    fromSourceId?: string,
+    toSourceId?: string,
+    originSourceId?: string,
   ): Promise<void> {
     const src = linkSource ?? 'markdown';
+    const fromSrc = this.activeSourceId(fromSourceId);
+    const toSrc = this.activeSourceId(toSourceId);
+    const originSrc = this.activeSourceId(originSourceId);
     await this.db.query(
       `INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, origin_page_id, origin_field)
-       SELECT f.id, t.id, $3, $4, $5,
-              (SELECT id FROM pages WHERE slug = $6),
-              $7
+       SELECT f.id, t.id, $5, $6, $7,
+              (SELECT id FROM pages WHERE slug = $8 AND source_id = $9),
+              $10
        FROM pages f, pages t
-       WHERE f.slug = $1 AND t.slug = $2
+       WHERE f.slug = $1 AND f.source_id = $2
+         AND t.slug = $3 AND t.source_id = $4
        ON CONFLICT (from_page_id, to_page_id, link_type, link_source, origin_page_id) DO UPDATE SET
          context = EXCLUDED.context,
          origin_field = EXCLUDED.origin_field`,
-      [from, to, linkType || '', context || '', src, originSlug ?? null, originField ?? null]
+      [from, fromSrc, to, toSrc, linkType || '', context || '', src, originSlug ?? null, originSrc, originField ?? null]
     );
   }
 
@@ -1279,30 +1311,35 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   // Tags
-  async addTag(slug: string, tag: string): Promise<void> {
+  async addTag(slug: string, tag: string, sourceId?: string): Promise<void> {
+    const src = this.activeSourceId(sourceId);
+    const page = await this.db.query('SELECT id FROM pages WHERE slug = $1 AND source_id = $2', [slug, src]);
+    if (page.rows.length === 0) throw new Error(`addTag failed: page "${slug}" not found`);
     await this.db.query(
       `INSERT INTO tags (page_id, tag)
-       SELECT id, $2 FROM pages WHERE slug = $1
+       SELECT id, $2 FROM pages WHERE slug = $1 AND source_id = $3
        ON CONFLICT (page_id, tag) DO NOTHING`,
-      [slug, tag]
+      [slug, tag, src]
     );
   }
 
-  async removeTag(slug: string, tag: string): Promise<void> {
+  async removeTag(slug: string, tag: string, sourceId?: string): Promise<void> {
+    const src = this.activeSourceId(sourceId);
     await this.db.query(
       `DELETE FROM tags
-       WHERE page_id = (SELECT id FROM pages WHERE slug = $1)
-         AND tag = $2`,
-      [slug, tag]
+       WHERE page_id = (SELECT id FROM pages WHERE slug = $1 AND source_id = $2)
+         AND tag = $3`,
+      [slug, src, tag]
     );
   }
 
-  async getTags(slug: string): Promise<string[]> {
+  async getTags(slug: string, sourceId?: string): Promise<string[]> {
+    const src = this.activeSourceId(sourceId);
     const { rows } = await this.db.query(
       `SELECT tag FROM tags
-       WHERE page_id = (SELECT id FROM pages WHERE slug = $1)
+       WHERE page_id = (SELECT id FROM pages WHERE slug = $1 AND source_id = $2)
        ORDER BY tag`,
-      [slug]
+      [slug, src]
     );
     return (rows as { tag: string }[]).map(r => r.tag);
   }
@@ -1745,13 +1782,14 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   // Versions
-  async createVersion(slug: string): Promise<PageVersion> {
+  async createVersion(slug: string, sourceId?: string): Promise<PageVersion> {
+    const src = this.activeSourceId(sourceId);
     const { rows } = await this.db.query(
       `INSERT INTO page_versions (page_id, compiled_truth, frontmatter)
        SELECT id, compiled_truth, frontmatter
-       FROM pages WHERE slug = $1
+       FROM pages WHERE slug = $1 AND source_id = $2
        RETURNING *`,
-      [slug]
+      [slug, src]
     );
     return rows[0] as unknown as PageVersion;
   }

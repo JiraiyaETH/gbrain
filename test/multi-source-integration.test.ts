@@ -20,6 +20,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { runSources } from '../src/commands/sources.ts';
 import { resolveSourceId } from '../src/core/source-resolver.ts';
+import { importFromContent } from '../src/core/import-file.ts';
 
 let engine: PGLiteEngine;
 
@@ -241,5 +242,40 @@ describe('v0.18.0 — links.resolution_type column exists (Step 4)', () => {
     }
     expect(err).not.toBeNull();
     expect(err!.message.toLowerCase()).toMatch(/check|constraint/);
+  });
+});
+
+describe('v0.18.0 — import/search APIs respect explicit sourceId', () => {
+  test('same slug can be imported into default and jarvis-brain-test without leaking search results', async () => {
+    await runSources(engine, ['add', 'jarvis-brain-test', '--no-federated']);
+
+    await importFromContent(engine, 'topics/source-boundary', `---
+type: concept
+title: Default Boundary
+---
+
+alpha-only default bucket text.
+`, { noEmbed: true });
+
+    await importFromContent(engine, 'topics/source-boundary', `---
+type: concept
+title: Jarvis Boundary
+---
+
+jarvis-only clean bucket text.
+`, { noEmbed: true, sourceId: 'jarvis-brain-test' });
+
+    const defaultPage = await engine.getPage('topics/source-boundary');
+    const jarvisPage = await engine.getPage('topics/source-boundary', { sourceId: 'jarvis-brain-test' });
+    expect(defaultPage?.title).toBe('Default Boundary');
+    expect(jarvisPage?.title).toBe('Jarvis Boundary');
+
+    const defaultHits = await engine.searchKeyword('default bucket', { sourceId: 'default', limit: 5 });
+    expect(defaultHits.some(r => r.source_id === 'default' && r.chunk_text.includes('alpha-only'))).toBe(true);
+    expect(defaultHits.some(r => r.source_id === 'jarvis-brain-test')).toBe(false);
+
+    const jarvisHits = await engine.searchKeyword('clean bucket', { sourceId: 'jarvis-brain-test', limit: 5 });
+    expect(jarvisHits.some(r => r.source_id === 'jarvis-brain-test' && r.chunk_text.includes('jarvis-only'))).toBe(true);
+    expect(jarvisHits.some(r => r.source_id === 'default')).toBe(false);
   });
 });

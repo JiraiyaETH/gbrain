@@ -317,6 +317,30 @@ export interface Operation {
   };
 }
 
+function explicitSourceParam(params: Record<string, unknown>): string | undefined {
+  const source = params.source;
+  if (typeof source === 'string' && source.length > 0) return source;
+  return process.env.GBRAIN_SOURCE || undefined;
+}
+
+async function readSourceParam(ctx: OperationContext, params: Record<string, unknown>): Promise<string | undefined> {
+  const explicit = explicitSourceParam(params);
+  if (explicit) return explicit;
+
+  // Multi-source brains can set a brain-level default via
+  // `gbrain sources default <id>`. Read operations are used by CLI, MCP,
+  // and `gbrain call`; without honoring this config, unscoped search/query
+  // silently scan the old mixed/default bucket even after a clean source has
+  // been registered. Returning undefined preserves legacy all-source behavior
+  // for brains that have not opted into a read default source.
+  try {
+    const configured = await ctx.engine.getConfig('sources.default');
+    return configured && configured.length > 0 ? configured : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // --- Page CRUD ---
 
 const get_page: Operation = {
@@ -326,19 +350,21 @@ const get_page: Operation = {
     slug: { type: 'string', required: true, description: 'Page slug' },
     fuzzy: { type: 'boolean', description: 'Enable fuzzy slug resolution (default: false)' },
     include_deleted: { type: 'boolean', description: 'v0.26.5: surface soft-deleted pages with deleted_at populated (default: false). Used by restore workflows.' },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   handler: async (ctx, p) => {
     const slug = p.slug as string;
     const fuzzy = (p.fuzzy as boolean) || false;
     const includeDeleted = (p.include_deleted as boolean) === true;
+    const sourceId = await readSourceParam(ctx, p);
 
-    let page = await ctx.engine.getPage(slug, { includeDeleted });
+    let page = await ctx.engine.getPage(slug, { sourceId, includeDeleted });
     let resolved_slug: string | undefined;
 
     if (!page && fuzzy) {
       const candidates = await ctx.engine.resolveSlugs(slug);
       if (candidates.length === 1) {
-        page = await ctx.engine.getPage(candidates[0], { includeDeleted });
+        page = await ctx.engine.getPage(candidates[0], { sourceId, includeDeleted });
         resolved_slug = candidates[0];
       } else if (candidates.length > 1) {
         return { error: 'ambiguous_slug', candidates };
@@ -349,7 +375,7 @@ const get_page: Operation = {
       throw new OperationError('page_not_found', `Page not found: ${slug}`, includeDeleted ? 'Check the slug or use fuzzy: true' : 'Page may be soft-deleted; pass include_deleted: true to verify');
     }
 
-    const tags = await ctx.engine.getTags(page.slug);
+    const tags = await ctx.engine.getTags(page.slug, sourceId);
     return { ...page, tags, ...(resolved_slug ? { resolved_slug } : {}) };
   },
   scope: 'read',
@@ -362,11 +388,13 @@ const put_page: Operation = {
   params: {
     slug: { type: 'string', required: true, description: 'Page slug' },
     content: { type: 'string', required: true, description: 'Full markdown content with YAML frontmatter' },
+    source: { type: 'string', description: 'Write to one source id (or GBRAIN_SOURCE)' },
   },
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
     const slug = p.slug as string;
+    const sourceId = explicitSourceParam(p);
 
     // Subagent namespace enforcement (v0.15+). Runs BEFORE the dry-run
     // short-circuit so preview calls surface the same rejection. Confines
@@ -407,7 +435,7 @@ const put_page: Operation = {
     // so Gemini / Ollama / Voyage brains don't silently drop embeddings (Codex C2).
     const { isAvailable } = await import('./ai/gateway.ts');
     const noEmbed = !isAvailable('embedding');
-    const result = await importFromContent(ctx.engine, slug, p.content as string, { noEmbed });
+    const result = await importFromContent(ctx.engine, slug, p.content as string, { noEmbed, sourceId });
 
     // Auto-link post-hook: runs AFTER importFromContent (which is its own
     // transaction). Runs even on status='skipped' so reconciliation catches drift
@@ -658,27 +686,29 @@ const delete_page: Operation = {
   description: 'Soft-delete a page. The row is hidden from search and from get_page/list_pages, but is recoverable via restore_page within 72h. The autopilot purge phase hard-deletes after the recovery window. Pass include_deleted: true to get_page to verify the soft-delete landed.',
   params: {
     slug: { type: 'string', required: true },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
     const slug = p.slug as string;
-    if (ctx.dryRun) return { dry_run: true, action: 'soft_delete_page', slug };
+    const sourceId = explicitSourceParam(p);
+    if (ctx.dryRun) return { dry_run: true, action: 'soft_delete_page', slug, source: sourceId };
     // v0.26.5: rewired from hard-delete to soft-delete. The hard-delete primitive
     // (engine.deletePage) is now reserved for purgeDeletedPages and explicit
     // tests. softDeletePage returns null when the slug is unknown OR already
     // soft-deleted (idempotent-as-null) — preserve that as a clean no-op shape.
-    const result = await ctx.engine.softDeletePage(slug);
+    const result = await ctx.engine.softDeletePage(slug, { sourceId });
     if (result === null) {
       // Distinguish "not found" from "already soft-deleted" so the agent gets a
       // clear signal. Probe once with include_deleted to disambiguate.
-      const existing = await ctx.engine.getPage(slug, { includeDeleted: true });
+      const existing = await ctx.engine.getPage(slug, { sourceId, includeDeleted: true });
       if (!existing) {
         throw new OperationError('page_not_found', `Page not found: ${slug}`, 'Check the slug.');
       }
-      return { status: 'already_soft_deleted', slug, deleted_at: existing.deleted_at };
+      return { status: 'already_soft_deleted', slug, deleted_at: existing.deleted_at, ...(sourceId ? { source: sourceId } : {}) };
     }
-    return { status: 'soft_deleted', slug, recoverable_until: 'now + 72h via restore_page' };
+    return { status: 'soft_deleted', slug, recoverable_until: 'now + 72h via restore_page', ...(sourceId ? { source: sourceId } : {}) };
   },
   cliHints: { name: 'delete', positional: ['slug'] },
 };
@@ -688,22 +718,24 @@ const restore_page: Operation = {
   description: 'v0.26.5 — restore a soft-deleted page (clear deleted_at). Returns success only if the page was actually soft-deleted. After this op, the page reappears in search and in get_page/list_pages without the include_deleted flag.',
   params: {
     slug: { type: 'string', required: true },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
     const slug = p.slug as string;
-    if (ctx.dryRun) return { dry_run: true, action: 'restore_page', slug };
-    const ok = await ctx.engine.restorePage(slug);
+    const sourceId = explicitSourceParam(p);
+    if (ctx.dryRun) return { dry_run: true, action: 'restore_page', slug, source: sourceId };
+    const ok = await ctx.engine.restorePage(slug, { sourceId });
     if (!ok) {
       // Distinguish "not found" from "already active" (idempotent-as-false).
-      const existing = await ctx.engine.getPage(slug, { includeDeleted: true });
+      const existing = await ctx.engine.getPage(slug, { sourceId, includeDeleted: true });
       if (!existing) {
         throw new OperationError('page_not_found', `Page not found: ${slug}`, 'Check the slug.');
       }
-      return { status: 'already_active', slug };
+      return { status: 'already_active', slug, ...(sourceId ? { source: sourceId } : {}) };
     }
-    return { status: 'restored', slug };
+    return { status: 'restored', slug, ...(sourceId ? { source: sourceId } : {}) };
   },
   cliHints: { name: 'restore', positional: ['slug'] },
 };
@@ -734,6 +766,7 @@ const list_pages: Operation = {
     tag: { type: 'string', description: 'Filter by tag' },
     limit: { type: 'number', description: 'Max results (default 50)' },
     include_deleted: { type: 'boolean', description: 'v0.26.5: include soft-deleted pages (default: false). Used by restore workflows and operator diagnostics.' },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   handler: async (ctx, p) => {
     const pages = await ctx.engine.listPages({
@@ -741,6 +774,7 @@ const list_pages: Operation = {
       tag: p.tag as string,
       limit: clampSearchLimit(p.limit as number | undefined, 50, 100),
       includeDeleted: (p.include_deleted as boolean) === true,
+      sourceId: await readSourceParam(ctx, p),
     });
     return pages.map(pg => ({
       slug: pg.slug,
@@ -763,6 +797,7 @@ const search: Operation = {
     query: { type: 'string', required: true },
     limit: { type: 'number', description: 'Max results (default 20)' },
     offset: { type: 'number', description: 'Skip first N results (for pagination)' },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   handler: async (ctx, p) => {
     const startedAt = Date.now();
@@ -770,6 +805,7 @@ const search: Operation = {
     const raw = await ctx.engine.searchKeyword(queryText, {
       limit: (p.limit as number) || 20,
       offset: (p.offset as number) || 0,
+      sourceId: await readSourceParam(ctx, p),
     });
     const results = dedupResults(raw);
     const latency_ms = Date.now() - startedAt;
@@ -817,6 +853,7 @@ const query: Operation = {
     // v0.20.0 Cathedral II Layer 7 (A2) / Layer 10 C3: two-pass structural expansion.
     near_symbol: { type: 'string', description: 'Anchor retrieval at this qualified symbol name (e.g., BrainEngine.searchKeyword). Enables A2 two-pass.' },
     walk_depth: { type: 'number', description: 'Structural walk depth 1-2. Default 0 (off). Expands anchors through code_edges with 1/(1+hop) decay.' },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   handler: async (ctx, p) => {
     const startedAt = Date.now();
@@ -838,6 +875,7 @@ const query: Operation = {
       symbolKind: (p.symbol_kind as string) || undefined,
       nearSymbol: (p.near_symbol as string) || undefined,
       walkDepth: typeof p.walk_depth === 'number' ? (p.walk_depth as number) : undefined,
+      sourceId: await readSourceParam(ctx, p),
       onMeta: (m) => { capturedMeta = m; },
     });
     const latency_ms = Date.now() - startedAt;
@@ -986,12 +1024,13 @@ const add_tag: Operation = {
   params: {
     slug: { type: 'string', required: true },
     tag: { type: 'string', required: true },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'add_tag', slug: p.slug, tag: p.tag };
-    await ctx.engine.addTag(p.slug as string, p.tag as string);
+    await ctx.engine.addTag(p.slug as string, p.tag as string, explicitSourceParam(p));
     return { status: 'ok' };
   },
   cliHints: { name: 'tag', positional: ['slug', 'tag'] },
@@ -1003,12 +1042,13 @@ const remove_tag: Operation = {
   params: {
     slug: { type: 'string', required: true },
     tag: { type: 'string', required: true },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'remove_tag', slug: p.slug, tag: p.tag };
-    await ctx.engine.removeTag(p.slug as string, p.tag as string);
+    await ctx.engine.removeTag(p.slug as string, p.tag as string, explicitSourceParam(p));
     return { status: 'ok' };
   },
   cliHints: { name: 'untag', positional: ['slug', 'tag'] },
@@ -1019,9 +1059,10 @@ const get_tags: Operation = {
   description: 'List tags for a page',
   params: {
     slug: { type: 'string', required: true },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getTags(p.slug as string);
+    return ctx.engine.getTags(p.slug as string, await readSourceParam(ctx, p));
   },
   scope: 'read',
   cliHints: { name: 'tags', positional: ['slug'] },

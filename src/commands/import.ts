@@ -7,6 +7,7 @@ import { importFile } from '../core/import-file.ts';
 import { loadConfig, gbrainPath } from '../core/config.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
+import { isSyncable, type SyncStrategy } from '../core/sync.ts';
 
 function defaultWorkers(): number {
   const cpuCount = cpus().length;
@@ -32,6 +33,11 @@ export async function runImport(engine: BrainEngine, args: string[], opts: { com
   const noEmbed = args.includes('--no-embed');
   const fresh = args.includes('--fresh');
   const jsonOutput = args.includes('--json');
+  const syncableOnly = args.includes('--syncable-only');
+  const strategyIdx = args.indexOf('--strategy');
+  const strategy = (strategyIdx !== -1 ? args[strategyIdx + 1] : 'markdown') as SyncStrategy;
+  const sourceIdx = args.indexOf('--source');
+  const sourceId = sourceIdx !== -1 ? args[sourceIdx + 1] : process.env.GBRAIN_SOURCE || undefined;
   const workersIdx = args.indexOf('--workers');
   const workersArg = workersIdx !== -1 ? args[workersIdx + 1] : null;
   // v0.22.13 (PR #490 Q2): shared parseWorkers helper rejects bad input
@@ -48,6 +54,8 @@ export async function runImport(engine: BrainEngine, args: string[], opts: { com
   // Find dir: first non-flag arg that isn't a value for --workers
   const flagValues = new Set<number>();
   if (workersIdx !== -1) flagValues.add(workersIdx + 1);
+  if (sourceIdx !== -1) flagValues.add(sourceIdx + 1);
+  if (strategyIdx !== -1) flagValues.add(strategyIdx + 1);
   const dirArg = args.find((a, i) => !a.startsWith('--') && !flagValues.has(i));
 
   if (!dirArg) {
@@ -56,9 +64,17 @@ export async function runImport(engine: BrainEngine, args: string[], opts: { com
   }
   const dir: string = dirArg;  // narrowed; survives closure capture
 
-  // Collect all .md files
-  const allFiles = collectMarkdownFiles(dir);
-  console.log(`Found ${allFiles.length} markdown files`);
+  // Collect all .md files. Full sync can ask import to honor sync.ts's
+  // canonical page filter so dry-run and write paths mirror each other.
+  const collectedFiles = collectMarkdownFiles(dir);
+  const allFiles = syncableOnly
+    ? collectedFiles.filter(abs => isSyncable(relative(dir, abs), { strategy }))
+    : collectedFiles;
+  if (syncableOnly) {
+    console.log(`Found ${collectedFiles.length} markdown files (${allFiles.length} syncable)`);
+  } else {
+    console.log(`Found ${allFiles.length} markdown files`);
+  }
 
   // Resume from checkpoint if available
   const checkpointPath = gbrainPath('import-checkpoint.json');
@@ -105,7 +121,7 @@ export async function runImport(engine: BrainEngine, args: string[], opts: { com
   async function processFile(eng: BrainEngine, filePath: string) {
     const relativePath = relative(dir, filePath);
     try {
-      const result = await importFile(eng, filePath, relativePath, { noEmbed });
+      const result = await importFile(eng, filePath, relativePath, { noEmbed, sourceId });
       if (result.status === 'imported') {
         imported++;
         chunksCreated += result.chunks;

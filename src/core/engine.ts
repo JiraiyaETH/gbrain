@@ -234,7 +234,8 @@ export interface BrainEngine {
    * v0.26.5: by default soft-deleted rows return null (matches the search
    * filter contract). Pass `opts.includeDeleted: true` to surface them with
    * `deleted_at` populated — used by `gbrain pages purge-deleted` listing,
-   * by `restore_page` flow, and by operator diagnostics.
+   * by `restore_page` flow, and by operator diagnostics. Pass `opts.sourceId`
+   * to keep multi-source reads within one source boundary.
    */
   getPage(slug: string, opts?: GetPageOpts): Promise<Page | null>;
   putPage(slug: string, page: PageInput): Promise<Page>;
@@ -246,8 +247,9 @@ export interface BrainEngine {
    * the op now soft-deletes via `softDeletePage` instead. `deletePage` stays
    * as the underlying primitive used by `purgeDeletedPages` and by callers
    * that explicitly want hard-delete semantics (e.g. test setup teardown).
+   * Pass `sourceId` to avoid deleting same-slug pages from another source.
    */
-  deletePage(slug: string): Promise<void>;
+  deletePage(slug: string, sourceId?: string): Promise<void>;
   /**
    * v0.26.5 — set `deleted_at = now()` on a page. Returns the slug if a row
    * was soft-deleted, null if no row matched (already soft-deleted OR not found).
@@ -286,8 +288,8 @@ export interface BrainEngine {
   getEmbeddingsByChunkIds(ids: number[]): Promise<Map<number, Float32Array>>;
 
   // Chunks
-  upsertChunks(slug: string, chunks: ChunkInput[]): Promise<void>;
-  getChunks(slug: string): Promise<Chunk[]>;
+  upsertChunks(slug: string, chunks: ChunkInput[], sourceId?: string): Promise<void>;
+  getChunks(slug: string, sourceId?: string): Promise<Chunk[]>;
   /**
    * Count chunks across the entire brain where embedded_at IS NULL.
    * Pre-flight short-circuit for `embed --stale` so a 100%-embedded brain
@@ -303,7 +305,7 @@ export interface BrainEngine {
    * Bounded by an internal LIMIT of 100000 to mirror listPages.
    */
   listStaleChunks(): Promise<StaleChunkRow[]>;
-  deleteChunks(slug: string): Promise<void>;
+  deleteChunks(slug: string, sourceId?: string): Promise<void>;
 
   // Links
   /**
@@ -319,6 +321,9 @@ export interface BrainEngine {
     linkSource?: string,
     originSlug?: string,
     originField?: string,
+    fromSourceId?: string,
+    toSourceId?: string,
+    originSourceId?: string,
   ): Promise<void>;
   /**
    * Bulk insert links via a single multi-row INSERT...SELECT FROM (VALUES) JOIN pages
@@ -384,9 +389,9 @@ export interface BrainEngine {
   findOrphanPages(): Promise<Array<{ slug: string; title: string; domain: string | null }>>;
 
   // Tags
-  addTag(slug: string, tag: string): Promise<void>;
-  removeTag(slug: string, tag: string): Promise<void>;
-  getTags(slug: string): Promise<string[]>;
+  addTag(slug: string, tag: string, sourceId?: string): Promise<void>;
+  removeTag(slug: string, tag: string, sourceId?: string): Promise<void>;
+  getTags(slug: string, sourceId?: string): Promise<string[]>;
 
   // Timeline
   /**
@@ -498,7 +503,7 @@ export interface BrainEngine {
   putDreamVerdict(filePath: string, contentHash: string, verdict: DreamVerdictInput): Promise<void>;
 
   // Versions
-  createVersion(slug: string): Promise<PageVersion>;
+  createVersion(slug: string, sourceId?: string): Promise<PageVersion>;
   getVersions(slug: string): Promise<PageVersion[]>;
   revertToVersion(slug: string, versionId: number): Promise<void>;
 
@@ -511,7 +516,7 @@ export interface BrainEngine {
   getIngestLog(opts?: { limit?: number }): Promise<IngestLogEntry[]>;
 
   // Sync
-  updateSlug(oldSlug: string, newSlug: string): Promise<void>;
+  updateSlug(oldSlug: string, newSlug: string, sourceId?: string): Promise<void>;
   rewriteLinks(oldSlug: string, newSlug: string): Promise<void>;
 
   // Config
@@ -520,7 +525,7 @@ export interface BrainEngine {
 
   // Migration support
   runMigration(version: number, sql: string): Promise<void>;
-  getChunksWithEmbeddings(slug: string): Promise<Chunk[]>;
+  getChunksWithEmbeddings(slug: string, sourceId?: string): Promise<Chunk[]>;
 
   // Raw SQL (for Minions job queue and other internal modules)
   executeRaw<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;

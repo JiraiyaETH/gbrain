@@ -82,6 +82,7 @@ export async function hybridSearch(
   const searchOpts: SearchOpts = {
     limit: innerLimit,
     detail,
+    sourceId: opts?.sourceId,
     // v0.20.0 Cathedral II Layer 10 — thread language + symbolKind through so
     // per-engine searchKeyword / searchVector apply the filters at SQL level.
     language: opts?.language,

@@ -81,6 +81,10 @@ export class PostgresEngine implements BrainEngine {
     return db.getConnection();
   }
 
+  private activeSourceId(sourceId?: string | null): string {
+    return sourceId || process.env.GBRAIN_SOURCE || 'default';
+  }
+
   // Lifecycle
   async connect(config: EngineConfig & { poolSize?: number }): Promise<void> {
     this._savedConfig = config;
@@ -405,10 +409,10 @@ export class PostgresEngine implements BrainEngine {
   async getPage(slug: string, opts?: { sourceId?: string; includeDeleted?: boolean }): Promise<Page | null> {
     const sql = this.sql;
     const includeDeleted = opts?.includeDeleted === true;
-    const sourceId = opts?.sourceId;
+    const sourceId = opts?.sourceId || process.env.GBRAIN_SOURCE;
     // v0.26.5: default hides soft-deleted rows. Compose with optional sourceId
     // filter via fragment chaining (postgres.js supports sql`` composition).
-    const sourceCondition = sourceId ? sql`AND source_id = ${sourceId}` : sql``;
+    const sourceCondition = sourceId ? sql`AND source_id = ${this.activeSourceId(sourceId)}` : sql``;
     const deletedCondition = includeDeleted ? sql`` : sql`AND deleted_at IS NULL`;
     const rows = await sql`
       SELECT id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at, deleted_at
@@ -431,9 +435,10 @@ export class PostgresEngine implements BrainEngine {
     // was dropped in migration v17. See pglite-engine.ts for matching
     // notes; multi-source sync (Step 5) will surface an explicit sourceId.
     const pageKind = page.page_kind || 'markdown';
+    const sourceId = this.activeSourceId(page.source_id);
     const rows = await sql`
-      INSERT INTO pages (slug, type, page_kind, title, compiled_truth, timeline, frontmatter, content_hash, updated_at)
-      VALUES (${slug}, ${page.type}, ${pageKind}, ${page.title}, ${page.compiled_truth}, ${page.timeline || ''}, ${sql.json(frontmatter as Parameters<typeof sql.json>[0])}, ${hash}, now())
+      INSERT INTO pages (source_id, slug, type, page_kind, title, compiled_truth, timeline, frontmatter, content_hash, updated_at)
+      VALUES (${sourceId}, ${slug}, ${page.type}, ${pageKind}, ${page.title}, ${page.compiled_truth}, ${page.timeline || ''}, ${sql.json(frontmatter as Parameters<typeof sql.json>[0])}, ${hash}, now())
       ON CONFLICT (source_id, slug) DO UPDATE SET
         type = EXCLUDED.type,
         page_kind = EXCLUDED.page_kind,
@@ -448,9 +453,10 @@ export class PostgresEngine implements BrainEngine {
     return rowToPage(rows[0]);
   }
 
-  async deletePage(slug: string): Promise<void> {
+  async deletePage(slug: string, sourceId?: string): Promise<void> {
     const sql = this.sql;
-    await sql`DELETE FROM pages WHERE slug = ${slug}`;
+    const src = this.activeSourceId(sourceId);
+    await sql`DELETE FROM pages WHERE slug = ${slug} AND source_id = ${src}`;
   }
 
   async softDeletePage(slug: string, opts?: { sourceId?: string }): Promise<{ slug: string } | null> {
@@ -510,6 +516,8 @@ export class PostgresEngine implements BrainEngine {
     const tagJoin = filters?.tag ? sql`JOIN tags t ON t.page_id = p.id` : sql``;
     const tagCondition = filters?.tag ? sql`AND t.tag = ${filters.tag}` : sql``;
     const updatedCondition = updatedAfter ? sql`AND p.updated_at > ${updatedAfter}::timestamptz` : sql``;
+    const sourceFilter = filters?.sourceId ? this.activeSourceId(filters.sourceId) : null;
+    const sourceCondition = sourceFilter ? sql`AND p.source_id = ${sourceFilter}` : sql``;
     // slugPrefix uses the (source_id, slug) UNIQUE btree index for range scans.
     // Escape LIKE metacharacters so the user prefix is treated as a literal.
     const slugPrefix = filters?.slugPrefix;
@@ -524,7 +532,7 @@ export class PostgresEngine implements BrainEngine {
     const rows = await sql`
       SELECT p.* FROM pages p
       ${tagJoin}
-      WHERE 1=1 ${typeCondition} ${tagCondition} ${updatedCondition} ${slugCondition} ${deletedCondition}
+      WHERE 1=1 ${typeCondition} ${tagCondition} ${updatedCondition} ${sourceCondition} ${slugCondition} ${deletedCondition}
       ORDER BY p.updated_at DESC LIMIT ${limit} OFFSET ${offset}
     `;
 
@@ -613,6 +621,11 @@ export class PostgresEngine implements BrainEngine {
       params.push(symbolKind);
       symbolKindClause = `AND cc.symbol_type = $${params.length}`;
     }
+    let sourceClause = '';
+    if (opts?.sourceId && opts.sourceId !== '__all__') {
+      params.push(opts.sourceId);
+      sourceClause = `AND p.source_id = $${params.length}`;
+    }
     params.push(innerLimit);
     const innerLimitParam = `$${params.length}`;
     params.push(limit);
@@ -641,6 +654,7 @@ export class PostgresEngine implements BrainEngine {
           ${detailLow ? `AND cc.chunk_source = 'compiled_truth'` : ''}
           ${languageClause}
           ${symbolKindClause}
+          ${sourceClause}
           ${hardExcludeClause}
           ${visibilityClause}
         ORDER BY score DESC
@@ -722,6 +736,11 @@ export class PostgresEngine implements BrainEngine {
       params.push(symbolKind);
       symbolKindClause = `AND cc.symbol_type = $${params.length}`;
     }
+    let sourceClause = '';
+    if (opts?.sourceId && opts.sourceId !== '__all__') {
+      params.push(opts.sourceId);
+      sourceClause = `AND p.source_id = $${params.length}`;
+    }
     params.push(limit);
     const limitParam = `$${params.length}`;
     params.push(offset);
@@ -745,6 +764,7 @@ export class PostgresEngine implements BrainEngine {
         ${detailLow ? `AND cc.chunk_source = 'compiled_truth'` : ''}
         ${languageClause}
         ${symbolKindClause}
+        ${sourceClause}
         ${hardExcludeClause}
         ${visibilityClause}
       ORDER BY score DESC
@@ -810,6 +830,11 @@ export class PostgresEngine implements BrainEngine {
       params.push(symbolKind);
       symbolKindClause = `AND cc.symbol_type = $${params.length}`;
     }
+    let sourceClause = '';
+    if (opts?.sourceId && opts.sourceId !== '__all__') {
+      params.push(opts.sourceId);
+      sourceClause = `AND p.source_id = $${params.length}`;
+    }
     params.push(innerLimit);
     const innerLimitParam = `$${params.length}`;
     params.push(limit);
@@ -838,6 +863,7 @@ export class PostgresEngine implements BrainEngine {
           ${excludeSlugsClause}
           ${languageClause}
           ${symbolKindClause}
+          ${sourceClause}
           ${hardExcludeClause}
           ${visibilityClause}
         ORDER BY cc.embedding <=> $1::vector
@@ -877,11 +903,12 @@ export class PostgresEngine implements BrainEngine {
   }
 
   // Chunks
-  async upsertChunks(slug: string, chunks: ChunkInput[]): Promise<void> {
+  async upsertChunks(slug: string, chunks: ChunkInput[], sourceId?: string): Promise<void> {
     const sql = this.sql;
+    const src = this.activeSourceId(sourceId);
 
     // Get page_id
-    const pages = await sql`SELECT id FROM pages WHERE slug = ${slug}`;
+    const pages = await sql`SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${src}`;
     if (pages.length === 0) throw new Error(`Page not found: ${slug}`);
     const pageId = pages[0].id;
 
@@ -966,12 +993,13 @@ export class PostgresEngine implements BrainEngine {
     );
   }
 
-  async getChunks(slug: string): Promise<Chunk[]> {
+  async getChunks(slug: string, sourceId?: string): Promise<Chunk[]> {
     const sql = this.sql;
+    const src = this.activeSourceId(sourceId);
     const rows = await sql`
       SELECT cc.* FROM content_chunks cc
       JOIN pages p ON p.id = cc.page_id
-      WHERE p.slug = ${slug}
+      WHERE p.slug = ${slug} AND p.source_id = ${src}
       ORDER BY cc.chunk_index
     `;
     return rows.map((r) => rowToChunk(r as Record<string, unknown>));
@@ -1001,11 +1029,12 @@ export class PostgresEngine implements BrainEngine {
     return rows as unknown as StaleChunkRow[];
   }
 
-  async deleteChunks(slug: string): Promise<void> {
+  async deleteChunks(slug: string, sourceId?: string): Promise<void> {
     const sql = this.sql;
+    const src = this.activeSourceId(sourceId);
     await sql`
       DELETE FROM content_chunks
-      WHERE page_id = (SELECT id FROM pages WHERE slug = ${slug})
+      WHERE page_id = (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${src})
     `;
   }
 
@@ -1018,14 +1047,20 @@ export class PostgresEngine implements BrainEngine {
     linkSource?: string,
     originSlug?: string,
     originField?: string,
+    fromSourceId?: string,
+    toSourceId?: string,
+    originSourceId?: string,
   ): Promise<void> {
     const sql = this.sql;
+    const fromSrc = this.activeSourceId(fromSourceId);
+    const toSrc = this.activeSourceId(toSourceId);
+    const originSrc = this.activeSourceId(originSourceId);
     // Pre-check existence so we can throw a clear error (ON CONFLICT DO UPDATE
     // returns 0 rows when source SELECT is empty, indistinguishable from missing page).
     const exists = await sql`
-      SELECT 1 FROM pages WHERE slug = ${from}
+      SELECT 1 FROM pages WHERE slug = ${from} AND source_id = ${fromSrc}
       INTERSECT
-      SELECT 1 FROM pages WHERE slug = ${to}
+      SELECT 1 FROM pages WHERE slug = ${to} AND source_id = ${toSrc}
     `;
     if (exists.length === 0) {
       throw new Error(`addLink failed: page "${from}" or "${to}" not found`);
@@ -1036,10 +1071,11 @@ export class PostgresEngine implements BrainEngine {
     await sql`
       INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, origin_page_id, origin_field)
       SELECT f.id, t.id, ${linkType || ''}, ${context || ''}, ${src},
-             (SELECT id FROM pages WHERE slug = ${originSlug ?? null}),
+             (SELECT id FROM pages WHERE slug = ${originSlug ?? null} AND source_id = ${originSrc}),
              ${originField ?? null}
       FROM pages f, pages t
-      WHERE f.slug = ${from} AND t.slug = ${to}
+      WHERE f.slug = ${from} AND f.source_id = ${fromSrc}
+        AND t.slug = ${to} AND t.source_id = ${toSrc}
       ON CONFLICT (from_page_id, to_page_id, link_type, link_source, origin_page_id) DO UPDATE SET
         context = EXCLUDED.context,
         origin_field = EXCLUDED.origin_field
@@ -1362,11 +1398,12 @@ export class PostgresEngine implements BrainEngine {
   }
 
   // Tags
-  async addTag(slug: string, tag: string): Promise<void> {
+  async addTag(slug: string, tag: string, sourceId?: string): Promise<void> {
     const sql = this.sql;
+    const src = this.activeSourceId(sourceId);
     // Verify page exists before attempting insert (ON CONFLICT DO NOTHING
     // swallows the "already tagged" case, but we still need to detect missing pages)
-    const page = await sql`SELECT id FROM pages WHERE slug = ${slug}`;
+    const page = await sql`SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${src}`;
     if (page.length === 0) throw new Error(`addTag failed: page "${slug}" not found`);
     await sql`
       INSERT INTO tags (page_id, tag)
@@ -1375,20 +1412,22 @@ export class PostgresEngine implements BrainEngine {
     `;
   }
 
-  async removeTag(slug: string, tag: string): Promise<void> {
+  async removeTag(slug: string, tag: string, sourceId?: string): Promise<void> {
     const sql = this.sql;
+    const src = this.activeSourceId(sourceId);
     await sql`
       DELETE FROM tags
-      WHERE page_id = (SELECT id FROM pages WHERE slug = ${slug})
+      WHERE page_id = (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${src})
         AND tag = ${tag}
     `;
   }
 
-  async getTags(slug: string): Promise<string[]> {
+  async getTags(slug: string, sourceId?: string): Promise<string[]> {
     const sql = this.sql;
+    const src = this.activeSourceId(sourceId);
     const rows = await sql`
       SELECT tag FROM tags
-      WHERE page_id = (SELECT id FROM pages WHERE slug = ${slug})
+      WHERE page_id = (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${src})
       ORDER BY tag
     `;
     return rows.map((r) => r.tag as string);
@@ -1801,12 +1840,13 @@ export class PostgresEngine implements BrainEngine {
   }
 
   // Versions
-  async createVersion(slug: string): Promise<PageVersion> {
+  async createVersion(slug: string, sourceId?: string): Promise<PageVersion> {
     const sql = this.sql;
+    const src = this.activeSourceId(sourceId);
     const rows = await sql`
       INSERT INTO page_versions (page_id, compiled_truth, frontmatter)
       SELECT id, compiled_truth, frontmatter
-      FROM pages WHERE slug = ${slug}
+      FROM pages WHERE slug = ${slug} AND source_id = ${src}
       RETURNING *
     `;
     if (rows.length === 0) throw new Error(`createVersion failed: page "${slug}" not found`);
@@ -1979,10 +2019,11 @@ export class PostgresEngine implements BrainEngine {
   }
 
   // Sync
-  async updateSlug(oldSlug: string, newSlug: string): Promise<void> {
+  async updateSlug(oldSlug: string, newSlug: string, sourceId?: string): Promise<void> {
     newSlug = validateSlug(newSlug);
     const sql = this.sql;
-    await sql`UPDATE pages SET slug = ${newSlug}, updated_at = now() WHERE slug = ${oldSlug}`;
+    const src = this.activeSourceId(sourceId);
+    await sql`UPDATE pages SET slug = ${newSlug}, updated_at = now() WHERE slug = ${oldSlug} AND source_id = ${src}`;
   }
 
   async rewriteLinks(_oldSlug: string, _newSlug: string): Promise<void> {
@@ -2013,12 +2054,13 @@ export class PostgresEngine implements BrainEngine {
     await conn.unsafe(sqlStr);
   }
 
-  async getChunksWithEmbeddings(slug: string): Promise<Chunk[]> {
+  async getChunksWithEmbeddings(slug: string, sourceId?: string): Promise<Chunk[]> {
     const conn = this.sql;
+    const src = this.activeSourceId(sourceId);
     const rows = await conn`
       SELECT cc.* FROM content_chunks cc
       JOIN pages p ON p.id = cc.page_id
-      WHERE p.slug = ${slug}
+      WHERE p.slug = ${slug} AND p.source_id = ${src}
       ORDER BY cc.chunk_index
     `;
     return rows.map((r) => rowToChunk(r as Record<string, unknown>, true));

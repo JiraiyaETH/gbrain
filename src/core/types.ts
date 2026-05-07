@@ -36,6 +36,11 @@ export interface PageInput {
   frontmatter?: Record<string, unknown>;
   content_hash?: string;
   /**
+   * v0.18+ multi-source: write/read target for source-scoped imports.
+   * Omitted keeps the legacy default-source behavior.
+   */
+  source_id?: string;
+  /**
    * v0.19.0: distinguishes markdown vs code pages at the DB level. Defaults
    * to 'markdown' when omitted so existing callers work unchanged. Set to
    * 'code' by importCodeFile; drives orphans filter, auto-link bypass, and
@@ -49,6 +54,8 @@ export interface PageFilters {
   tag?: string;
   limit?: number;
   offset?: number;
+  /** Limit list/search-style reads to one source. Omitted keeps caller legacy behavior. */
+  sourceId?: string;
   /** ISO date string (YYYY-MM-DD or full ISO timestamp). Filter to pages updated_at > value. */
   updated_after?: string;
   /**
