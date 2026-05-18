@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import type { EngineConfig } from './types.ts';
+import type { EngineConfig, EmbeddingColumnConfig } from './types.ts';
 
 /**
  * Where is the active DB URL coming from? Pure introspection, no connection
@@ -83,6 +83,27 @@ export interface GBrainConfig {
   embedding_multimodal_model?: string;
   embedding_image_ocr?: boolean;
   embedding_image_ocr_model?: string;
+
+  /**
+   * v0.36 — embedding-column registry (D7). Maps a content_chunks column
+   * name to its provider + dimensions + pgvector type. Both keys live in
+   * the DB plane (`gbrain config set ...`) so users can flip without
+   * editing files. Resolver merges this with `BUILTIN_EMBEDDING_COLUMNS`
+   * (which derive their provider from `embedding_model` /
+   * `embedding_multimodal_model`).
+   *
+   * Validation lives in `src/core/search/embedding-column.ts` per D12 —
+   * keys must match `/^[a-z_][a-z0-9_]*$/`, type in {vector, halfvec},
+   * dimensions 1..8192, provider parseable as `provider:model`.
+   */
+  embedding_columns?: Record<string, EmbeddingColumnConfig>;
+  /**
+   * v0.36 — name of the column hybridSearch uses by default. Per-call
+   * `SearchOpts.embeddingColumn` overrides this; absent => 'embedding'.
+   * Validated against the merged `embedding_columns` registry at config-
+   * set time and on hybridSearch entry.
+   */
+  search_embedding_column?: string;
 
   /**
    * Thin-client mode (multi-topology v1). When set, this install does NOT
@@ -195,8 +216,18 @@ export async function loadConfigWithEngine(
   engine: { getConfig(key: string): Promise<string | null | undefined> },
   base?: GBrainConfig | null,
 ): Promise<GBrainConfig | null> {
-  const fileConfig = base !== undefined ? base : loadConfig();
-  if (!fileConfig) return null;
+  // Codex /ship finding #3: when there's no file config AND no env DB URL,
+  // loadConfig() returns null and the DB merge would be skipped — env-only
+  // installs (engine wired via direct SDK pass) wouldn't see DB-plane
+  // overrides like `embedding_columns` / `search_embedding_column` set via
+  // `gbrain config set`. Since we have a live engine here, synthesize a
+  // minimal base config so the DB-plane merge still runs. The synthesized
+  // config has no auth or model fields; DB-plane keys overlay correctly
+  // and downstream callers either find them or fall through to defaults.
+  // Also applies when callers pass an explicit null for `base`.
+  const fileConfig: GBrainConfig =
+    (base !== undefined ? base : loadConfig()) ??
+    ({ engine: 'postgres' } as GBrainConfig);
 
   // DB-plane reads. Quiet failures — if the config table doesn't exist yet
   // (pre-v36 brain mid-migration), treat as null and let file/env defaults
@@ -224,6 +255,12 @@ export async function loadConfigWithEngine(
   const dbMultimodalModel = await dbStr('embedding_multimodal_model');
   const dbOcr = await dbBool('embedding_image_ocr');
   const dbOcrModel = await dbStr('embedding_image_ocr_model');
+  // v0.36 (D7) — embedding-column registry merge. Stored as JSON string in
+  // the config table. Parse + shape-check here; full registry validation
+  // (regex on keys, type/dim/provider field shapes) runs in the resolver at
+  // first use so a malformed DB row doesn't kill engine connect.
+  const dbEmbeddingColumns = await dbStr('embedding_columns');
+  const dbSearchEmbeddingColumn = await dbStr('search_embedding_column');
 
   // DB applies only when env did NOT win. Env presence is detected by the
   // sync loadConfig() already setting the field. For each flag, prefer the
@@ -240,6 +277,21 @@ export async function loadConfigWithEngine(
   }
   if (merged.embedding_image_ocr_model === undefined && dbOcrModel !== undefined) {
     merged.embedding_image_ocr_model = dbOcrModel;
+  }
+  if (merged.embedding_columns === undefined && dbEmbeddingColumns !== undefined) {
+    try {
+      const parsed = JSON.parse(dbEmbeddingColumns);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        merged.embedding_columns = parsed as Record<string, EmbeddingColumnConfig>;
+      } else {
+        console.warn('[gbrain] config: embedding_columns DB value is not a JSON object; ignoring');
+      }
+    } catch (err) {
+      console.warn(`[gbrain] config: embedding_columns DB value is not valid JSON; ignoring (${(err as Error).message})`);
+    }
+  }
+  if (merged.search_embedding_column === undefined && dbSearchEmbeddingColumn !== undefined) {
+    merged.search_embedding_column = dbSearchEmbeddingColumn;
   }
   return merged;
 }

@@ -526,8 +526,15 @@ export function getRerankerModel(): string | undefined {
 /**
  * Check whether a touchpoint can be served given the current config.
  * Replaces scattered `!process.env.OPENAI_API_KEY` checks (Codex C3).
+ *
+ * v0.36 (D10): optional `modelOverride` to check a specific
+ * `provider:model` instead of the globally configured default for the
+ * touchpoint. Used by hybridSearch to ask "is the active column's
+ * provider reachable?" rather than "is the global default reachable?" —
+ * otherwise an unreachable global default disables vector search even
+ * when the active column's provider works fine.
  */
-export function isAvailable(touchpoint: TouchpointKind): boolean {
+export function isAvailable(touchpoint: TouchpointKind, modelOverride?: string): boolean {
   // Test seam: when a transport stub is installed for this touchpoint, the
   // gateway is "available" for tests that exercise the whole pipeline without
   // configuring real providers. See __setChatTransportForTests /
@@ -537,7 +544,9 @@ export function isAvailable(touchpoint: TouchpointKind): boolean {
   if (!_config) return false;
   try {
     const modelStr =
-      touchpoint === 'embedding'
+      modelOverride
+        ? modelOverride
+        : touchpoint === 'embedding'
         ? getEmbeddingModel()
         : touchpoint === 'expansion'
         ? getExpansionModel()
@@ -1029,21 +1038,49 @@ export interface EmbedOpts {
    * resolver — the correct default for indexing paths).
    */
   inputType?: 'query' | 'document';
+  /**
+   * v0.36 (D10): explicit model override. When set, routes through this
+   * provider:model instead of the globally configured embedding_model.
+   * Used by the dynamic-embedding-column path so a single query can
+   * embed via the provider that matches the active column. NULL/absent
+   * preserves the existing global-default behavior.
+   *
+   * Format: 'provider:model' (e.g. 'voyage:voyage-3-large').
+   */
+  embeddingModel?: string;
+  /**
+   * v0.36 (D10): explicit dimensions override, paired with
+   * embeddingModel. When set, threads into `dimsProviderOptions` so the
+   * gateway sends the right `dimensions` / `output_dimension` to the
+   * provider. Must match the dim of the destination column or pgvector
+   * rejects the insert/search. NULL preserves the global-default.
+   */
+  dimensions?: number;
 }
 
 export async function embed(texts: string[], opts?: EmbedOpts): Promise<Float32Array[]> {
   if (!texts || texts.length === 0) return [];
 
   const cfg = requireConfig();
-  const { model, recipe, modelId } = await resolveEmbeddingProvider(getEmbeddingModel());
+  // v0.36 (D10): caller may override the model. Used by the dynamic-embedding-
+  // column path so hybridSearch can embed via the column's provider, not the
+  // global default. resolveEmbeddingProvider validates the override at the
+  // recipe layer — bad model strings throw AIConfigError with a clear hint.
+  const resolveTarget = opts?.embeddingModel ?? getEmbeddingModel();
+  const { model, recipe, modelId } = await resolveEmbeddingProvider(resolveTarget);
   const truncated = texts.map(t => (t ?? '').slice(0, MAX_CHARS));
+  // Dim override (D10) — when caller passes `dimensions`, use it. Otherwise
+  // fall back to the global cfg default. dimsProviderOptions throws a
+  // clear AIConfigError when a Voyage flexible-dim model gets an
+  // unsupported value (the existing v0.33.1.1 fail-loud path).
+  const effectiveDims = opts?.dimensions ?? cfg.embedding_dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
   const providerOpts = dimsProviderOptions(
     recipe.implementation,
     modelId,
-    cfg.embedding_dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
+    effectiveDims,
     opts?.inputType,
   );
-  const expected = cfg.embedding_dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+  const expected = effectiveDims;
 
   const embedding = recipe.touchpoints?.embedding;
   const maxBatchTokens = embedding?.max_batch_tokens;
@@ -1236,8 +1273,15 @@ export async function embedOne(text: string): Promise<Float32Array> {
  *
  * Returns a single Float32Array (not a batch).
  */
-export async function embedQuery(text: string): Promise<Float32Array> {
-  const [v] = await embed([text], { inputType: 'query' });
+export async function embedQuery(
+  text: string,
+  opts?: { embeddingModel?: string; dimensions?: number },
+): Promise<Float32Array> {
+  const [v] = await embed([text], {
+    inputType: 'query',
+    embeddingModel: opts?.embeddingModel,
+    dimensions: opts?.dimensions,
+  });
   return v;
 }
 
