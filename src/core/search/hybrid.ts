@@ -13,6 +13,8 @@ import type { BrainEngine } from '../engine.ts';
 import { MAX_SEARCH_LIMIT, clampSearchLimit } from '../engine.ts';
 import type { SearchResult, SearchOpts, HybridSearchMeta } from '../types.ts';
 import { embed, embedQuery } from '../embedding.ts';
+import { resolveEmbeddingColumn, isCacheSafe } from './embedding-column.ts';
+import { loadConfigWithEngine } from '../config.ts';
 import { dedupResults } from './dedup.ts';
 import { applyReranker } from './rerank.ts';
 import { autoDetectDetail, classifyQuery, isAmbiguousModalityQuery } from './query-intent.ts';
@@ -31,6 +33,17 @@ import {
 
 export const RRF_K = 60;
 const COMPILED_TRUTH_BOOST = 2.0;
+const pendingCacheWrites = new Set<Promise<unknown>>();
+
+export async function awaitPendingSearchCacheWrites(): Promise<void> {
+  if (pendingCacheWrites.size === 0) return;
+  await Promise.allSettled([...pendingCacheWrites]);
+}
+
+function trackCacheWrite(promise: Promise<unknown>): void {
+  pendingCacheWrites.add(promise);
+  promise.finally(() => pendingCacheWrites.delete(promise)).catch(() => { /* swallow */ });
+}
 /**
  * Backlink boost coefficient. Score is multiplied by (1 + BACKLINK_BOOST_COEF * log(1 + count)).
  * - 0 backlinks: factor = 1.0 (no boost).
@@ -347,6 +360,19 @@ export async function hybridSearch(
     },
   });
 
+  // v0.36 (D7+D11): resolve embedding column once at entry. Single
+  // round-trip to read DB-plane config (mirrors loadSearchModeConfig).
+  // Resolver throws on unknown name with a paste-ready hint; let it
+  // propagate — a misconfig should be loud, not silently fall back.
+  // Failing cfg load (pre-config brain, mid-migration, no engine.getConfig)
+  // falls through to the file-plane sync loadConfig() — same shape, just
+  // misses DB-plane overrides.
+  const mergedCfg = await loadConfigWithEngine(engine).catch(() => null);
+  const cfgForColumn = mergedCfg ?? ((await import('../config.ts')).loadConfig()) ?? null;
+  const resolvedCol = cfgForColumn
+    ? resolveEmbeddingColumn(opts, cfgForColumn)
+    : resolveEmbeddingColumn(opts, { engine: 'pglite' });
+
   const limit = opts?.limit || resolvedMode.searchLimit;
   const offset = opts?.offset || 0;
   const innerLimit = Math.min(limit * 2, MAX_SEARCH_LIMIT);
@@ -391,6 +417,10 @@ export async function hybridSearch(
     // ordering means we can't lazy-spread the full opts).
     sourceId: opts?.sourceId,
     sourceIds: opts?.sourceIds,
+    // v0.36 (D11): pass the pre-validated descriptor into the engine so
+    // it never has to read config. Engines normalize string-or-descriptor
+    // via normalizeEngineColumn; the descriptor path is the strict one.
+    embeddingColumn: resolvedCol,
   };
   // Track what actually ran for the optional onMeta callback (v0.25.0).
   // Caller leaves onMeta undefined → these flags are computed but never
@@ -481,8 +511,13 @@ export async function hybridSearch(
   };
 
   // Skip vector search entirely if the gateway has no embedding provider configured (Codex C3).
+  // v0.36 (D10): ask "is the RESOLVED column's provider reachable?" rather
+  // than "is the global default reachable?" — otherwise an unreachable
+  // global default disables vector search even when the active column's
+  // provider (Voyage, ZE) works fine.
   const { isAvailable } = await import('../ai/gateway.ts');
-  if (!isAvailable('embedding')) {
+  const providerProbe = resolvedCol.embeddingModel || undefined;
+  if (!isAvailable('embedding', providerProbe)) {
     if (keywordResults.length > 0) {
       await runPostFusionStages(engine, keywordResults, postFusionOpts);
       keywordResults.sort((a, b) => b.score - a.score);
@@ -497,6 +532,7 @@ export async function hybridSearch(
       expansion_applied: false,
       intent: suggestions.intent,
       mode: resolvedMode.resolved_mode,
+      embedding_column: resolvedCol.name,
       ...(resolvedMode.tokenBudget && resolvedMode.tokenBudget > 0
         ? { token_budget: noEmbedBudgetMeta }
         : {}),
@@ -626,10 +662,6 @@ export async function hybridSearch(
     // OR the embed throws, log a structured warning and fall through to text.
     try {
       const { isAvailable: aiIsAvailable, embedQueryMultimodal } = await import('../ai/gateway.ts');
-      // Heuristic gate: if no chat AND no expansion is even configured, the
-      // multimodal model probably isn't either. The explicit check happens
-      // inside embedQueryMultimodal via embedMultimodal's recipe lookup;
-      // here we just check the gateway is configured at all.
       if (!aiIsAvailable('embedding')) {
         throw new Error('gateway not configured for embedding — multimodal would also fail');
       }
@@ -639,8 +671,6 @@ export async function hybridSearch(
         embeddingColumn: 'embedding_image',
       };
       const imageList = await engine.searchVector(imageEmbedding, imageSearchOpts);
-      // Tag the rows so downstream consumers can distinguish (modality may
-      // already be projected from cc.modality but we ensure it's set).
       for (const r of imageList) {
         r.modality = r.modality ?? 'image';
       }
@@ -655,7 +685,6 @@ export async function hybridSearch(
     }
   }
 
-
   if (unifiedDone) {
     // Unified routing already populated vectorLists + queryEmbedding;
     // skip the dual-column branching.
@@ -665,17 +694,20 @@ export async function hybridSearch(
     queryEmbedding = null; // no text embedding to cosine-re-score against
   } else {
     // 'text' or 'both' (or 'image' that fell open to text). Run the text
-    // path normally.
+    // path normally, with v0.36 (D10) provider-aware embed routing so a
+    // query against `embedding_voyage` actually embeds via Voyage, not
+    // the global default. Empty embeddingModel falls back to gateway
+    // default — preserves pre-v0.36 behavior for the builtin 'embedding'
+    // column.
     try {
-      // v0.35.0.0+: query-side embedding. For asymmetric providers (ZE zembed-1,
-      // Voyage v3+) routes input_type='query' through the embed seam; symmetric
-      // providers ignore the field — no behavior change.
-      const embeddings = await Promise.all(queries.map(q => embedQuery(q)));
+      const embedOpts = resolvedCol.embeddingModel
+        ? { embeddingModel: resolvedCol.embeddingModel, dimensions: resolvedCol.dimensions }
+        : undefined;
+      const embeddings = await Promise.all(queries.map(q => embedQuery(q, embedOpts)));
       queryEmbedding = embeddings[0];
       const textLists = await Promise.all(
         embeddings.map(emb => engine.searchVector(emb, searchOpts)),
       );
-      // Tag text-modality results for downstream consumers.
       for (const list of textLists) {
         for (const r of list) {
           r.modality = r.modality ?? 'text';
@@ -710,6 +742,7 @@ export async function hybridSearch(
       expansion_applied: expansionApplied,
       intent: suggestions.intent,
       mode: resolvedMode.resolved_mode,
+      embedding_column: resolvedCol.name,
       ...(resolvedMode.tokenBudget && resolvedMode.tokenBudget > 0
         ? { token_budget: kwBudgetMeta }
         : {}),
@@ -752,9 +785,12 @@ export async function hybridSearch(
     ];
   let fused = rrfFusionWeighted(allLists, detail !== 'high');
 
-  // Cosine re-scoring before dedup so semantically better chunks survive
+  // Cosine re-scoring before dedup so semantically better chunks survive.
+  // v0.36 (D9): hydrate from the active embedding column so rescore happens
+  // in the same vector space the HNSW just ranked in. Pre-v0.36 this
+  // always pulled from `embedding` and silently corrupted alt-column ranks.
   if (queryEmbedding) {
-    fused = await cosineReScore(engine, fused, queryEmbedding);
+    fused = await cosineReScore(engine, fused, queryEmbedding, resolvedCol.name);
   }
 
   // v0.29.1: post-fusion stages (backlink + salience + recency) run via
@@ -862,6 +898,7 @@ export async function hybridSearch(
     expansion_applied: expansionApplied,
     intent: suggestions.intent,
     mode: resolvedMode.resolved_mode,
+    embedding_column: resolvedCol.name,
     ...(resolvedMode.tokenBudget && resolvedMode.tokenBudget > 0
       ? { token_budget: budgetMeta }
       : {}),
@@ -917,7 +954,26 @@ export async function hybridSearchCached(
       floor_ratio: opts?.floorRatio,
     },
   });
-  const cacheKnobsHash = knobsHash(resolvedForCache);
+  // v0.36 (D8 / CDX-2 + codex /ship #4): resolve column for the cache
+  // decision. The query_cache.embedding column has one fixed pgvector dim
+  // sized at brain init; storing a 1024d Voyage or 2560d ZE cache
+  // embedding fails or corrupts results. Name-based check ("is it the
+  // default `embedding` column?") is insufficient — the registry
+  // explicitly allows overriding builtin `embedding` to a different
+  // provider/dim. isCacheSafe compares the resolved column's full
+  // embedding space (name + dim + model) against cfg and returns true
+  // only when ALL match. Otherwise skip.
+  const mergedCfgCached = await loadConfigWithEngine(engine).catch(() => null);
+  const cfgCached = mergedCfgCached ?? ((await import('../config.ts')).loadConfig()) ?? { engine: 'pglite' as const };
+  const resolvedColCached = resolveEmbeddingColumn(opts, cfgCached);
+  const isNonDefaultColumn = !isCacheSafe(resolvedColCached, cfgCached);
+
+  // Cache key carries the column + provider so different embedding spaces
+  // never collide on the same `(source_id, query_text)` row.
+  const cacheKnobsHash = knobsHash(resolvedForCache, {
+    embeddingColumn: resolvedColCached.name,
+    embeddingModel: resolvedColCached.embeddingModel,
+  });
 
   // Cache decision: opts.useCache (explicit) wins over global config; global
   // config wins over mode bundle default. Mode bundle is on for all 3 modes
@@ -931,14 +987,15 @@ export async function hybridSearchCached(
     ttlSeconds: resolvedForCache.cache_ttl_seconds,
   });
 
-  // Skip cache entirely when the request asks for two-pass walks or has
-  // a non-default embedding column — those interact with structural state
-  // that the cache can't safely express.
+  // Skip cache entirely when the request asks for two-pass walks, has
+  // a non-default embedding column (per-call or via config default —
+  // D8 closes the silent-corruption bug class), or near-symbol mode
+  // (structural state that the cache can't safely express).
   const skipCache =
     !cache.isEnabled() ||
     (opts?.walkDepth ?? 0) > 0 ||
     Boolean(opts?.nearSymbol) ||
-    (opts?.embeddingColumn && opts.embeddingColumn !== 'embedding');
+    isNonDefaultColumn;
 
   let cacheStatus: 'hit' | 'miss' | 'disabled' = skipCache ? 'disabled' : 'miss';
   let cacheSimilarity: number | undefined;
@@ -953,7 +1010,13 @@ export async function hybridSearchCached(
   if (!skipCache) {
     try {
       const { isAvailable } = await import('../ai/gateway.ts');
-      if (isAvailable('embedding')) {
+      // v0.36 (D10): for the cache-lookup embedding, also use the resolved
+      // column's provider. The cache lookup is always against the default
+      // 'embedding' column (skipCache short-circuits non-default above),
+      // so this is the default embeddingModel — but threading it keeps
+      // the provider probe consistent with the bare hybridSearch path.
+      const providerProbeCached = resolvedColCached.embeddingModel || undefined;
+      if (isAvailable('embedding', providerProbeCached)) {
         // v0.35.0.0+: query-side embedding (cache lookup path).
         queryEmbedding = await embedQuery(query);
       } else {
@@ -1047,9 +1110,11 @@ export async function hybridSearchCached(
     results.length > 0 &&
     (innerMeta?.vector_enabled ?? false)
   ) {
-    void cache
-      .store(query, queryEmbedding, results, finalMeta, { sourceId: opts?.sourceId, knobsHash: cacheKnobsHash })
-      .catch(() => { /* swallow */ });
+    trackCacheWrite(
+      cache
+        .store(query, queryEmbedding, results, finalMeta, { sourceId: opts?.sourceId, knobsHash: cacheKnobsHash })
+        .catch(() => { /* swallow */ }),
+    );
   }
 
   return budgeted;
@@ -1156,6 +1221,7 @@ async function cosineReScore(
   engine: BrainEngine,
   results: SearchResult[],
   queryEmbedding: Float32Array,
+  column: string = 'embedding',
 ): Promise<SearchResult[]> {
   const chunkIds = results
     .map(r => r.chunk_id)
@@ -1165,7 +1231,11 @@ async function cosineReScore(
 
   let embeddingMap: Map<number, Float32Array>;
   try {
-    embeddingMap = await engine.getEmbeddingsByChunkIds(chunkIds);
+    // v0.36 (D9): hydrate from the active column so rescore happens in
+    // the same embedding space the HNSW just ranked in. Without this,
+    // a Voyage HNSW retrieval would HNSW-rank against Voyage vectors but
+    // rescore against OpenAI vectors → NaN or wrong rankings.
+    embeddingMap = await engine.getEmbeddingsByChunkIds(chunkIds, column);
   } catch {
     // DB error is non-fatal, return results without re-scoring
     return results;

@@ -471,7 +471,12 @@ CREATE TABLE IF NOT EXISTS eval_candidates (
   salience_resolved     TEXT,
   recency_resolved      TEXT,
   salience_source       TEXT,
-  recency_source        TEXT
+  recency_source        TEXT,
+  -- v0.36.3.0 (D16 / CDX-10) — embedding column that ran at capture time.
+  -- Nullable; pre-v0.36 rows have NULL and replay falls back to current
+  -- default. See src/core/migrate.ts migration v68 for the matching ALTER
+  -- on upgrade brains.
+  embedding_column      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_eval_candidates_created_at ON eval_candidates(created_at DESC);
 
