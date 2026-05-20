@@ -262,7 +262,7 @@ export function applyResolveAuth(
     ? recipe.resolveAuth(cfg.env)
     : defaultResolveAuth(recipe, cfg.env, touchpoint);
 
-  // v0.37.2.0 — resolve default_headers (static or env-templated). Mutually
+  // v0.37.4.0 — resolve default_headers (static or env-templated). Mutually
   // exclusive; declaring both is a config error.
   if (recipe.default_headers && recipe.resolveDefaultHeaders) {
     throw new AIConfigError(
@@ -274,7 +274,7 @@ export function applyResolveAuth(
     ? recipe.resolveDefaultHeaders(cfg.env)
     : recipe.default_headers;
 
-  // v0.37.2.0 — defaults MUST NOT shadow the resolved auth header. SDK applies
+  // v0.37.4.0 — defaults MUST NOT shadow the resolved auth header. SDK applies
   // headers after apiKey, so an `Authorization` entry in defaults would replace
   // the Bearer the SDK adds. Custom-header recipes (Azure: api-key) are
   // protected the same way.
@@ -2273,7 +2273,7 @@ export async function rerank(input: RerankInput): Promise<RerankResult[]> {
   const url = `${compat.baseURL.replace(/\/$/, '')}/models/rerank`;
   const auth = applyResolveAuth(recipe, cfg, 'reranker');
   // applyResolveAuth returns { apiKey } for Bearer-style auth (SDK's native
-  // path) or { headers } for custom-header providers (Azure). v0.37.2.0:
+  // path) or { headers } for custom-header providers (Azure). v0.37.4.0:
   // recipes can ALSO declare default_headers (attribution etc.) which flow
   // through `auth.headers` alongside Bearer-style apiKey. The merge below
   // materializes both shapes so static-default-headers ride on the reranker

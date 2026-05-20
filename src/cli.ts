@@ -1397,7 +1397,7 @@ async function handleCliOnly(command: string, args: string[]) {
 // sites in connectEngine() pass through this helper so adding a new field
 // touches one place. Adding a field to one site but not the other previously
 // required remembering to mirror the change; the helper makes that structural.
-// v0.37.2.0: exported so `test/ai/build-gateway-config.test.ts` can pin the
+// v0.37.4.0: exported so `test/ai/build-gateway-config.test.ts` can pin the
 // env-baseURL passthrough contract for every `_BASE_URL` env var the CLI
 // reads (LLAMA_SERVER, OLLAMA, LMSTUDIO, LITELLM, OPENROUTER).
 export function buildGatewayConfig(c: GBrainConfig): AIGatewayConfig {

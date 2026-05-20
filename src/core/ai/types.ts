@@ -261,7 +261,7 @@ export interface Recipe {
     token: string;
   };
   /**
-   * v0.37.2.0: static request headers applied to every openai-compatible
+   * v0.37.4.0: static request headers applied to every openai-compatible
    * touchpoint (embedding, expansion, chat, reranker). Use for static-per-recipe
    * attribution headers (OpenRouter's HTTP-Referer + X-OpenRouter-Title).
    * Merged into the SDK call site after `applyResolveAuth` resolves auth.
@@ -274,7 +274,7 @@ export interface Recipe {
    */
   default_headers?: Record<string, string>;
   /**
-   * v0.37.2.0: env-templated equivalent of `default_headers`. Same merge
+   * v0.37.4.0: env-templated equivalent of `default_headers`. Same merge
    * semantics and same key-conflict guards. Used by recipes whose attribution
    * headers vary by deployment (forks override referer/title via env). When
    * declared, `default_headers` MUST be omitted.
