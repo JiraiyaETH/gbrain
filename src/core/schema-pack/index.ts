@@ -86,3 +86,9 @@ export {
   type LoadActivePackInput,
   type PackLocator,
 } from './load-active.ts';
+
+export {
+  SchemaPackTrustGateError,
+  validateSchemaPackTrustGate,
+  loadActivePackForOp,
+} from './op-trust-gate.ts';
