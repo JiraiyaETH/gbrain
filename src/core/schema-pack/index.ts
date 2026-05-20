@@ -92,3 +92,8 @@ export {
   validateSchemaPackTrustGate,
   loadActivePackForOp,
 } from './op-trust-gate.ts';
+
+export {
+  inferLinkTypeFromPack,
+  frontmatterLinkTypeFromPack,
+} from './link-inference.ts';
