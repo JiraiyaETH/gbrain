@@ -76,6 +76,450 @@ Things to watch:
    ```
 5. **If any step fails,** file an issue at https://github.com/garrytan/gbrain/issues with `gbrain doctor` output. The new doctor surface should give a paste-ready repair; if not, that's a bug we want to know about.
 
+## [0.37.9.0] - 2026-05-20
+
+**Tags get written the same way everywhere now.**
+
+v0.37.5.0 fixed the doctor (it stopped flagging `tags: ["yc", "w2025"]` as broken). This release lines up everything else with that fix. When gbrain itself emits a tag list (inferred frontmatter on import, or `frontmatter validate --fix` rewriting a file), it writes `tags: ['yc', 'w2025']` in the canonical single-quote form. Your new pages and your repaired pages now look the same in `git diff`. No more cosmetic noise.
+
+If a tag actually contains an apostrophe like `Men's Fashion`, it falls back to double quotes, so YAML stays valid without ugly `''` escaping.
+
+**Skill update for agents that write into gbrain:** the `frontmatter-guard` skill now has a Prevention section showing the canonical YAML shapes side by side. Future agents should write the single-quote form on the first try.
+
+**How to use it**
+
+```bash
+gbrain upgrade
+# Existing files stay valid. Only new writes use the canonical form.
+# To normalize an existing brain's tag style:
+gbrain frontmatter validate <path> --fix
+```
+
+The `--fix` pass now rewrites `tags: ["yc", "w2025"]` to `tags: ['yc', 'w2025']` in place, with a backup under `~/.gbrain/backups/frontmatter/`. Only `tags:` and `aliases:` are touched. Other typed arrays (`metrics: ["1", "2"]`, `scores: ["a", "b"]`) are left alone on purpose, because rewriting them could change what gbrain reads them as.
+
+**What's safe to know about**
+
+- This is canonical-style normalization, not a bug fix. Both forms (`["yc"]` and `['yc']`) parse to the same array `['yc']` and hash identically in storage. The v0.37.5.0 validator already accepts both. This release is about making gbrain's own writes consistent with each other.
+- The auto-fix engine and the validator share a dedup gate. A file with both a JSON-array tag rewrite and a nested-quote title rewrite produces ONE `NESTED_QUOTES` audit entry, not two, so `frontmatter_integrity` counts stay honest about distinct files affected.
+- The validator gained a parity test that pins agreement between per-value `safeLoad` parsing and `gray-matter`'s full-document parse on the load-bearing inputs. Catches future per-value parse drift before it ships.
+
+**Why this is a small release**
+
+The hard problem was the validator (shipped in v0.37.5.0). What's left is alignment: the emitter, the auto-fix engine, and the agent guidance. Each piece touches one place and ships with its own tests. The "auto-heal on put_page" idea explored during planning was dropped after Codex's outside-voice review pointed out that `put_page` parses YAML into typed fields and hashes them, so single-quoted vs double-quoted arrays are functionally identical in storage. The fix lives where the writes happen, not on the read path.
+
+### Itemized changes
+
+#### Added
+
+- `src/core/brain-writer.ts:155-220` — new step 3a in `autoFixFrontmatter()`. Allow-listed to `tags:` / `aliases:` keys (`^(\s*(tags|aliases)\s*:\s*)\[(.*)\]\s*$`). Rewrites JSON-style double-quoted items to single-quoted YAML; items containing `'` fall back to double quotes via `JSON.stringify`. Empty items render as `''`. Idempotent.
+- `src/core/brain-writer.ts:154` — shared `nestedQuotesFixed` dedup gate between step 3a and existing step 3. One `NESTED_QUOTES` fix record per file when both fire.
+- `skills/frontmatter-guard/SKILL.md:170-217` — new "Prevention — Writing Valid Frontmatter" section. Correct/incorrect YAML examples, explanation of why `JSON.stringify`-style arrays are valid-but-non-canonical post-v0.37.5.0, and a quoting decision rule.
+- `test/brain-writer.test.ts` — 7 new cases for step 3a (JSON-array rewrite, apostrophe fallback, empty item, non-allow-list keys untouched, `aliases:` parity, step 3a + step 3 dedup, idempotency).
+- `test/markdown-validation.test.ts` — parity test covering the per-value-safeLoad vs gray-matter-full-document axis. Pins the load-bearing inputs the validator must agree with itself on, so a future per-value parse drift surfaces as a test failure not a silent flag-storm.
+
+#### Changed
+
+- `src/core/frontmatter-inference.ts:411-416` — `serializeFrontmatter()` emits `tags: ['yc', 'w2025']` (single-quoted) by default; falls back to `JSON.stringify` (double-quoted) only when a tag contains `'`. Aligns inferred-frontmatter output with the auto-fix engine.
+- `test/frontmatter-inference.test.ts:239` — updated assertion to match new canonical output; added apostrophe-fallback regression case.
+
+#### Removed
+
+- `TODOS.md` — closed out the "v0.37.5.0 NESTED_QUOTES validator follow-up" entry (unify `serializeFrontmatter` quoting with `brain-writer.ts:184` style). Resolved by this release.
+
+#### For contributors
+
+- The auto-fix engine's key-scope decision matters. If a future need shows up to normalize arrays for keys beyond `tags`/`aliases` (e.g. an `authors:` field), extend the regex allow-list explicitly. Don't broaden to `[A-Za-z_][\w-]*` — that would rewrite typed-numeric arrays (`scores: ["1", "2"]`) into string arrays and break downstream typed-claim extraction.
+- Codex outside-voice review on this wave produced 11 findings; 1 dropped a planned layer (put_page auto-normalization, because storage hashes parsed fields not raw bytes), 1 narrowed the allow-list, 5 fixed plan housekeeping. Original PRs #1217 (closed, serializer fix) and #1238 (closed, four-layer defense-in-depth) absorbed into this wave.
+## [0.37.8.0] - 2026-05-20
+
+**For agents indexing source code with gbrain, the right embedding model is now obvious — and the brain tells you so out loud.**
+
+If you point a gbrain instance at a repo full of source code (the gstack per-worktree code-brain pattern) and you embed with OpenAI's text-embedding-3-large, you're leaving real retrieval quality on the table. Voyage publishes voyage-code-3, a code-tuned embedding model with head-to-head numbers above their general flagships on code retrieval. The model was already registered in gbrain since pre-v0.33, but nothing in the discovery path said "use this for code." The decision tree in the docs routed to voyage-4-large. The Topology 3 setup section said zero about embedding choice. `gbrain reindex --code` happily embedded with whatever you had configured. The recommendation was hiding in plain sight.
+
+This release closes the discovery gap on four surfaces. The embedding-providers doc grows a "Code-heavy brain" branch in the decision tree. Topology 3 in the architecture doc gets a "Recommended embedding model" subsection with a paste-ready `gbrain init --pglite --embedding-model voyage:voyage-code-3 --embedding-dimensions 1024`. The setup skill points at it. And `gbrain reindex --code` itself prints a short stderr nudge when the configured embedding model isn't code-tuned, with the exact `gbrain config set` lines you'd run to switch. Opt out per-environment with `GBRAIN_NO_CODE_MODEL_NUDGE=1` if you're on OpenAI for compliance or single-vendor procurement.
+
+Same diff also fixes a smaller bug that would have made the nudge land badly. Before v0.37.8.0, `gbrain reindex --code` printed its cost preview with a hardcoded `text-embedding-3-large` model name, even when you had `voyage:voyage-code-3` configured. The constant was a v0.13-era back-compat shim that nobody noticed had drifted. The preview now reads the gateway-configured model directly, so the line above the new nudge is finally truthful.
+
+### How to use it
+
+For a fresh gstack per-worktree code brain:
+
+```bash
+export GBRAIN_HOME=/path/to/worktree/.conductor/gbrain
+gbrain init --pglite \
+  --embedding-model voyage:voyage-code-3 \
+  --embedding-dimensions 1024
+```
+
+For an already-initialized brain:
+
+```bash
+gbrain config set embedding_model voyage:voyage-code-3
+gbrain config set embedding_dimensions 1024
+gbrain reindex --code --yes
+```
+
+To stay on a non-code-tuned model and silence the nudge:
+
+```bash
+export GBRAIN_NO_CODE_MODEL_NUDGE=1
+```
+
+### Itemized changes
+
+- `src/commands/reindex-code.ts` — new exported `shouldNudgeCodeModel(bareModelName)` pure helper returning a tagged `NudgeDecision` union. Wired into `runReindexCode` (not the CLI wrapper) so dry-run AND execute paths both surface the nudge — codex outside-voice caught that the CLI wrapper's `--dry-run` branch returns before its gate block, which is where the original plan placed the nudge. Allowlist of code-tuned bare model names: `new Set(['voyage-code-3'])` (case-insensitive); the helper takes the bare name that `getEmbeddingModelName()` actually returns (gateway strips the provider prefix) and emits the qualified `voyage:voyage-code-3` for the paste-ready `gbrain config set` line. Three suppression gates: `opts.json`, `opts.noEmbed`, `process.env.GBRAIN_NO_CODE_MODEL_NUDGE === '1'`. Same file: cost-preview model field swapped from the hardcoded `EMBEDDING_MODEL` back-compat shim at `src/core/embedding.ts:126` to `getEmbeddingModelName()` at all five usage sites (was producing a directly-contradictory model name next to the nudge).
+- `docs/integrations/embedding-providers.md` — "Code-heavy brain (gstack per-worktree, source repos)" branch added to the Decision tree; Voyage section gains a dedicated `voyage-code-3` paragraph linking to voyageai.com/blog for head-to-head numbers (vendor claims softened per codex review).
+- `docs/architecture/topologies.md` — Topology 3 gets a "Recommended embedding model" subsection between "How it works" and "CRITICAL: alias-level routing is manual". Uses `gbrain init --embedding-model` one-shot to avoid the `config set` + `init` ordering ambiguity codex caught.
+- `skills/setup/SKILL.md` — Topology 3 option in the deployment-shape picker grows a one-liner pointing at voyage-code-3 + the topology doc for the full setup recipe.
+- `test/ai/voyage-code-3-recipe.test.ts` — new regression pin: voyage-code-3 in the recipe `models[]` list, in `VOYAGE_OUTPUT_DIMENSION_MODELS`, accepted by `supportsVoyageOutputDimension`, and routed through `dimsProviderOptions` on the SDK-supported `dimensions` field (not the wire-key `output_dimension` — that's the v0.33.1.0 bug class).
+- `test/reindex-code-nudge.serial.test.ts` — new test, serial: 6 pure-function cases over `shouldNudgeCodeModel` (text-embedding-3-large fires, text-embedding-3-small fires, voyage-4-large fires, voyage-code-3 doesn't, Voyage-Code-3 case-insensitive doesn't, empty/null/undefined/whitespace doesn't) + 5 CLI integration cases pinning the suppression contract (default fires on stderr not stdout, `--no-embed` suppresses, `--json` suppresses, `GBRAIN_NO_CODE_MODEL_NUDGE=1` suppresses, already-optimal voyage-code-3 no-ops).
+- `test/reindex-code-model-source.serial.test.ts` — new IRON-RULE regression test pinning the cost-preview correctness fix: `runReindexCode({dryRun: true}).model` equals the gateway-configured embedding model name (voyage-code-3, text-embedding-3-small, voyage-4-large round-trip), NOT the legacy hardcoded `'text-embedding-3-large'` constant.
+- `test/reindex-code.test.ts` — updated: now configures the gateway with `openai:text-embedding-3-large` in `beforeAll` (`getEmbeddingModelName()` requires gateway state; the existing model-name assertion at `:80` still passes verbatim) and sets `GBRAIN_NO_CODE_MODEL_NUDGE=1` so test stderr stays clean.
+- `CLAUDE.md` — new Key Files entry for `src/commands/reindex-code.ts`; Voyage recipe entry annotated with the v0.37.8.0 discoverability surfaces.
+
+## [0.37.7.0] - 2026-05-21
+
+**Your federated brain stops silently writing to the wrong source. Your autopilot stops thrashing when you point it at a second brain. A handful of CLI surfaces that crashed on first call stop crashing.**
+
+If you've ever run gbrain with more than one source (an Obsidian vault + a docs repo, a CEO with multiple team sub-brains), you've probably noticed that `gbrain import --source dept-x` silently writes to `default` instead. Or that `gbrain extract` produces zero links on a federated brain. Or that `gbrain doctor` recommends a command that can't actually fix it. This release wires every CLI surface through the same source-resolver that `gbrain serve` has used since v0.18.0, and adds a doctor check that catches the silent-collapse-to-default class.
+
+Plus: autopilot lockfile finally respects `GBRAIN_HOME` so two brains can coexist. The reconnect loop that logged `config.database_url undefined` forever now exits cleanly and lets launchd back off. `gbrain reindex-frontmatter` no longer crashes before doing anything. OAuth `authorization_code` confidential clients work again. And we caught a dead-letter bug where successful subagent jobs were being marked failed because the worker tried to re-prompt past an `end_turn`.
+
+### What landed
+
+| Piece | What it fixes / adds | How to use it |
+|---|---|---|
+| **`gbrain import --source-id <id>`** (#1167) | `import` finally honors the source flag — pages route to the named source instead of silently collapsing to `default` | `gbrain import path/ --source-id dept-x` |
+| **`gbrain extract --source-id <id>`** (#1204) | Same fix for extract — link + timeline extraction now scopes to one source on federated brains | `gbrain extract all --source-id dept-x` |
+| **`gbrain sources current`** (#1222) | New subcommand that prints the resolved source + the tier that won (flag / env / dotfile / local_path / brain_default / seed_default) | `gbrain sources current --json` |
+| **`gbrain graph-query --include-foreign`** (#1153) | Cross-source edges no longer disappear silently. Footer shows foreign-edge count by default; `--include-foreign` walks them | `gbrain graph-query alice --depth 2 --include-foreign` |
+| **`skills/conventions/brain-routing.md`** (#1222) | Documents the canonical 6-tier source resolution chain so agents stop guessing | Read it; pointed at from CLAUDE.md |
+| **Autopilot lockfile scoped to `GBRAIN_HOME`** (#1226) | Two brains can run autopilot simultaneously without one stealing the other's lock | Set `GBRAIN_HOME=/path/to/brain-b gbrain autopilot --install` |
+| **Autopilot reconnect classifier + launchd ThrottleInterval** (#1162) | Reconnect loop that logged `config.database_url undefined` every 5s now exits cleanly. New launchd plist sets `ThrottleInterval=300` so launchd respects unrecoverable failures | `gbrain autopilot --install` regenerates the plist |
+| **OAuth confidential `authorization_code` clients** (#1166) | The MCP SDK's `clientAuth` middleware does plaintext compare; gbrain stores SHA-256 hashes, so confidential clients failed every `/token` request. Custom verifier middleware now runs before the SDK | `gbrain auth register-client --grant-types authorization_code` works again |
+| **`gbrain reindex-frontmatter`** (#1225) | Crashed on first call because it queried the engine before connecting it. Now connects via the existing command pattern | `gbrain reindex-frontmatter` |
+| **Subagent terminal-on-resume** (#1151) | Successful subagent jobs were being marked failed because the worker tried to re-prompt past an `end_turn` on resume. Short-circuits to terminal | Automatic on next worker restart |
+| **Sync walker skips git submodules** (#1169) | `pruneDir()` now detects submodules (`.git` as a file, not a directory) and stops walking into them. Stops phantom imports of submodule content | Automatic |
+| **3 new doctor checks** (T12/T13/T14) | `source_routing_health` (catches silent-collapse-to-default on federated brains), `oauth_confidential_health` (probes confidential-client `/token` reachability), `autopilot_lock_scope` (warns when lock isn't under `GBRAIN_HOME`) | `gbrain doctor` |
+
+### How to verify the source-routing fix
+
+```bash
+# Show which source resolved + why
+gbrain sources current
+
+# JSON shape for scripting
+gbrain sources current --json
+# → {"source_id":"dept-x","tier":"dotfile","detail":".gbrain-source"}
+
+# Doctor check — should be ok on a properly federated brain
+gbrain doctor --json | jq '.checks[] | select(.name=="source_routing_health")'
+```
+
+The 6-tier chain documented in `skills/conventions/brain-routing.md`:
+
+1. `--source <id>` flag (explicit, always wins)
+2. `GBRAIN_SOURCE` env var
+3. `.gbrain-source` dotfile walk-up
+4. Registered source whose `local_path` contains CWD
+5. Brain default (config key)
+6. Seed default (`default`)
+
+### What's safe to know about
+
+- **Default behavior unchanged for single-source brains.** If you only have `default`, nothing in this release changes how your commands route. The fixes only fire on federated brains (`gbrain sources list` shows more than one row).
+- **Autopilot lockfile path changed.** Old: `~/.gbrain/autopilot.lock` only. New: `$GBRAIN_HOME/autopilot.lock` (defaults to `~/.gbrain` when unset, so most users see no path change). The doctor check warns if your `GBRAIN_HOME` is set but the lock landed in the wrong place.
+- **`reindex-frontmatter`'s fix is two lines but it's load-bearing.** Pre-fix the command would `process.exit(1)` with a TypeError on first call. Post-fix it does what it always claimed to.
+- **OAuth confidential clients were dead in v0.37.0–v0.37.6.** If your agent (Hermes, custom orchestrator) uses `authorization_code` + `client_secret_post` against gbrain, you needed this. Public PKCE clients (Claude Code, Cursor) were unaffected — they don't present a secret.
+- **The 3 new doctor checks are warn-only.** None fail the doctor exit. They surface paste-ready fix hints inline.
+
+### What we caught and fixed before merging
+
+- **Lockfile PID-safety.** The first-pass autopilot-lock fix moved the lock path but kept the existence-only check. Codex caught that a stale lock from a crashed process would block a healthy autopilot from starting. The shipped version writes PID into the lock and checks `kill -0 <pid>` before refusing to start.
+- **OAuth confidential auth detection.** The first-pass middleware sniffed for `Authorization: Basic` headers only. That missed `client_secret_post` (form-encoded body) which is the more common shape. The shipped version handles both.
+- **`pruneDir` submodule detection.** The first-pass used `existsSync(.git)` which is true for both regular repos AND submodules. Refined to `statSync(.git).isFile()` — submodule gitfiles are FILES pointing into the parent's `.git/modules/`, regular repos have `.git` as a DIRECTORY.
+- **`resolveSourceWithTier()` is additive.** Original plan refactored `resolveSourceId()` to return the tier. Codex pointed out that breaks every existing caller. Shipped as a new function alongside the old one; the existing 6-tier chain is unchanged.
+
+### Itemized changes
+
+#### CLI surfaces (production code)
+
+- `src/commands/import.ts` — new `--source-id <id>` flag. Resolved via `resolveSourceWithTier()` before any page write; failures surface with paste-ready `gbrain sources list` hint. Closes #1167.
+- `src/commands/extract.ts` — same `--source-id` flag, threaded through `extractLinks()` / `extractTimeline()` so SQL scopes to the named source. Closes #1204.
+- `src/commands/sources.ts` — new `gbrain sources current [--json]` subcommand. Calls `resolveSourceWithTier()` and prints `source_id`, `tier`, optional `detail`. Closes #1222.
+- `src/commands/graph-query.ts` — foreign-edge footer always present (`X foreign edges (use --include-foreign to traverse)`). `--include-foreign` flag widens the SQL filter to cross-source edges. Closes #1153.
+- `src/commands/reindex-frontmatter.ts` — wrapped query path in the standard `withEngine(...)` lifecycle so `engine.connect()` runs before the first SQL call. Closes #1225.
+- `src/commands/autopilot.ts` — `LOCK_PATH` now resolves via `gbrainPath('autopilot.lock')` (honors `GBRAIN_HOME`). New exports `classifyReconnectError(err)` (returns `'recoverable' | 'unrecoverable'`; unrecoverable causes the daemon to `process.exit(0)` and let launchd back off) and `generateLaunchdPlist(wrapperPath, home)` (pure plist string for tests). Lock file now stores PID; startup checks `kill -0 <pid>` before refusing. Closes #1162 + #1226.
+- `src/core/oauth-provider.ts` + `src/commands/serve-http.ts` — custom `/token` middleware that runs BEFORE the MCP SDK's `clientAuth`. Detects confidential auth via `Authorization: Basic` header OR `client_secret_post` form body; verifies via SHA-256 hash compare and falls through to the SDK for public PKCE clients. Closes #1166.
+- `src/core/sync.ts` — `pruneDir(name, parentDir?)` extended with optional `parentDir`; when provided, additionally rejects directories containing `.git` as a FILE (git submodule gitfile pattern). Sync + extract walkers thread `parentDir` through. Closes #1169.
+- `src/core/minions/handlers/subagent.ts` — terminal-state short-circuit on resume. When a stored message thread already ends in `stop_reason: 'end_turn'`, the handler returns `{ ok: true }` instead of issuing another `messages.create` call (which would have failed and dead-lettered a successful job). Closes #1151.
+
+#### New helpers (production code)
+
+- `src/core/source-resolver.ts` — additive `resolveSourceWithTier(engine, explicit, cwd)` returns `{ source_id, tier, detail? }`. New exported const `SOURCE_TIER_NAMES = ['flag', 'env', 'dotfile', 'local_path', 'brain_default', 'seed_default']` so the JSON shape is type-stable across releases. The existing `resolveSourceId()` is unchanged.
+
+#### Doctor checks (production code)
+
+- `src/commands/doctor.ts` — three new checks wired into both `runDoctor()` and the JSON envelope:
+  - `checkSourceRoutingHealth(engine)` — scans up to 200 pages on federated brains, flags pages whose `source_id` doesn't match what `resolveSourceWithTier()` would have picked for their `source_path`. Short-circuits to `ok` for single-source brains.
+  - `checkOauthConfidentialHealth(engine)` — probes registered confidential clients for `/token` reachability; warns when the v0.37.0–v0.37.6 plaintext-compare bug class would have rejected them.
+  - `checkAutopilotLockScope()` — pure function check (no engine). Compares the resolved lock path to `$GBRAIN_HOME`; warns when `$GBRAIN_HOME` is set but the lock lives elsewhere, with a PID-safe hint to inspect the lock file before deleting it.
+
+#### Documentation
+
+- `skills/conventions/brain-routing.md` — new convention skill documenting the 6-tier source resolution chain with paste-ready agent decision table. Linked from CLAUDE.md's "Two organizational axes" section. Closes #1222.
+
+#### Tests
+
+- `test/source-resolver-with-tier.test.ts` — 6-tier resolution chain coverage (each tier's win condition, precedence ordering, invalid-source rejection, detail strings). Uses `withEnv()` wrapper for env-mutation isolation per the test-isolation lint.
+- `test/import-source-id.test.ts` — `--source-id` flag round-trip + error path.
+- `test/graph-query.test.ts` — foreign-edge footer + `--include-foreign` traversal.
+- `test/oauth-confidential-client.test.ts` — `client_secret_basic` + `client_secret_post` paths against the custom middleware.
+- `test/autopilot-lock-path.test.ts` — `GBRAIN_HOME` scope + PID-safe staleness detection.
+- `test/autopilot-reconnect-classifier.test.ts` — recoverable vs unrecoverable error classification + plist generator shape.
+- `test/sync-walker-submodule.test.ts` — submodule detection via gitfile-as-FILE.
+- `test/subagent-handler.test.ts` — terminal-on-resume short-circuit.
+- `test/reindex-frontmatter-connect.test.ts` — engine.connect() runs before first query.
+- `test/doctor-v0_37_7_checks.test.ts` — all 3 new doctor checks against fixture brains (single-source ok-fast-path, federated brain mismatch warn, OAuth confidential warn shape, lock-scope mismatch warn).
+
+#### Closed community PRs
+
+Credited contributors per the CHANGELOG attribution convention; closing comments point at the absorbed commits.
+
+## To take advantage of v0.37.7.0
+
+`gbrain upgrade` should do this automatically. If it didn't, or if
+`gbrain doctor` warns about anything new:
+
+1. **Run the orchestrator manually:**
+   ```bash
+   gbrain apply-migrations --yes
+   ```
+2. **Verify the source-routing fix on your federated brains:**
+   ```bash
+   gbrain sources current
+   gbrain doctor --json | jq '.checks[] | select(.name=="source_routing_health")'
+   ```
+3. **If autopilot was thrashing on a second-brain install,** check
+   the new lockfile path:
+   ```bash
+   ls -la ~/.gbrain/autopilot.lock $GBRAIN_HOME/autopilot.lock 2>/dev/null
+   ```
+4. **If any step fails,** file an issue at
+   https://github.com/garrytan/gbrain/issues with `gbrain doctor`
+   output + contents of `~/.gbrain/upgrade-errors.jsonl` if it exists.
+
+## [0.37.6.0] - 2026-05-20
+
+**One key, many hosted models.**
+
+You can now configure `openrouter:<provider>/<model>` directly in gbrain. OpenRouter proxies OpenAI, Anthropic, Google, DeepSeek, Meta, Qwen, and dozens of other hosted models through one OpenAI-compatible endpoint with one API key. Instead of juggling per-provider keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, DEEPSEEK_API_KEY, etc.), you set `OPENROUTER_API_KEY` once and pick the model at call time. Embedding goes through too, defaulting to `openai/text-embedding-3-small` with Matryoshka shrink to 512/768/1024.
+
+OpenRouter shows up in `gbrain providers list` as the 16th recipe (alphabetical between Ollama and OpenAI). Your traffic gets attributed to gbrain on OR's leaderboard via `HTTP-Referer` + `X-OpenRouter-Title` headers; if you're running gbrain inside a different agent stack (a downstream agent, your own fork, anything else) set `OPENROUTER_REFERER` + `OPENROUTER_TITLE` so your traffic gets attributed to you instead.
+
+**How to turn it on**
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+gbrain providers list | grep -i openrouter           # see the new recipe
+gbrain providers env openrouter                      # see all OR-related env vars
+gbrain config set chat_model openrouter:anthropic/claude-sonnet-4.6
+gbrain config set embedding_model openrouter:openai/text-embedding-3-small
+gbrain config set embedding_dimensions 1024          # Matryoshka, optional
+```
+
+For forks attributing their own traffic:
+
+```bash
+export OPENROUTER_REFERER=https://your-app.example
+export OPENROUTER_TITLE="Your App"
+```
+
+**A few sharp edges to know about**
+
+- **Subagent loops stay Anthropic-direct.** gbrain's subagent infrastructure (the long tool-calling loop that powers `gbrain agent run`) is hard-pinned to Anthropic-direct because crash-replay needs stable `tool_use_id` blocks across attempts and OR's response normalization doesn't guarantee that. `openrouter:anthropic/claude-haiku-4.5` works fine for chat; it gets rejected at subagent submit time. Keep an Anthropic key if you use `gbrain agent`.
+- **Per-model context limits vary.** The OR catalog spans 128K to 1M+ context windows. The recipe declares no recipe-wide `max_context_tokens` — upstream errors surface per-model.
+- **Catalog churns.** The 8 curated chat slugs in the recipe (gpt-5.2, gpt-5.5, claude-haiku-4.5, claude-sonnet-4.6, claude-opus-4.7, gemini-3-flash-preview, deepseek-chat) are starting points, not a closed enum. Pass any OR model ID and it routes through; check https://openrouter.ai/models for the live catalog.
+
+**Under the hood — `default_headers` seam on Recipe**
+
+To ship attribution headers cleanly, this release adds a generic `Recipe.default_headers` (static) and `Recipe.resolveDefaultHeaders?(env)` (env-templated) seam. Headers from these fields ride alongside the existing Bearer auth on every openai-compatible touchpoint (embedding, expansion, chat, reranker). Two guards fire at `applyResolveAuth` time: declaring both fields throws `AIConfigError` (mutual exclusion); a default header that would shadow the auth header (`Authorization`, or any custom-header recipe's auth key) also throws. Together/Groq/any future recipe can opt into the same seam in a follow-up.
+
+The reranker HTTP path at `gateway.ts:2281` now merges both `Authorization: Bearer <key>` AND `auth.headers` (where default_headers flow) into the request's Headers map. Pre-fix the ternary picked one or the other; default_headers would have been silently dropped on the manual rerank path.
+
+**What's tested**
+
+Four new test files prove the seam reaches the wire, not just the return shape:
+
+- `test/ai/recipe-openrouter.test.ts` — 11 cases: recipe shape, Matryoshka `dims_options: [512, 768, 1024, 1536]`, `max_batch_tokens: 300_000` (OpenAI aggregate per-request cap, not per-input), arbitrary-ID acceptance, `resolveDefaultHeaders` defaults + env override, setup_hint coverage.
+- `test/ai/header-transport.test.ts` — 3 cases: synthetic recipes with custom `fetch` wrappers capture outgoing headers on `embed()`, `chat()`, and `rerank()`. Asserts Authorization + HTTP-Referer + X-OpenRouter-Title + X-Title all reach the wire.
+- `test/ai/recipes-existing-regression.test.ts` — IRON RULE preserved + 6 new contract cases for the `default_headers`/`resolveDefaultHeaders` merge and both safety guards.
+- `test/ai/build-gateway-config.test.ts` — 7 cases pinning the 5-way env-baseURL passthrough (LLAMA_SERVER, OLLAMA, LMSTUDIO, LITELLM, OPENROUTER) through the now-exported `buildGatewayConfig`. Mops up pre-existing untested drift on four legacy env vars in the same pass.
+
+Cherry-picked from [#1210](https://github.com/garrytan/gbrain/pull/1210). Contributed by @davemorin; corrections from an outside-voice review (Codex) folded in: recipe count math (16 not 17), current OR attribution header name (`X-OpenRouter-Title` preferred, `X-Title` back-compat), `max_batch_tokens` semantic (aggregate not per-input), Matryoshka dims for `text-embedding-3-small`, and the auth-shadow guard at `applyResolveAuth`.
+
+## To take advantage of v0.37.6.0
+
+`gbrain upgrade` should do this automatically. If it didn't, or if you want to verify the recipe shipped:
+
+1. **Check the recipe is registered:**
+   ```bash
+   gbrain providers list | grep -i openrouter
+   ```
+2. **Check env-var reporting:**
+   ```bash
+   OPENROUTER_API_KEY=fake-test gbrain providers env openrouter
+   ```
+   Should list `OPENROUTER_API_KEY` (required), `OPENROUTER_BASE_URL`, `OPENROUTER_REFERER`, `OPENROUTER_TITLE` (optional).
+3. **Smoke-test embeddings against a real key:**
+   ```bash
+   export OPENROUTER_API_KEY=sk-or-...
+   gbrain providers test --model openrouter:openai/text-embedding-3-small
+   ```
+4. **If any step fails,** file an issue at https://github.com/garrytan/gbrain/issues with the output of `gbrain doctor`.
+
+## [0.37.5.0] - 2026-05-20
+
+**`gbrain doctor` stops flagging your tags as broken when they're not.**
+
+If you have a tag line like `tags: ["yc", "w2025", "ai"]` in your frontmatter, that's perfectly valid YAML. The doctor used to flag it anyway. One user with a 105K-page brain saw 6,981 of these flagged at once. The fix: the validator now parses suspicious values with a real YAML parser before complaining. Valid YAML stops getting flagged. Genuinely broken titles like `title: "Foo "bar" baz"` still get caught.
+
+**How to use it**
+
+```bash
+gbrain upgrade
+gbrain doctor --json | jq '.checks[]
+  | select(.name=="frontmatter_integrity")
+  | .breakdown.NESTED_QUOTES'
+```
+
+The NESTED_QUOTES count on your brain should drop toward zero on next `gbrain doctor`. No data rewrite needed. No `gbrain frontmatter generate --fix` sweep. The existing files are already valid YAML.
+
+**Why this is the right layer**
+
+`@garrytan-agents` opened PR #1217 with a one-line fix to the emitter side: switch tag serialization from `JSON.stringify` (double-quoted) to single-quoted YAML. That made the headline 6,981-error case go away by changing what new writes look like. But Codex's outside-voice review during planning caught a deeper bug: even with a perfect emitter, the validator at `src/core/markdown.ts:219-238` was a raw quote counter (`count(unescaped ")  >= 3 => error`) that doesn't understand YAML at all. It would still flag a clean single-quoted scalar like `title: 'a: "b" "c"'` (6 unescaped `"` characters, but valid YAML). The fix had to land on the dumb side, not the emitter side.
+
+PR #1217 was closed; thanks to @garrytan-agents for the 6,981-error signal that exposed the underlying class.
+
+**What's safe to know about**
+
+- The fix is additive. Lines with `< 3` unescaped quotes still pass instantly (existing fast path). Only suspicious lines pay the per-line YAML parse, and only when count >= 3 (rare on healthy data).
+- `js-yaml@3.14.2` is now a direct dependency (was transitive via gray-matter). Adding a direct pin so a future gray-matter major bump can't yank the import.
+- The frontmatter emitter at `src/core/frontmatter-inference.ts` is unchanged. Existing tag style (`tags: ["yc"]`) is now correctly recognized as valid; the cosmetic consistency with `brain-writer.ts:184`'s single-quote repair style is a follow-up TODO, not part of this fix.
+
+### Itemized changes
+
+#### Fixed
+
+- `src/core/markdown.ts:219-238` — NESTED_QUOTES validator now disambiguates via `js-yaml.safeLoad`. The count-of-quotes heuristic stays as a fast path; suspicious lines (count >= 3) are parsed before being flagged. Closes the 6,981-error class for any brain whose frontmatter has been valid all along.
+- `js-yaml` declared as a direct dependency in `package.json`; `@types/js-yaml` added to devDependencies. `bun.lock` re-resolves the transitive entry to a top-level pin (no version change).
+
+#### Added
+
+- 5 new YAML-aware regression cases in `test/markdown-validation.test.ts`:
+  - flow sequence with quoted tags does NOT trigger (6,981-error regression guard)
+  - single-quoted scalar with literal inner double quotes does NOT trigger
+  - escaped-as-`''` quotes inside flow seq do NOT trigger
+  - genuinely broken nested quotes STILL trigger
+  - unclosed bracket STILL surfaces NESTED_QUOTES or YAML_PARSE (never silent)
+
+#### For contributors
+
+- `js-yaml` is now an explicit direct dep. New code that needs YAML emission/parsing should import from it directly rather than relying on gray-matter's transitive resolution.
+## [0.37.4.0] - 2026-05-20
+
+**A nightly safety net for the bug class that bit gbrain 10 times in 2 years.**
+**Plus a graph cap so a hub person with 500 connections can't make `traverseGraph` blow up.**
+
+The 10+ forward-reference bugs documented in CLAUDE.md (#239 / #243 / #266 / #357 / #366 / #374 / #375 / #378 / #395 / #396) all shipped the same way: a new release added a column to the schema blob, an old user's brain didn't have that column, and `gbrain upgrade` wedged on `column "..." does not exist`. We always caught these in production. This release ports a CI pattern from pgGraph (a sibling pgrx extension) that catches the next member of that bug class before users hit it — by walking a simulated-legacy brain forward to head on every nightly CI run, against real Postgres.
+
+The same wave adds an opt-in cap on `traverseGraph` for hub-fanout protection, a property-based fuzz harness for the trust-boundary validators, and a memory budget gate that probes peak RSS during a synthetic workload. None of it changes default behavior; everything that touches production code is back-compat.
+
+### What landed
+
+| Piece | What it catches | How it runs |
+|---|---|---|
+| **Schema-migration matrix** | Walk-forward wedges from any historical brain shape (pre-v0.13 + pre-v0.18 seeded; extensible to any earlier shape) | `bash tests/heavy/pg_upgrade_matrix.sh` — Postgres-only, ~4s for both shapes |
+| **Fuzz harness for trust-boundary validators** | Edge-case crashes in `validatePageSlug`, `validateFilename`, `escapeLikePattern`, `parseFactsFence`, plus property tests for `splitBody`, `slugifyPath`, `sanitizeQueryForPrompt`, `validateUploadPath` | `bun test test/fuzz/` (runs in default `bun test`, ~3s for 1000 inputs × 8 properties) |
+| **RSS budget gate** | Peak RSS regressions over a 200-page synthetic workload, baseline-vs-now delta | `bash tests/heavy/measure_rss.sh` — Linux-only baseline refresh, informational on macOS |
+| **Read-latency-under-sync** | Search p99 degradation while writes hammer the engine | `bash tests/heavy/read_latency_under_sync.sh` |
+| **Sync lock regression** | One winner + N-1 lock-busy + zero leaked `gbrain_cycle_locks` rows under concurrent `gbrain sync` (real semantics — losers fail fast, they don't queue) | `bash tests/heavy/sync_lock_regression.sh` — Postgres-only |
+| **`tests/heavy/` convention** | Home for ops-shape scripts that don't fit `*.slow.test.ts` (per-file unit-shape) | `bun run test:heavy` runs the directory sequentially |
+| **Nightly + opt-in CI workflow** | Runs the whole heavy suite at 08:17 UTC daily AND on any PR tagged `heavy-tests`, with Postgres service + artifact upload on failure | `.github/workflows/heavy-tests.yml` |
+| **BFS frontier cap on `traverseGraph`** | Hub-person fan-out blowing up at depth ≥ 2 (back-compat opt-in via new `frontierCap` knob) | `engine.traverseGraph(slug, depth, { frontierCap: 500 })` |
+
+### How to turn it on
+
+The heavy suite is opt-in. To run locally:
+
+```bash
+# Spin up Postgres for the Postgres-only tests:
+docker run -d --name gbrain-test-pg \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=gbrain_test -p 5434:5432 pgvector/pgvector:pg16
+export DATABASE_URL=postgresql://postgres:postgres@localhost:5434/gbrain_test
+bun run test:heavy
+```
+
+For the frontier cap, opt in per call:
+
+```ts
+const nodes = await engine.traverseGraph('alice', 3, { frontierCap: 500 });
+// nodes.length is bounded — that's the protection. A truncation-signal
+// callback was designed but stripped pre-merge; see "what's safe to know"
+// below for the deferral.
+```
+
+### What's safe to know about
+
+- **Default behavior unchanged.** No call to `traverseGraph` sees different results unless they pass `frontierCap`. The `traverse_graph` MCP wire shape (Array of nodes, not a struct) is preserved — external clients keep working.
+- **`onTruncation` callback stripped pre-merge.** The original plan called for a callback that fired when the cap dropped nodes. /review caught two bugs in the v1 algorithm: false positives when a graph organically has exactly `cap` unique nodes at some depth, and false negatives in diamond graphs because the recursive `LIMIT N` ran before the outer `SELECT DISTINCT`. Rather than ship a signal callers couldn't trust, we cut it. The cap itself (the actually-useful frontier protection) ships clean; the signal returns in a follow-up wave once a dedupe-then-cap SQL rewrite + Postgres parity E2E land. Tracked in TODOS.md → "T8 truncation signal".
+- **`tests/heavy/` isn't in `bun test`.** The runner stays fast (8 shards, ~6 minutes). The heavy stuff runs nightly or on label.
+- **RSS baseline is empty on first commit.** The first Linux CI nightly populates it via `tests/heavy/measure_rss.sh --refresh-baseline`. Until then every measurement is informational. The macOS fallback path is `process.memoryUsage().rss` (VmRSS, mmap-inflated) — the gate refuses to write a baseline from a macOS run by design.
+- **Fuzz purity is bundle-verified.** `scripts/check-fuzz-purity.sh` runs in `verify`. It bundles each pure-target file via `bun build --target=bun` and greps for `node:fs` / `node:child_process` / engine imports. Source-grep can be fooled by transitive imports; the bundle can't.
+
+### What we caught and fixed before merging
+
+Three review passes ran on the plan before any code: a CEO scope review (Approach C, full sweep, 9 tasks), an Eng dual-voice review (Claude subagent + Codex), and a Codex 2nd-pass verifier against the revised plan. The 2nd pass caught issues the first two missed:
+
+- The fuzz purity guard's `require.cache` snapshot would have been theatrical under Bun's ESM loader. Swapped to bun-bundle-then-grep, which catches transitive impurity. Five proposed pure targets turned out to transitively import `fs` (validator-shaped functions living in modules that pull in helpers that import fs); they moved to `mixed-validators.test.ts` with property tests but no purity guarantee. Only `escapeLikePattern` and `parseFactsFence` are bundle-pure.
+- The first-pass T8 design stored truncation metadata on the engine instance. Concurrent traversals would have stomped each other's metadata. Switched to a per-call `onTruncation` callback — each call's closure is independent.
+- The first-pass T3 design proposed committing a 50K-page PGLite fixture to the repo. Repo-size risk + contradicted T1's no-blobs principle. Switched to in-process synthesis (200 pages by default; configurable up).
+- Three reviewers caught the original `LIMIT N PARTITION BY depth` SQL as not-actually-valid syntax. Real shape is parenthesized `LIMIT N ORDER BY (slug, id)` inside the recursive term, with `DISTINCT ON` post-dedupe.
+
+### Itemized changes
+
+#### Engine (production code)
+
+- `src/core/engine.ts` — new export `TraverseGraphOpts`. `traverseGraph(slug, depth, opts?)` opts widen to include `frontierCap?: number`. Return type unchanged (`Promise<GraphNode[]>`).
+- `src/core/postgres-engine.ts` — recursive CTE in `traverseGraph` adds parenthesized `LIMIT N ORDER BY p2.slug ASC, p2.id ASC` inside the recursive term when `frontierCap` is set.
+- `src/core/pglite-engine.ts` — same shape, same SQL, positional params.
+
+#### Heavy tests (new directory)
+
+- `tests/heavy/pg_upgrade_matrix.sh` + `tests/heavy/_build_legacy_fixtures.sh` + `tests/heavy/fixtures/down-mutate-pre-v0.13.sql` + `tests/heavy/fixtures/down-mutate-pre-v0.18.sql` — schema-migration walk-forward matrix.
+- `tests/heavy/measure_rss.sh` + `tests/heavy/_measure_rss_workload.ts` + `tests/heavy/rss-baseline.json` — RSS budget gate, informational-only until Linux baseline lands.
+- `tests/heavy/read_latency_under_sync.sh` + `tests/heavy/_read_latency_workload.ts` — search p50/p95/p99 baseline vs under-load.
+- `tests/heavy/sync_lock_regression.sh` — concurrent `gbrain sync` lock contention.
+- `tests/heavy/README.md` + `scripts/run-heavy.sh` + `bun run test:heavy` script — convention + runner. Underscore-prefix files (`_foo.sh`) are helpers skipped by the runner.
+
+#### Fuzz harness (new)
+
+- `test/fuzz/pure-validators.test.ts` — purity-guarded: `escapeLikePattern`, `parseFactsFence`.
+- `test/fuzz/mixed-validators.test.ts` — same property tests, no purity guarantee: `validatePageSlug`, `validateFilename`, `splitBody`, `slugifyPath`, `sanitizeQueryForPrompt`.
+- `test/fuzz/filesystem-validators.test.ts` — fs-backed property tests with temp dirs: `validateUploadPath` (symlink-escape, traversal probe, arbitrary input).
+- `test/fuzz/regressions/README.md` — pin-failed-fuzz-inputs convention.
+- `scripts/check-fuzz-purity.sh` — bun-bundle + grep for banned imports. Wired into `bun run verify`.
+
+#### CI workflow (new)
+
+- `.github/workflows/heavy-tests.yml` — `cron: '17 8 * * *'` + `pull_request: types: [labeled]` with `heavy-tests` filter + `workflow_dispatch`. Postgres service + pinned action SHAs + artifact upload on failure (uploads `~/.gbrain/audit/heavy-*` + `tests/heavy/rss-baseline.json`).
+
+#### Tests + docs
+
+- `test/regressions/v0_36_frontier_cap.test.ts` — 4 pinned contracts: cap-unset back-compat, cap-hit bounds result to `<= cap+1` (the actually-useful protection invariant), MCP wire-shape preservation (still Array), concurrency independence (two concurrent calls on same engine with different caps — larger cap sees >= as many nodes).
+- `CLAUDE.md` — file taxonomy gains `tests/heavy/*.sh` + `test/fuzz/*.test.ts` entries; `traverseGraph` entry notes the new opt + the stripped truncation callback.
+- `llms-full.txt` regenerated.
 ## [0.37.3.0] - 2026-05-19
 
 **Your agent now catches skills that would call the web before checking the brain. The same class of miss that flagged Garry's own Palantir tweet as a risk because none of the three eval models knew he built it.**
@@ -177,6 +621,7 @@ upgrade is purely the binary swap.
    The brain-first detection is regex-based and will hit false-positives on
    skills that NAME but don't CALL the external tools. Declarative opt-out
    (`brain_first: exempt`) is the canonical answer for that class.
+
 ## [0.37.2.0] - 2026-05-19
 
 **Your grading script writes "unresolvable" verdicts now. Before this fix, every single one was rejected at the database layer — 0 of 34 writes landed in a recent production run.**
