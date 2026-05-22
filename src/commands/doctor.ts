@@ -31,6 +31,14 @@ export interface Check {
   name: string;
   status: 'ok' | 'warn' | 'fail';
   message: string;
+  /**
+   * v0.38: optional structured payload for checks that surface data
+   * meant for programmatic consumption (e.g., cycle_phase_scope's
+   * `phase_scope_map`). Mirrors `PhaseResult.details`. Most checks pack
+   * everything into `message`; this is the escape hatch for ones that
+   * shouldn't.
+   */
+  details?: Record<string, unknown>;
   issues?: Array<{ type: string; skill: string; action: string; fix?: any }>;
   /**
    * v0.36+ brain-health-100: structured remediation jobs per check.
@@ -1259,6 +1267,53 @@ export function checkAutopilotLockScope(): Check {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { name: 'autopilot_lock_scope', status: 'warn', message: `Check failed: ${msg}` };
+  }
+}
+
+/**
+ * v0.38 — cycle_phase_scope check (informational).
+ *
+ * Renders the static `PHASE_SCOPE` taxonomy from `src/core/cycle.ts` so
+ * operators (and future automation) can see at a glance which phases
+ * are safe to parallelize per source vs which serialize brain-wide.
+ *
+ * Always returns 'ok' — this is documentation, not enforcement. The
+ * runtime-enforcement TODO is deferred per plan.
+ */
+export function checkCyclePhaseScope(): Check {
+  try {
+    // Lazy require to avoid pulling cycle.ts into doctor's import graph
+    // for non-cycle-related doctor runs. Same pattern as the existing
+    // dynamic imports elsewhere in this file.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { ALL_PHASES, PHASE_SCOPE } = require('../core/cycle.ts') as {
+      ALL_PHASES: ReadonlyArray<string>;
+      PHASE_SCOPE: Record<string, 'source' | 'global' | 'mixed'>;
+    };
+    const counts: Record<'source' | 'global' | 'mixed', number> = { source: 0, global: 0, mixed: 0 };
+    const breakdown: Record<string, string[]> = { source: [], global: [], mixed: [] };
+    for (const phase of ALL_PHASES) {
+      const scope = PHASE_SCOPE[phase];
+      if (scope) {
+        counts[scope]++;
+        breakdown[scope].push(phase);
+      }
+    }
+    return {
+      name: 'cycle_phase_scope',
+      status: 'ok',
+      message:
+        `Phase taxonomy: ${counts.source} source-scoped, ${counts.global} brain-global, ` +
+        `${counts.mixed} mixed. Source-safe: [${breakdown.source.join(', ')}]. ` +
+        `Brain-global: [${breakdown.global.join(', ')}]. Mixed: [${breakdown.mixed.join(', ')}].`,
+      details: {
+        phase_scope_map: PHASE_SCOPE,
+        counts,
+      },
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { name: 'cycle_phase_scope', status: 'warn', message: `Check failed: ${msg}` };
   }
 }
 
@@ -3792,6 +3847,9 @@ export async function runDoctor(engine: BrainEngine | null, args: string[], dbSo
     // 5M — autopilot_lock_scope (PID-safe hint per codex CF11)
     progress.heartbeat('autopilot_lock_scope');
     checks.push(checkAutopilotLockScope());
+    // v0.38 — cycle_phase_scope (informational; no DB cost)
+    progress.heartbeat('cycle_phase_scope');
+    checks.push(checkCyclePhaseScope());
   }
 
   progress.finish();
