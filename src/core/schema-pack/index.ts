@@ -175,6 +175,22 @@ export {
 export { invalidateQueryCache } from './query-cache-invalidator.ts';
 
 export {
+  type StatsOpts,
+  type StatsResult,
+  type PerSourceStats,
+  type TypeStats,
+  type DeadPrefixHint,
+  runStatsCore,
+} from './stats.ts';
+
+export {
+  type SyncOpts,
+  type SyncResult,
+  type PerPrefixResult,
+  runSyncCore,
+} from './sync.ts';
+
+export {
   type LintIssue,
   type LintOpts,
   type LintRule,
