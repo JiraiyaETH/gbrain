@@ -120,6 +120,60 @@ describe('E2E synthesize — empty corpus', () => {
   }, 30_000);
 });
 
+describe('E2E synthesize — gateway-adapter mid-run AIConfigError catch (v0.41 T5 rework)', () => {
+  test('AIConfigError thrown by gateway.chat is caught per-transcript; phase continues', async () => {
+    // Exercises the new try/catch in the verdict loop. Stubs the gateway
+    // chat transport to throw AIConfigError on every call (simulates a
+    // revoked key surfacing mid-run). The expected behavior: each
+    // transcript records a "gateway error: ..." reason, worth=false, and
+    // the phase completes with status='ok' (NOT a crash).
+    const { __setChatTransportForTests, resetGateway } = await import('../../src/core/ai/gateway.ts');
+    const { AIConfigError } = await import('../../src/core/ai/errors.ts');
+
+    const rig = await setupRig();
+    try {
+      // Make hasAnthropicKey() return true (a fake key is enough — the
+      // gateway transport stub throws below regardless).
+      const savedKey = process.env.ANTHROPIC_API_KEY;
+      process.env.ANTHROPIC_API_KEY = 'sk-test-mid-run-throw';
+
+      __setChatTransportForTests(async () => {
+        throw new AIConfigError('simulated mid-run provider auth failure');
+      });
+
+      try {
+        await rig.engine.setConfig('dream.synthesize.enabled', 'true');
+        await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
+        writeFileSync(
+          join(rig.corpusDir, '2026-04-25-mid-run.txt'),
+          'a meaningful conversation\n'.repeat(200),
+        );
+
+        const result = await runPhaseSynthesize(rig.engine, {
+          brainDir: rig.brainDir,
+          dryRun: false,
+        });
+
+        // The phase did NOT throw; it converted the AIConfigError into a
+        // per-transcript "worth=false, reasons=['gateway error: ...']"
+        // verdict and moved on.
+        expect(result.status).toBe('ok');
+        const verdicts = (result.details as { verdicts: Array<{ worth: boolean; reasons: string[] }> }).verdicts;
+        expect(verdicts).toHaveLength(1);
+        expect(verdicts[0].worth).toBe(false);
+        expect(verdicts[0].reasons[0]).toMatch(/gateway error:.*simulated mid-run provider auth failure/);
+      } finally {
+        if (savedKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+        else process.env.ANTHROPIC_API_KEY = savedKey;
+        __setChatTransportForTests(null);
+        resetGateway();
+      }
+    } finally {
+      await rig.cleanup();
+    }
+  }, 30_000);
+});
+
 describe('E2E synthesize — no API key skip path', () => {
   test('without ANTHROPIC_API_KEY, every transcript verdict is "no key" and zero pages written', async () => {
     const rig = await setupRig();
