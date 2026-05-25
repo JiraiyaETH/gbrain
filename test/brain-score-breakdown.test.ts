@@ -58,6 +58,25 @@ describe('Bug 11 — brain_score breakdown sums to total', () => {
     expect(sum).toBe(h.brain_score);
   });
 
+  test('embedding coverage uses the embedding vector, not embedded_at timestamp', async () => {
+    await engine.putPage('stale-marker', { type: 'note', title: 'Stale Marker', compiled_truth: 'x', frontmatter: {} });
+    const db = (engine as any).db;
+    const pageId = (await db.query(`SELECT id FROM pages WHERE slug='stale-marker'`)).rows[0].id;
+    await db.query(
+      `INSERT INTO content_chunks (page_id, chunk_index, chunk_text, chunk_source, embedding, embedded_at)
+       VALUES ($1, 0, 'chunk with timestamp but no vector', 'compiled_truth', NULL, now())`,
+      [pageId],
+    );
+
+    const h = await engine.getHealth();
+    const stats = await engine.getStats();
+
+    expect(h.missing_embeddings).toBe(1);
+    expect(h.embed_coverage).toBe(0);
+    expect(stats.chunk_count).toBe(1);
+    expect(stats.embedded_count).toBe(0);
+  });
+
   test('brain_score caps at 100', async () => {
     const h = await engine.getHealth();
     expect(h.brain_score).toBeGreaterThanOrEqual(0);

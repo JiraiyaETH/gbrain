@@ -1,5 +1,7 @@
 import { describe, test, expect } from 'bun:test';
-import { readFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 // Read cli.ts source for structural checks
 const cliSource = readFileSync(new URL('../src/cli.ts', import.meta.url), 'utf-8');
@@ -135,5 +137,50 @@ describe('CLI dispatch integration', () => {
     expect(tools[0]).toHaveProperty('name');
     expect(tools[0]).toHaveProperty('description');
     expect(tools[0]).toHaveProperty('parameters');
+  });
+
+  test('query --no-expand disables expansion instead of calling the expansion provider', async () => {
+    const repo = new URL('..', import.meta.url).pathname;
+    const home = mkdtempSync(join(tmpdir(), 'gbrain-cli-no-expand-'));
+    try {
+      mkdirSync(join(home, '.gbrain'), { recursive: true });
+      writeFileSync(join(home, '.gbrain', 'config.json'), JSON.stringify({
+        engine: 'pglite',
+        database_path: join(home, '.gbrain', 'brain.pglite'),
+      }, null, 2));
+
+      const baseEnv = {
+        ...process.env,
+        GBRAIN_HOME: home,
+        GBRAIN_EXPANSION_MODEL: 'anthropic:claude-haiku-4-5-20251001',
+        ANTHROPIC_API_KEY: 'test-key-that-must-not-be-used',
+        OPENAI_API_KEY: '',
+      };
+
+      const put = Bun.spawn(['bun', 'run', 'src/cli.ts', 'put', 'people/alice'], {
+        cwd: repo,
+        env: baseEnv,
+        stdin: 'pipe',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      put.stdin.write('# Alice\n\nAlice works on Q1 review.\n');
+      put.stdin.end();
+      expect(await put.exited).toBe(0);
+
+      const query = Bun.spawn(['bun', 'run', 'src/cli.ts', 'query', 'Alice Q1 review', '--no-expand'], {
+        cwd: repo,
+        env: baseEnv,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const stderr = await new Response(query.stderr).text();
+      const exitCode = await query.exited;
+      expect(exitCode).toBe(0);
+      expect(stderr).not.toContain('expansion disabled');
+      expect(stderr).not.toContain('Anthropic');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

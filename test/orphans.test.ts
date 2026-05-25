@@ -283,6 +283,49 @@ describe('findOrphans (engine-injected)', () => {
     expect(slugs).toContain('topic/standalone');
   });
 
+  test('engine orphan scan honors explicit source scope', async () => {
+    const db = (engine as any).db;
+    await db.query(
+      `INSERT INTO sources (id, name) VALUES ('alt', 'alt')
+       ON CONFLICT (id) DO NOTHING`,
+    );
+
+    await engine.putPage('topic/default-only', {
+      type: 'concept',
+      title: 'Default Only',
+      compiled_truth: 'default source orphan',
+      timeline: '',
+    });
+    await engine.putPage('topic/alt-only', {
+      type: 'concept',
+      title: 'Alt Only',
+      compiled_truth: 'alt source orphan',
+      timeline: '',
+      source_id: 'alt',
+    });
+
+    const defaultSlugs = (await engine.findOrphanPages('default')).map(r => r.slug);
+    const altSlugs = (await engine.findOrphanPages('alt')).map(r => r.slug);
+
+    expect(defaultSlugs).toContain('topic/default-only');
+    expect(defaultSlugs).not.toContain('topic/alt-only');
+    expect(altSlugs).toContain('topic/alt-only');
+    expect(altSlugs).not.toContain('topic/default-only');
+  });
+
+  test('engine orphan scan excludes soft-deleted pages', async () => {
+    await engine.putPage('topic/deleted-orphan', {
+      type: 'concept',
+      title: 'Deleted Orphan',
+      compiled_truth: 'should not surface once soft-deleted',
+      timeline: '',
+    });
+    await engine.softDeletePage('topic/deleted-orphan');
+
+    const slugs = (await engine.findOrphanPages('default')).map(r => r.slug);
+    expect(slugs).not.toContain('topic/deleted-orphan');
+  });
+
   test('zero pages: empty result (no crash on empty brain)', async () => {
     const result = await findOrphans(engine);
     expect(result.orphans).toEqual([]);

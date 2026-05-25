@@ -8,6 +8,7 @@ import { loadConfig, gbrainPath } from '../core/config.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
 import { isSyncable, type SyncStrategy } from '../core/sync.ts';
+import { resolveSourceId } from '../core/source-resolver.ts';
 
 function defaultWorkers(): number {
   const cpuCount = cpus().length;
@@ -29,6 +30,25 @@ export interface RunImportResult {
   failures: Array<{ path: string; error: string }>;
 }
 
+/**
+ * Resolve the target source for `gbrain import`.
+ *
+ * Unlike put/delete, import already has a filesystem target directory in hand.
+ * Use that path as the routing hint when the caller omitted both `--source`
+ * and `GBRAIN_SOURCE`, so raw `gbrain import brain[/subdir] ...` lands in the
+ * registered source that owns that tree instead of silently falling back to
+ * legacy `default`.
+ */
+export async function resolveImportSourceId(
+  engine: BrainEngine,
+  args: string[],
+  dir: string,
+): Promise<string> {
+  const sourceIdx = args.indexOf('--source');
+  const explicitSource = sourceIdx !== -1 ? args[sourceIdx + 1] : null;
+  return await resolveSourceId(engine, explicitSource, dir);
+}
+
 export async function runImport(engine: BrainEngine, args: string[], opts: { commit?: string } = {}): Promise<RunImportResult> {
   const noEmbed = args.includes('--no-embed');
   const fresh = args.includes('--fresh');
@@ -37,7 +57,6 @@ export async function runImport(engine: BrainEngine, args: string[], opts: { com
   const strategyIdx = args.indexOf('--strategy');
   const strategy = (strategyIdx !== -1 ? args[strategyIdx + 1] : 'markdown') as SyncStrategy;
   const sourceIdx = args.indexOf('--source');
-  const sourceId = sourceIdx !== -1 ? args[sourceIdx + 1] : process.env.GBRAIN_SOURCE || undefined;
   const workersIdx = args.indexOf('--workers');
   const workersArg = workersIdx !== -1 ? args[workersIdx + 1] : null;
   // v0.22.13 (PR #490 Q2): shared parseWorkers helper rejects bad input
@@ -63,6 +82,7 @@ export async function runImport(engine: BrainEngine, args: string[], opts: { com
     process.exit(1);
   }
   const dir: string = dirArg;  // narrowed; survives closure capture
+  const sourceId = await resolveImportSourceId(engine, args, dir);
 
   // Collect all .md files. Full sync can ask import to honor sync.ts's
   // canonical page filter so dry-run and write paths mirror each other.

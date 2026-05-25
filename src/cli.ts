@@ -120,6 +120,14 @@ function parseOpArgs(op: Operation, args: string[]): Record<string, unknown> {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg.startsWith('--')) {
+      if (arg.startsWith('--no-')) {
+        const key = arg.slice(5).replace(/-/g, '_');
+        const paramDef = op.params[key];
+        if (paramDef?.type === 'boolean') {
+          params[key] = false;
+          continue;
+        }
+      }
       const key = arg.slice(2).replace(/-/g, '_');
       const paramDef = op.params[key];
       if (paramDef?.type === 'boolean') {

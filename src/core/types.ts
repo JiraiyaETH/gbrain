@@ -9,6 +9,8 @@ export type PageType = 'person' | 'company' | 'deal' | 'yc' | 'civic' | 'project
 
 export interface Page {
   id: number;
+  /** v0.18+ multi-source origin. Optional for legacy callers/projections. */
+  source_id?: string;
   slug: string;
   type: PageType;
   title: string;
@@ -113,6 +115,7 @@ export interface Chunk {
  * rows) embedding bytes over the wire. See `embed --stale` egress fix.
  */
 export interface StaleChunkRow {
+  source_id: string;
   slug: string;
   chunk_index: number;
   chunk_text: string;

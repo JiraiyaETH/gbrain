@@ -539,9 +539,11 @@ export class PostgresEngine implements BrainEngine {
     return rows.map(rowToPage);
   }
 
-  async getAllSlugs(): Promise<Set<string>> {
+  async getAllSlugs(sourceId?: string): Promise<Set<string>> {
     const sql = this.sql;
-    const rows = await sql`SELECT slug FROM pages`;
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const sourceCondition = src ? sql`WHERE source_id = ${this.activeSourceId(src)}` : sql``;
+    const rows = await sql`SELECT slug FROM pages ${sourceCondition}`;
     return new Set(rows.map((r) => r.slug as string));
   }
 
@@ -1005,25 +1007,30 @@ export class PostgresEngine implements BrainEngine {
     return rows.map((r) => rowToChunk(r as Record<string, unknown>));
   }
 
-  async countStaleChunks(): Promise<number> {
+  async countStaleChunks(sourceId?: string): Promise<number> {
     const sql = this.sql;
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const sourceCondition = src ? sql`AND p.source_id = ${this.activeSourceId(src)}` : sql``;
     const [row] = await sql`
       SELECT count(*)::int AS count
-      FROM content_chunks
-      WHERE embedding IS NULL
+      FROM content_chunks cc
+      JOIN pages p ON p.id = cc.page_id
+      WHERE cc.embedding IS NULL ${sourceCondition}
     `;
     return Number((row as { count?: number } | undefined)?.count ?? 0);
   }
 
-  async listStaleChunks(): Promise<StaleChunkRow[]> {
+  async listStaleChunks(sourceId?: string): Promise<StaleChunkRow[]> {
     const sql = this.sql;
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const sourceCondition = src ? sql`AND p.source_id = ${this.activeSourceId(src)}` : sql``;
     const rows = await sql`
-      SELECT p.slug, cc.chunk_index, cc.chunk_text, cc.chunk_source,
+      SELECT p.source_id, p.slug, cc.chunk_index, cc.chunk_text, cc.chunk_source,
              cc.model, cc.token_count
       FROM content_chunks cc
       JOIN pages p ON p.id = cc.page_id
-      WHERE cc.embedding IS NULL
-      ORDER BY p.id, cc.chunk_index
+      WHERE cc.embedding IS NULL ${sourceCondition}
+      ORDER BY p.source_id, p.id, cc.chunk_index
       LIMIT 100000
     `;
     return rows as unknown as StaleChunkRow[];
@@ -1121,43 +1128,29 @@ export class PostgresEngine implements BrainEngine {
     return result.length;
   }
 
-  async removeLink(from: string, to: string, linkType?: string, linkSource?: string): Promise<void> {
+  async removeLink(from: string, to: string, linkType?: string, linkSource?: string, fromSourceId?: string, toSourceId?: string): Promise<void> {
     const sql = this.sql;
-    // Build up filters dynamically. linkType + linkSource are independent
-    // optional constraints; all four combinations are valid.
-    if (linkType !== undefined && linkSource !== undefined) {
-      await sql`
-        DELETE FROM links
-        WHERE from_page_id = (SELECT id FROM pages WHERE slug = ${from})
-          AND to_page_id = (SELECT id FROM pages WHERE slug = ${to})
-          AND link_type = ${linkType}
-          AND link_source IS NOT DISTINCT FROM ${linkSource}
-      `;
-    } else if (linkType !== undefined) {
-      await sql`
-        DELETE FROM links
-        WHERE from_page_id = (SELECT id FROM pages WHERE slug = ${from})
-          AND to_page_id = (SELECT id FROM pages WHERE slug = ${to})
-          AND link_type = ${linkType}
-      `;
-    } else if (linkSource !== undefined) {
-      await sql`
-        DELETE FROM links
-        WHERE from_page_id = (SELECT id FROM pages WHERE slug = ${from})
-          AND to_page_id = (SELECT id FROM pages WHERE slug = ${to})
-          AND link_source IS NOT DISTINCT FROM ${linkSource}
-      `;
-    } else {
-      await sql`
-        DELETE FROM links
-        WHERE from_page_id = (SELECT id FROM pages WHERE slug = ${from})
-          AND to_page_id = (SELECT id FROM pages WHERE slug = ${to})
-      `;
-    }
+    const fromSrc = fromSourceId || process.env.GBRAIN_SOURCE;
+    const toSrc = toSourceId || process.env.GBRAIN_SOURCE;
+    const fromSourceCondition = fromSrc ? sql`AND f.source_id = ${this.activeSourceId(fromSrc)}` : sql``;
+    const toSourceCondition = toSrc ? sql`AND t.source_id = ${this.activeSourceId(toSrc)}` : sql``;
+    const typeCondition = linkType !== undefined ? sql`AND links.link_type = ${linkType}` : sql``;
+    const sourceCondition = linkSource !== undefined ? sql`AND links.link_source IS NOT DISTINCT FROM ${linkSource}` : sql``;
+    await sql`
+      DELETE FROM links
+      USING pages f, pages t
+      WHERE links.from_page_id = f.id
+        AND links.to_page_id = t.id
+        AND f.slug = ${from} ${fromSourceCondition}
+        AND t.slug = ${to} ${toSourceCondition}
+        ${typeCondition} ${sourceCondition}
+    `;
   }
 
-  async getLinks(slug: string): Promise<Link[]> {
+  async getLinks(slug: string, sourceId?: string): Promise<Link[]> {
     const sql = this.sql;
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const sourceCondition = src ? sql`AND f.source_id = ${this.activeSourceId(src)}` : sql``;
     const rows = await sql`
       SELECT f.slug as from_slug, t.slug as to_slug,
              l.link_type, l.context, l.link_source,
@@ -1166,13 +1159,15 @@ export class PostgresEngine implements BrainEngine {
       JOIN pages f ON f.id = l.from_page_id
       JOIN pages t ON t.id = l.to_page_id
       LEFT JOIN pages o ON o.id = l.origin_page_id
-      WHERE f.slug = ${slug}
+      WHERE f.slug = ${slug} ${sourceCondition}
     `;
     return rows as unknown as Link[];
   }
 
-  async getBacklinks(slug: string): Promise<Link[]> {
+  async getBacklinks(slug: string, sourceId?: string): Promise<Link[]> {
     const sql = this.sql;
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const sourceCondition = src ? sql`AND t.source_id = ${this.activeSourceId(src)}` : sql``;
     const rows = await sql`
       SELECT f.slug as from_slug, t.slug as to_slug,
              l.link_type, l.context, l.link_source,
@@ -1181,7 +1176,7 @@ export class PostgresEngine implements BrainEngine {
       JOIN pages f ON f.id = l.from_page_id
       JOIN pages t ON t.id = l.to_page_id
       LEFT JOIN pages o ON o.id = l.origin_page_id
-      WHERE t.slug = ${slug}
+      WHERE t.slug = ${slug} ${sourceCondition}
     `;
     return rows as unknown as Link[];
   }
@@ -1381,17 +1376,20 @@ export class PostgresEngine implements BrainEngine {
     return result;
   }
 
-  async findOrphanPages(): Promise<Array<{ slug: string; title: string; domain: string | null }>> {
+  async findOrphanPages(sourceId?: string): Promise<Array<{ slug: string; title: string; domain: string | null }>> {
     const sql = this.sql;
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const sourceCondition = src ? sql`AND p.source_id = ${this.activeSourceId(src)}` : sql``;
     const rows = await sql`
       SELECT
         p.slug,
         COALESCE(p.title, p.slug) AS title,
         p.frontmatter->>'domain' AS domain
       FROM pages p
-      WHERE NOT EXISTS (
-        SELECT 1 FROM links l WHERE l.to_page_id = p.id
-      )
+      WHERE p.deleted_at IS NULL ${sourceCondition}
+        AND NOT EXISTS (
+          SELECT 1 FROM links l WHERE l.to_page_id = p.id
+        )
       ORDER BY p.slug
     `;
     return rows as unknown as Array<{ slug: string; title: string; domain: string | null }>;
@@ -1879,22 +1877,28 @@ export class PostgresEngine implements BrainEngine {
   // Stats + health
   async getStats(): Promise<BrainStats> {
     const sql = this.sql;
+    const src = process.env.GBRAIN_SOURCE;
+    const sourceCondition = src ? sql`AND p.source_id = ${this.activeSourceId(src)}` : sql``;
+    const typeWhere = src ? sql`WHERE p.deleted_at IS NULL AND p.source_id = ${this.activeSourceId(src)}` : sql`WHERE p.deleted_at IS NULL`;
     const [stats] = await sql`
+      WITH scoped_pages AS (
+        SELECT p.id FROM pages p WHERE p.deleted_at IS NULL ${sourceCondition}
+      )
       SELECT
         -- v0.26.5: exclude soft-deleted from page_count. Same posture as the
         -- search filter and getPage default — soft-deleted is hidden everywhere
         -- the user looks. Chunks/links stay raw because they still occupy
         -- storage until the autopilot purge phase runs.
-        (SELECT count(*) FROM pages WHERE deleted_at IS NULL) as page_count,
-        (SELECT count(*) FROM content_chunks) as chunk_count,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NOT NULL) as embedded_count,
-        (SELECT count(*) FROM links) as link_count,
-        (SELECT count(DISTINCT tag) FROM tags) as tag_count,
-        (SELECT count(*) FROM timeline_entries) as timeline_entry_count
+        (SELECT count(*) FROM scoped_pages) as page_count,
+        (SELECT count(*) FROM content_chunks cc JOIN scoped_pages sp ON sp.id = cc.page_id) as chunk_count,
+        (SELECT count(*) FROM content_chunks cc JOIN scoped_pages sp ON sp.id = cc.page_id WHERE cc.embedding IS NOT NULL) as embedded_count,
+        (SELECT count(*) FROM links l JOIN scoped_pages sp ON sp.id = l.from_page_id) as link_count,
+        (SELECT count(DISTINCT t.tag) FROM tags t JOIN scoped_pages sp ON sp.id = t.page_id) as tag_count,
+        (SELECT count(*) FROM timeline_entries te JOIN scoped_pages sp ON sp.id = te.page_id) as timeline_entry_count
     `;
 
     const types = await sql`
-      SELECT type, count(*)::int as count FROM pages GROUP BY type ORDER BY count DESC
+      SELECT p.type, count(*)::int as count FROM pages p ${typeWhere} GROUP BY p.type ORDER BY count DESC
     `;
     const pages_by_type: Record<string, number> = {};
     for (const t of types) {
@@ -1914,33 +1918,40 @@ export class PostgresEngine implements BrainEngine {
 
   async getHealth(): Promise<BrainHealth> {
     const sql = this.sql;
+    const src = process.env.GBRAIN_SOURCE;
+    const sourceCondition = src ? sql`AND source_id = ${this.activeSourceId(src)}` : sql``;
     // Bug 11 doc-drift fix — orphan_pages means "islanded" (no inbound AND
     // no outbound links), aligning both engines with the user-facing
-    // definition. The type comment previously said "no inbound" but the
-    // SQL required both — docs now match code so users can trust the
-    // number. A hub page that links out to many but has no back-references
+    // definition. A hub page that links out to many but has no back-references
     // is working as intended, not an orphan.
     const [h] = await sql`
-      WITH entity_pages AS (
-        SELECT id, slug FROM pages WHERE type IN ('person', 'company')
+      WITH scoped_pages AS (
+        SELECT id, slug, type, updated_at FROM pages WHERE deleted_at IS NULL ${sourceCondition}
+      ),
+      scoped_chunks AS (
+        SELECT cc.* FROM content_chunks cc JOIN scoped_pages sp ON sp.id = cc.page_id
+      ),
+      entity_pages AS (
+        SELECT id, slug FROM scoped_pages WHERE type IN ('person', 'company')
       )
       SELECT
-        (SELECT count(*) FROM pages) as page_count,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NOT NULL)::float /
-          GREATEST((SELECT count(*) FROM content_chunks), 1)::float as embed_coverage,
-        (SELECT count(*) FROM pages p
+        (SELECT count(*) FROM scoped_pages) as page_count,
+        (SELECT count(*) FROM scoped_chunks WHERE embedding IS NOT NULL)::float /
+          GREATEST((SELECT count(*) FROM scoped_chunks), 1)::float as embed_coverage,
+        (SELECT count(*) FROM scoped_pages p
          WHERE p.updated_at < (SELECT MAX(te.created_at) FROM timeline_entries te WHERE te.page_id = p.id)
         ) as stale_pages,
-        (SELECT count(*) FROM pages p
+        (SELECT count(*) FROM scoped_pages p
          WHERE NOT EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = p.id)
            AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_page_id = p.id)
         ) as orphan_pages,
         (SELECT count(*) FROM links l
+         JOIN scoped_pages sp ON sp.id = l.from_page_id
          WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.id = l.to_page_id)
         ) as dead_links,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NULL) as missing_embeddings,
-        (SELECT count(*) FROM links) as link_count,
-        (SELECT count(DISTINCT page_id) FROM timeline_entries) as pages_with_timeline,
+        (SELECT count(*) FROM scoped_chunks WHERE embedding IS NULL) as missing_embeddings,
+        (SELECT count(*) FROM links l JOIN scoped_pages sp ON sp.id = l.from_page_id) as link_count,
+        (SELECT count(DISTINCT te.page_id) FROM timeline_entries te JOIN scoped_pages sp ON sp.id = te.page_id) as pages_with_timeline,
         (SELECT count(*) FROM entity_pages e
          WHERE EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = e.id))::float /
           GREATEST((SELECT count(*) FROM entity_pages), 1)::float as link_coverage,
@@ -1950,9 +1961,12 @@ export class PostgresEngine implements BrainEngine {
     `;
 
     const connected = await sql`
+      WITH scoped_pages AS (
+        SELECT id, slug, type FROM pages WHERE deleted_at IS NULL ${sourceCondition}
+      )
       SELECT p.slug,
              (SELECT count(*) FROM links l WHERE l.from_page_id = p.id OR l.to_page_id = p.id)::int as link_count
-      FROM pages p
+      FROM scoped_pages p
       WHERE p.type IN ('person', 'company')
       ORDER BY link_count DESC
       LIMIT 5

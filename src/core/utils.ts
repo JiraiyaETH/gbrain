@@ -52,6 +52,7 @@ export function rowToPage(row: Record<string, unknown>): Page {
     : new Date(deletedAtRaw as string);
   return {
     id: row.id as number,
+    ...(row.source_id !== undefined && { source_id: row.source_id as string }),
     slug: row.slug as string,
     type: row.type as PageType,
     title: row.title as string,

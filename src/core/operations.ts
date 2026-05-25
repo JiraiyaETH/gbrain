@@ -470,7 +470,7 @@ const put_page: Operation = {
       try {
         const enabled = await isAutoLinkEnabled(ctx.engine);
         if (enabled) {
-          autoLinks = await runAutoLink(ctx.engine, slug, result.parsedPage);
+          autoLinks = await runAutoLink(ctx.engine, slug, result.parsedPage, sourceId);
         }
       } catch (e) {
         autoLinks = { error: e instanceof Error ? e.message : String(e) };
@@ -549,8 +549,10 @@ async function runAutoLink(
   engine: BrainEngine,
   slug: string,
   parsed: { type: PageType; compiled_truth: string; timeline: string; frontmatter: Record<string, unknown> },
+  sourceId?: string,
 ): Promise<{ created: number; removed: number; errors: number; unresolved: UnresolvedFrontmatterRef[] }> {
   const fullContent = parsed.compiled_truth + '\n' + parsed.timeline;
+  const linkSourceId = sourceId || process.env.GBRAIN_SOURCE || 'default';
   // Live-mode resolver: per-put throwaway cache, pg_trgm + optional search.
   const resolver = makeResolver(engine, { mode: 'live' });
   const { candidates, unresolved } = await extractPageLinks(
@@ -559,7 +561,7 @@ async function runAutoLink(
 
   // Resolve which targets exist (skip refs to non-existent pages to avoid FK
   // violation churn in addLink). One getAllSlugs call upfront, O(1) lookup.
-  const allSlugs = await engine.getAllSlugs();
+  const allSlugs = await engine.getAllSlugs(linkSourceId);
   const valid = candidates.filter(c =>
     allSlugs.has(c.targetSlug) && (!c.fromSlug || allSlugs.has(c.fromSlug))
   );
@@ -591,10 +593,10 @@ async function runAutoLink(
     } catch {
       // engine doesn't support advisory locks — fall through
     }
-    const existingOut = await tx.getLinks(slug);
+    const existingOut = await tx.getLinks(slug, linkSourceId);
     // Incoming: we only look at frontmatter edges WE authored (origin_slug=slug).
     // Non-frontmatter and other-page frontmatter edges survive untouched.
-    const existingInRaw = await tx.getBacklinks(slug);
+    const existingInRaw = await tx.getBacklinks(slug, linkSourceId);
     const existingIn = existingInRaw.filter(
       l => l.link_source === 'frontmatter' && l.origin_slug === slug,
     );
@@ -621,6 +623,7 @@ async function runAutoLink(
         await tx.addLink(
           slug, c.targetSlug, c.context, c.linkType,
           c.linkSource, c.originSlug, c.originField,
+          linkSourceId, linkSourceId, linkSourceId,
         );
         const existKey = `${c.targetSlug}\u0000${c.linkType}\u0000${c.linkSource ?? 'markdown'}`;
         const exists = reconcilableOut.some(l =>
@@ -638,6 +641,7 @@ async function runAutoLink(
         await tx.addLink(
           c.fromSlug!, c.targetSlug, c.context, c.linkType,
           'frontmatter', c.originSlug, c.originField,
+          linkSourceId, linkSourceId, linkSourceId,
         );
         const existKey = `${c.fromSlug}\u0000${c.linkType}`;
         const exists = existingIn.some(l =>
@@ -654,7 +658,7 @@ async function runAutoLink(
       const key = `${l.to_slug}\u0000${l.link_type}\u0000${l.link_source ?? 'markdown'}`;
       if (!outKeys.has(key)) {
         try {
-          await tx.removeLink(slug, l.to_slug, l.link_type, l.link_source ?? undefined);
+          await tx.removeLink(slug, l.to_slug, l.link_type, l.link_source ?? undefined, linkSourceId, linkSourceId);
           removed++;
         } catch {
           errors++;
@@ -667,7 +671,7 @@ async function runAutoLink(
       const key = `${l.from_slug}\u0000${l.link_type}`;
       if (!incKeys.has(key)) {
         try {
-          await tx.removeLink(l.from_slug, slug, l.link_type, 'frontmatter');
+          await tx.removeLink(l.from_slug, slug, l.link_type, 'frontmatter', linkSourceId, linkSourceId);
           removed++;
         } catch {
           errors++;

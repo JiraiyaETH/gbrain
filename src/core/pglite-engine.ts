@@ -572,8 +572,11 @@ export class PGLiteEngine implements BrainEngine {
     return (rows as Record<string, unknown>[]).map(rowToPage);
   }
 
-  async getAllSlugs(): Promise<Set<string>> {
-    const { rows } = await this.db.query('SELECT slug FROM pages');
+  async getAllSlugs(sourceId?: string): Promise<Set<string>> {
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const { rows } = src
+      ? await this.db.query('SELECT slug FROM pages WHERE source_id = $1', [this.activeSourceId(src)])
+      : await this.db.query('SELECT slug FROM pages');
     return new Set((rows as { slug: string }[]).map(r => r.slug));
   }
 
@@ -935,25 +938,36 @@ export class PGLiteEngine implements BrainEngine {
     return (rows as Record<string, unknown>[]).map(r => rowToChunk(r));
   }
 
-  async countStaleChunks(): Promise<number> {
+  async countStaleChunks(sourceId?: string): Promise<number> {
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const params: unknown[] = [];
+    const sourceCondition = src ? ` AND p.source_id = $1` : '';
+    if (src) params.push(this.activeSourceId(src));
     const { rows } = await this.db.query(
       `SELECT count(*)::int AS count
-         FROM content_chunks
-        WHERE embedding IS NULL`,
+         FROM content_chunks cc
+         JOIN pages p ON p.id = cc.page_id
+        WHERE cc.embedding IS NULL${sourceCondition}`,
+      params,
     );
     const count = (rows[0] as { count: number } | undefined)?.count ?? 0;
     return Number(count);
   }
 
-  async listStaleChunks(): Promise<StaleChunkRow[]> {
+  async listStaleChunks(sourceId?: string): Promise<StaleChunkRow[]> {
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const params: unknown[] = [];
+    const sourceCondition = src ? ` AND p.source_id = $1` : '';
+    if (src) params.push(this.activeSourceId(src));
     const { rows } = await this.db.query(
-      `SELECT p.slug, cc.chunk_index, cc.chunk_text, cc.chunk_source,
+      `SELECT p.source_id, p.slug, cc.chunk_index, cc.chunk_text, cc.chunk_source,
               cc.model, cc.token_count
          FROM content_chunks cc
          JOIN pages p ON p.id = cc.page_id
-        WHERE cc.embedding IS NULL
-        ORDER BY p.id, cc.chunk_index
+        WHERE cc.embedding IS NULL${sourceCondition}
+        ORDER BY p.source_id, p.id, cc.chunk_index
         LIMIT 100000`,
+      params,
     );
     return rows as unknown as StaleChunkRow[];
   }
@@ -1034,43 +1048,45 @@ export class PGLiteEngine implements BrainEngine {
     return result.rows.length;
   }
 
-  async removeLink(from: string, to: string, linkType?: string, linkSource?: string): Promise<void> {
-    if (linkType !== undefined && linkSource !== undefined) {
-      await this.db.query(
-        `DELETE FROM links
-         WHERE from_page_id = (SELECT id FROM pages WHERE slug = $1)
-           AND to_page_id = (SELECT id FROM pages WHERE slug = $2)
-           AND link_type = $3
-           AND link_source IS NOT DISTINCT FROM $4`,
-        [from, to, linkType, linkSource]
-      );
-    } else if (linkType !== undefined) {
-      await this.db.query(
-        `DELETE FROM links
-         WHERE from_page_id = (SELECT id FROM pages WHERE slug = $1)
-           AND to_page_id = (SELECT id FROM pages WHERE slug = $2)
-           AND link_type = $3`,
-        [from, to, linkType]
-      );
-    } else if (linkSource !== undefined) {
-      await this.db.query(
-        `DELETE FROM links
-         WHERE from_page_id = (SELECT id FROM pages WHERE slug = $1)
-           AND to_page_id = (SELECT id FROM pages WHERE slug = $2)
-           AND link_source IS NOT DISTINCT FROM $3`,
-        [from, to, linkSource]
-      );
-    } else {
-      await this.db.query(
-        `DELETE FROM links
-         WHERE from_page_id = (SELECT id FROM pages WHERE slug = $1)
-           AND to_page_id = (SELECT id FROM pages WHERE slug = $2)`,
-        [from, to]
-      );
+  async removeLink(from: string, to: string, linkType?: string, linkSource?: string, fromSourceId?: string, toSourceId?: string): Promise<void> {
+    const params: unknown[] = [from, to];
+    const conditions = [
+      'links.from_page_id = f.id',
+      'links.to_page_id = t.id',
+      'f.slug = $1',
+      't.slug = $2',
+    ];
+    const fromSrc = fromSourceId || process.env.GBRAIN_SOURCE;
+    if (fromSrc) {
+      params.push(this.activeSourceId(fromSrc));
+      conditions.push(`f.source_id = $${params.length}`);
     }
+    const toSrc = toSourceId || process.env.GBRAIN_SOURCE;
+    if (toSrc) {
+      params.push(this.activeSourceId(toSrc));
+      conditions.push(`t.source_id = $${params.length}`);
+    }
+    if (linkType !== undefined) {
+      params.push(linkType);
+      conditions.push(`links.link_type = $${params.length}`);
+    }
+    if (linkSource !== undefined) {
+      params.push(linkSource);
+      conditions.push(`links.link_source IS NOT DISTINCT FROM $${params.length}`);
+    }
+    await this.db.query(
+      `DELETE FROM links
+       USING pages f, pages t
+       WHERE ${conditions.join(' AND ')}`,
+      params,
+    );
   }
 
-  async getLinks(slug: string): Promise<Link[]> {
+  async getLinks(slug: string, sourceId?: string): Promise<Link[]> {
+    const params: unknown[] = [slug];
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const sourceSql = src ? ` AND f.source_id = $2` : '';
+    if (src) params.push(this.activeSourceId(src));
     const { rows } = await this.db.query(
       `SELECT f.slug as from_slug, t.slug as to_slug,
               l.link_type, l.context, l.link_source,
@@ -1079,13 +1095,17 @@ export class PGLiteEngine implements BrainEngine {
        JOIN pages f ON f.id = l.from_page_id
        JOIN pages t ON t.id = l.to_page_id
        LEFT JOIN pages o ON o.id = l.origin_page_id
-       WHERE f.slug = $1`,
-      [slug]
+       WHERE f.slug = $1${sourceSql}`,
+      params
     );
     return rows as unknown as Link[];
   }
 
-  async getBacklinks(slug: string): Promise<Link[]> {
+  async getBacklinks(slug: string, sourceId?: string): Promise<Link[]> {
+    const params: unknown[] = [slug];
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const sourceSql = src ? ` AND t.source_id = $2` : '';
+    if (src) params.push(this.activeSourceId(src));
     const { rows } = await this.db.query(
       `SELECT f.slug as from_slug, t.slug as to_slug,
               l.link_type, l.context, l.link_source,
@@ -1094,8 +1114,8 @@ export class PGLiteEngine implements BrainEngine {
        JOIN pages f ON f.id = l.from_page_id
        JOIN pages t ON t.id = l.to_page_id
        LEFT JOIN pages o ON o.id = l.origin_page_id
-       WHERE t.slug = $1`,
-      [slug]
+       WHERE t.slug = $1${sourceSql}`,
+      params
     );
     return rows as unknown as Link[];
   }
@@ -1295,17 +1315,23 @@ export class PGLiteEngine implements BrainEngine {
     return result;
   }
 
-  async findOrphanPages(): Promise<Array<{ slug: string; title: string; domain: string | null }>> {
+  async findOrphanPages(sourceId?: string): Promise<Array<{ slug: string; title: string; domain: string | null }>> {
+    const src = sourceId || process.env.GBRAIN_SOURCE;
+    const params: unknown[] = [];
+    const sourceCondition = src ? ' AND p.source_id = $1' : '';
+    if (src) params.push(this.activeSourceId(src));
     const { rows } = await this.db.query(
       `SELECT
          p.slug,
          COALESCE(p.title, p.slug) AS title,
          p.frontmatter->>'domain' AS domain
        FROM pages p
-       WHERE NOT EXISTS (
-         SELECT 1 FROM links l WHERE l.to_page_id = p.id
-       )
-       ORDER BY p.slug`
+       WHERE p.deleted_at IS NULL${sourceCondition}
+         AND NOT EXISTS (
+           SELECT 1 FROM links l WHERE l.to_page_id = p.id
+         )
+       ORDER BY p.slug`,
+      params,
     );
     return rows as Array<{ slug: string; title: string; domain: string | null }>;
   }
@@ -1819,19 +1845,28 @@ export class PGLiteEngine implements BrainEngine {
 
   // Stats + health
   async getStats(): Promise<BrainStats> {
+    const src = process.env.GBRAIN_SOURCE;
+    const params: unknown[] = [];
+    const sourceCondition = src ? ' AND p.source_id = $1' : '';
+    const typeWhere = src ? 'WHERE p.deleted_at IS NULL AND p.source_id = $1' : 'WHERE p.deleted_at IS NULL';
+    if (src) params.push(this.activeSourceId(src));
     const { rows: [stats] } = await this.db.query(`
+      WITH scoped_pages AS (
+        SELECT p.id FROM pages p WHERE p.deleted_at IS NULL${sourceCondition}
+      )
       SELECT
         -- v0.26.5: exclude soft-deleted from page_count (mirrors postgres-engine).
-        (SELECT count(*) FROM pages WHERE deleted_at IS NULL) as page_count,
-        (SELECT count(*) FROM content_chunks) as chunk_count,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NOT NULL) as embedded_count,
-        (SELECT count(*) FROM links) as link_count,
-        (SELECT count(DISTINCT tag) FROM tags) as tag_count,
-        (SELECT count(*) FROM timeline_entries) as timeline_entry_count
-    `);
+        (SELECT count(*) FROM scoped_pages) as page_count,
+        (SELECT count(*) FROM content_chunks cc JOIN scoped_pages sp ON sp.id = cc.page_id) as chunk_count,
+        (SELECT count(*) FROM content_chunks cc JOIN scoped_pages sp ON sp.id = cc.page_id WHERE cc.embedding IS NOT NULL) as embedded_count,
+        (SELECT count(*) FROM links l JOIN scoped_pages sp ON sp.id = l.from_page_id) as link_count,
+        (SELECT count(DISTINCT t.tag) FROM tags t JOIN scoped_pages sp ON sp.id = t.page_id) as tag_count,
+        (SELECT count(*) FROM timeline_entries te JOIN scoped_pages sp ON sp.id = te.page_id) as timeline_entry_count
+    `, params);
 
     const { rows: types } = await this.db.query(
-      `SELECT type, count(*)::int as count FROM pages GROUP BY type ORDER BY count DESC`
+      `SELECT p.type, count(*)::int as count FROM pages p ${typeWhere} GROUP BY p.type ORDER BY count DESC`,
+      params,
     );
     const pages_by_type: Record<string, number> = {};
     for (const t of types as { type: string; count: number }[]) {
@@ -1851,50 +1886,64 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async getHealth(): Promise<BrainHealth> {
+    const src = process.env.GBRAIN_SOURCE;
+    const params: unknown[] = [];
+    const sourceCondition = src ? ' AND source_id = $1' : '';
+    if (src) params.push(this.activeSourceId(src));
     // Combined metrics from master (brain_score components: dead_links, link_count,
     // pages_with_timeline) and v0.10.3 graph layer (link_coverage, timeline_coverage,
     // most_connected). Both coexist: master's brain_score is the composite
     // dashboard, v0.10.3 metrics give entity-page-level granularity.
     const { rows: [h] } = await this.db.query(`
-      WITH entity_pages AS (
-        SELECT id, slug FROM pages WHERE type IN ('person', 'company')
+      WITH scoped_pages AS (
+        SELECT id, slug, type, updated_at FROM pages WHERE deleted_at IS NULL${sourceCondition}
+      ),
+      scoped_chunks AS (
+        SELECT cc.* FROM content_chunks cc JOIN scoped_pages sp ON sp.id = cc.page_id
+      ),
+      entity_pages AS (
+        SELECT id, slug FROM scoped_pages WHERE type IN ('person', 'company')
       )
       SELECT
-        (SELECT count(*) FROM pages) as page_count,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NOT NULL)::float /
-          GREATEST((SELECT count(*) FROM content_chunks), 1)::float as embed_coverage,
-        (SELECT count(*) FROM pages p
+        (SELECT count(*) FROM scoped_pages) as page_count,
+        (SELECT count(*) FROM scoped_chunks WHERE embedding IS NOT NULL)::float /
+          GREATEST((SELECT count(*) FROM scoped_chunks), 1)::float as embed_coverage,
+        (SELECT count(*) FROM scoped_pages p
          WHERE p.updated_at < (SELECT MAX(te.created_at) FROM timeline_entries te WHERE te.page_id = p.id)
         ) as stale_pages,
         -- Bug 11 — orphan = islanded (no inbound AND no outbound).
         -- See BrainHealth.orphan_pages docstring; docs updated to match this.
-        (SELECT count(*) FROM pages p
+        (SELECT count(*) FROM scoped_pages p
          WHERE NOT EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = p.id)
            AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_page_id = p.id)
         ) as orphan_pages,
         (SELECT count(*) FROM links l
+         JOIN scoped_pages sp ON sp.id = l.from_page_id
          WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.id = l.to_page_id)
         ) as dead_links,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NULL) as missing_embeddings,
-        (SELECT count(*) FROM links) as link_count,
-        (SELECT count(DISTINCT page_id) FROM timeline_entries) as pages_with_timeline,
+        (SELECT count(*) FROM scoped_chunks WHERE embedding IS NULL) as missing_embeddings,
+        (SELECT count(*) FROM links l JOIN scoped_pages sp ON sp.id = l.from_page_id) as link_count,
+        (SELECT count(DISTINCT te.page_id) FROM timeline_entries te JOIN scoped_pages sp ON sp.id = te.page_id) as pages_with_timeline,
         (SELECT count(*) FROM entity_pages e
          WHERE EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = e.id))::float /
           GREATEST((SELECT count(*) FROM entity_pages), 1)::float as link_coverage,
         (SELECT count(*) FROM entity_pages e
          WHERE EXISTS (SELECT 1 FROM timeline_entries te WHERE te.page_id = e.id))::float /
           GREATEST((SELECT count(*) FROM entity_pages), 1)::float as timeline_coverage
-    `);
+    `, params);
 
     // Top 5 most connected entities by total link count (in + out).
     const { rows: connected } = await this.db.query(`
+      WITH scoped_pages AS (
+        SELECT id, slug, type FROM pages WHERE deleted_at IS NULL${sourceCondition}
+      )
       SELECT p.slug,
              (SELECT count(*) FROM links l WHERE l.from_page_id = p.id OR l.to_page_id = p.id)::int as link_count
-      FROM pages p
+      FROM scoped_pages p
       WHERE p.type IN ('person', 'company')
       ORDER BY link_count DESC
       LIMIT 5
-    `);
+    `, params);
 
     const r = h as Record<string, unknown>;
     const pageCount = Number(r.page_count);

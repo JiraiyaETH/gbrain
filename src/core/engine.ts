@@ -280,7 +280,7 @@ export interface BrainEngine {
    * mutation-immune iteration source (alternative to listPages OFFSET pagination,
    * which is unstable when ordering by updated_at and writes are happening).
    */
-  getAllSlugs(): Promise<Set<string>>;
+  getAllSlugs(sourceId?: string): Promise<Set<string>>;
 
   // Search
   searchKeyword(query: string, opts?: SearchOpts): Promise<SearchResult[]>;
@@ -291,20 +291,21 @@ export interface BrainEngine {
   upsertChunks(slug: string, chunks: ChunkInput[], sourceId?: string): Promise<void>;
   getChunks(slug: string, sourceId?: string): Promise<Chunk[]>;
   /**
-   * Count chunks across the entire brain where embedded_at IS NULL.
-   * Pre-flight short-circuit for `embed --stale` so a 100%-embedded brain
+   * Count chunks in the active/source-filtered brain where embedding IS NULL.
+   * Pre-flight short-circuit for `embed --stale` so a 100%-embedded source
    * does no further work after a single SELECT count(*) (~50 bytes wire).
    */
-  countStaleChunks(): Promise<number>;
+  countStaleChunks(sourceId?: string): Promise<number>;
   /**
-   * Return every chunk where embedded_at IS NULL, with the metadata needed
-   * to call embedBatch + upsertChunks. The `embedding` column is omitted
-   * by design — stale rows have NULL embeddings, so shipping them wastes
-   * wire bytes for no gain. Caller groups by slug, embeds, and re-upserts.
+   * Return every active/source-filtered chunk where embedding IS NULL, with
+   * the metadata needed to call embedBatch + upsertChunks. The `embedding`
+   * column is omitted by design — stale rows have NULL embeddings, so shipping
+   * them wastes wire bytes for no gain. Caller groups by source+slug, embeds,
+   * and re-upserts.
    *
    * Bounded by an internal LIMIT of 100000 to mirror listPages.
    */
-  listStaleChunks(): Promise<StaleChunkRow[]>;
+  listStaleChunks(sourceId?: string): Promise<StaleChunkRow[]>;
   deleteChunks(slug: string, sourceId?: string): Promise<void>;
 
   // Links
@@ -340,9 +341,9 @@ export interface BrainEngine {
    * 'manual') — used by runAutoLink reconciliation to avoid deleting edges from
    * other provenances when pruning frontmatter-derived edges.
    */
-  removeLink(from: string, to: string, linkType?: string, linkSource?: string): Promise<void>;
-  getLinks(slug: string): Promise<Link[]>;
-  getBacklinks(slug: string): Promise<Link[]>;
+  removeLink(from: string, to: string, linkType?: string, linkSource?: string, fromSourceId?: string, toSourceId?: string): Promise<void>;
+  getLinks(slug: string, sourceId?: string): Promise<Link[]>;
+  getBacklinks(slug: string, sourceId?: string): Promise<Link[]>;
   /**
    * Fuzzy-match a display name to a page slug using pg_trgm similarity.
    * Zero embedding cost, zero LLM cost — designed for the v0.13 resolver used
@@ -381,12 +382,12 @@ export interface BrainEngine {
    */
   getBacklinkCounts(slugs: string[]): Promise<Map<string, number>>;
   /**
-   * Return every page with no inbound links (from any source).
+   * Return active/source-filtered pages with no inbound links.
    * Domain comes from the frontmatter `domain` field (null if unset).
    * The caller filters pseudo-pages + derives display domain.
    * Used by `gbrain orphans` and `runCycle`'s orphan sweep phase.
    */
-  findOrphanPages(): Promise<Array<{ slug: string; title: string; domain: string | null }>>;
+  findOrphanPages(sourceId?: string): Promise<Array<{ slug: string; title: string; domain: string | null }>>;
 
   // Tags
   addTag(slug: string, tag: string, sourceId?: string): Promise<void>;

@@ -1,9 +1,14 @@
 import { describe, test, expect } from 'bun:test';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   extractEntityRefs,
   extractPageTitle,
   hasBacklink,
   buildBacklinkEntry,
+  findBacklinkGaps,
+  fixBacklinkGaps,
 } from '../src/commands/backlinks.ts';
 
 describe('extractEntityRefs', () => {
@@ -76,5 +81,51 @@ describe('buildBacklinkEntry', () => {
   test('builds properly formatted entry', () => {
     const entry = buildBacklinkEntry('Q1 Review', '../../meetings/q1-review.md', '2026-04-11');
     expect(entry).toBe('- **2026-04-11** | Referenced in [Q1 Review](../../meetings/q1-review.md)');
+  });
+});
+
+describe('backlink fixer idempotency', () => {
+  test('adds at most one backlink per source-target pair when a source mentions the same entity repeatedly', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gbrain-backlinks-'));
+    try {
+      mkdirSync(join(root, 'meetings'), { recursive: true });
+      mkdirSync(join(root, 'people'), { recursive: true });
+      writeFileSync(join(root, 'meetings', 'q1-review.md'), [
+        '# Q1 Review',
+        '',
+        '[Alice](../people/alice.md) joined.',
+        '[Alice](../people/alice.md) followed up.',
+        '[Alice](../people/alice.md) closed the loop.',
+      ].join('\n'));
+      writeFileSync(join(root, 'people', 'alice.md'), '# Alice\n\n## Timeline\n');
+
+      const gaps = findBacklinkGaps(root);
+      expect(gaps).toHaveLength(1);
+
+      const fixed = fixBacklinkGaps(root, gaps);
+      expect(fixed).toBe(1);
+      const updated = readFileSync(join(root, 'people', 'alice.md'), 'utf-8');
+      expect((updated.match(/q1-review\.md/g) ?? []).length).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('does not append duplicate backlinks when duplicate gaps are supplied', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gbrain-backlinks-'));
+    try {
+      mkdirSync(join(root, 'meetings'), { recursive: true });
+      mkdirSync(join(root, 'people'), { recursive: true });
+      writeFileSync(join(root, 'meetings', 'q1-review.md'), '# Q1 Review\n\n[Alice](../people/alice.md) joined.');
+      writeFileSync(join(root, 'people', 'alice.md'), '# Alice\n\n## Timeline\n');
+
+      const gap = findBacklinkGaps(root)[0];
+      const fixed = fixBacklinkGaps(root, [gap, gap]);
+      expect(fixed).toBe(1);
+      const updated = readFileSync(join(root, 'people', 'alice.md'), 'utf-8');
+      expect((updated.match(/q1-review\.md/g) ?? []).length).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

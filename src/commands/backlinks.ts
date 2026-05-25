@@ -96,13 +96,21 @@ export function findBacklinkGaps(brainDir: string): BacklinkGap[] {
     pagesBySlug.set(slug, { path: page.path, content: page.content });
   }
 
-  // For each page, check entity references
+  // For each page, check entity references. Dedupe source→target pairs before
+  // reporting gaps: a meeting page can mention the same person/company several
+  // times, but the markdown backlink contract is one concise entity entry per
+  // source page. Without this, `check-backlinks fix` can append identical
+  // `Referenced in ...` lines in a single run.
+  const seenPairs = new Set<string>();
   for (const page of allPages) {
     const refs = extractEntityRefs(page.content, page.relPath);
     const sourceFilename = basename(page.relPath);
 
     for (const ref of refs) {
       const targetSlug = `${ref.dir}/${ref.slug}`;
+      const pairKey = `${page.relPath}\u0000${targetSlug}`;
+      if (seenPairs.has(pairKey)) continue;
+      seenPairs.add(pairKey);
       const target = pagesBySlug.get(targetSlug);
       if (!target) continue; // target page doesn't exist
 
@@ -149,6 +157,13 @@ export function fixBacklinkGaps(brainDir: string, gaps: BacklinkGap[], dryRun: b
       const relPath = relPrefix + gap.sourcePage;
 
       const entry = buildBacklinkEntry(gap.sourceTitle, relPath, today);
+
+      // Re-check against the in-memory content as we append. This makes the
+      // fixer idempotent even if callers pass duplicate gaps from an older scan
+      // or a custom wrapper.
+      if (hasBacklink(content, basename(gap.sourcePage))) {
+        continue;
+      }
 
       // Insert into Timeline section
       if (content.includes('## Timeline')) {
