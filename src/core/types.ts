@@ -178,7 +178,7 @@ export interface SearchOpts {
   exclude_slugs?: string[];
   /**
    * Slug-prefix excludes — additive over DEFAULT_HARD_EXCLUDES (test/, archive/,
-   * attachments/, .raw/) and the GBRAIN_SEARCH_EXCLUDE env var. Stacks with
+   * attachments/, .raw/, sources/, quarantine/) and the GBRAIN_SEARCH_EXCLUDE env var. Stacks with
    * `exclude_slugs` (exact match) — a row is filtered if it matches either set.
    */
   exclude_slug_prefixes?: string[];
