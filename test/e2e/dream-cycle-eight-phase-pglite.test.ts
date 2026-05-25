@@ -1,13 +1,14 @@
 /**
- * E2E full 8-phase cycle on PGLite, no API key required.
+ * E2E full maintenance cycle on PGLite, no API key required.
  *
- * Verifies that the v0.23 phase order — lint → backlinks → sync →
- * synthesize → extract → patterns → embed → orphans — is honored
+ * Verifies that the current phase order — lint → backlinks → sync →
+ * synthesize → extract → patterns → embed → orphans → purge — is honored
  * end-to-end through runCycle when no API key is present (synthesize
- * + patterns skip cleanly, the other six phases run unchanged).
+ * + patterns skip cleanly, the other phases run unchanged). `purge` runs last
+ * so the cycle can inspect recoverable soft-deleted state before deletion.
  *
  * Two regression-relevant invariants:
- *   1. CycleReport.phases preserves the 8-phase order — no future
+ *   1. CycleReport.phases preserves the documented order — no future
  *      reorder regresses without breaking this test.
  *   2. CycleReport.totals carries the new v0.23 fields:
  *      transcripts_processed, synth_pages_written, patterns_written.
@@ -24,6 +25,7 @@ import { join } from 'path';
 import { execSync } from 'child_process';
 import { tmpdir } from 'os';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
+import type { CyclePhase } from '../../src/core/cycle.ts';
 
 mock.module('../../src/core/embedding.ts', () => ({
   embed: async () => new Float32Array(1536),
@@ -80,21 +82,24 @@ async function withoutAnthropicKey<T>(body: () => Promise<T>): Promise<T> {
   }
 }
 
-describe('E2E v0.23 8-phase cycle', () => {
-  test('ALL_PHASES is the 8-phase order in the documented sequence', () => {
-    expect(ALL_PHASES).toEqual([
-      'lint',
-      'backlinks',
-      'sync',
-      'synthesize',
-      'extract',
-      'patterns',
-      'embed',
-      'orphans',
-    ]);
+describe('E2E maintenance cycle phase order', () => {
+  const expectedPhaseOrder: CyclePhase[] = [
+    'lint',
+    'backlinks',
+    'sync',
+    'synthesize',
+    'extract',
+    'patterns',
+    'embed',
+    'orphans',
+    'purge',
+  ];
+
+  test('ALL_PHASES is the documented order with purge last', () => {
+    expect(ALL_PHASES).toEqual(expectedPhaseOrder);
   });
 
-  test('full cycle on dry-run returns CycleReport.phases in v0.23 order with new totals fields', async () => {
+  test('full cycle on dry-run returns CycleReport.phases in documented order with new totals fields', async () => {
     const rig = await setupRig();
     try {
       await withoutAnthropicKey(async () => {
@@ -102,18 +107,9 @@ describe('E2E v0.23 8-phase cycle', () => {
           brainDir: rig.brainDir,
           dryRun: true,
         });
-        // Phase ordering preserved
+        // Phase ordering preserved; purge stays last so prior phases inspect recoverable soft-deleted state.
         const phaseNames = report.phases.map(p => p.phase);
-        expect(phaseNames).toEqual([
-          'lint',
-          'backlinks',
-          'sync',
-          'synthesize',
-          'extract',
-          'patterns',
-          'embed',
-          'orphans',
-        ]);
+        expect(phaseNames).toEqual(expectedPhaseOrder);
         // New totals fields exist (v0.23 additive growth)
         expect(report.totals).toMatchObject({
           transcripts_processed: 0,
