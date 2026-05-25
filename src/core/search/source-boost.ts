@@ -1,9 +1,15 @@
+import {
+  DEFAULT_RETRIEVAL_HARD_EXCLUDES,
+  DEFAULT_RETRIEVAL_TIER_BOOSTS,
+} from './retrieval-tier.ts';
+
 /**
- * Source-Type Boost Map
+ * Retrieval-tier boost map
  *
  * Multiplies into ts_rank / vector cosine score at SQL build time so that
- * curated content (originals/, concepts/, writing/) outranks bulk content
- * (openclaw/chat/, daily/, media/x/) for non-temporal queries.
+ * compiled truth (owner pages, originals/, concepts/, writing/) outranks
+ * evidence/context material (meetings/, inbox/, openclaw/chat/) for normal
+ * queries. Evidence-only and quarantine paths are hard-excluded below.
  *
  * Keyed by slug prefix. Longest-prefix-match wins (sorted at lookup time
  * inside sql-ranking.ts). Defaults grounded in the composition of the
@@ -14,41 +20,14 @@
  */
 
 export const DEFAULT_SOURCE_BOOSTS: Record<string, number> = {
-  // Curated, opinionated, high-signal — Garry's own writing
-  'originals/': 1.5,
-  // Reusable knowledge frameworks
-  'concepts/': 1.3,
-  // Long-form essays / articles
-  'writing/': 1.4,
-  // Entity pages
-  'people/': 1.2,
-  'companies/': 1.2,
-  'deals/': 1.2,
-  // Notes from real meetings
-  'meetings/': 1.1,
-  // Ingested third-party content
-  'media/articles/': 1.1,
-  'media/repos/': 1.1,
-  // Neutral baselines (explicit for clarity)
-  'yc/': 1.0,
-  'civic/': 1.0,
-  // Bulk / noisy
-  'daily/': 0.8,
-  'media/x/': 0.7,
-  // Chat transcripts — massive, noisy, swamp keyword queries
-  'openclaw/chat/': 0.5,
+  ...DEFAULT_RETRIEVAL_TIER_BOOSTS,
 };
 
 /**
  * Hard-excludes — slug prefixes that should never enter search results
  * (unless explicitly opted-in via include_slug_prefixes).
  */
-export const DEFAULT_HARD_EXCLUDES: string[] = [
-  'test/',
-  'archive/',
-  'attachments/',
-  '.raw/',
-];
+export const DEFAULT_HARD_EXCLUDES: string[] = [...DEFAULT_RETRIEVAL_HARD_EXCLUDES];
 
 /**
  * Parse GBRAIN_SOURCE_BOOST env var.
