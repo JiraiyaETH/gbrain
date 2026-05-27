@@ -1,20 +1,43 @@
 # TODOS
 
-## v0.41.21.0 brainstorm judge fix-wave follow-ups (v0.42+)
+## v0.41.22.1 brainstorm judge fix-wave follow-ups (v0.42+)
 
-Filed from the v0.41.21.0 plan-eng-review per cross-model-tension D13c.
+Filed from the v0.41.22.1 plan-eng-review per cross-model-tension D13c.
 Step 0 of that plan explicitly deferred a "full pricing-system DRY"
 cleanup (Option C) to keep the brainstorm fix blast radius small.
 These three items are what was deferred. None are user-reported bugs;
 all are latent-debt cleanup.
 
-- [ ] **Config-write normalization.** Whenever a user writes `gbrain config set models.tier.deep anthropic/claude-opus-4-7` we silently store the slash form. v0.41.21.0 centralized the read-side via `parseModelId`, but config writes still preserve whatever shape the user typed. Canonical form should be colon (`anthropic:claude-opus-4-7`). Fix: rewrite at config-write time in `src/core/config.ts`. Breaks existing config files that explicitly hold the slash form — defer to a v0.42+ config-migration wave that also handles the rewrite + once-per-process deprecation warn. Files: `src/core/config.ts`, `src/core/model-config.ts:saveConfig` path. Priority: P3 (latent, not user-visible).
+- [ ] **Config-write normalization.** Whenever a user writes `gbrain config set models.tier.deep anthropic/claude-opus-4-7` we silently store the slash form. v0.41.22.1 centralized the read-side via `splitProviderModelId`, but config writes still preserve whatever shape the user typed. Canonical form should be colon (`anthropic:claude-opus-4-7`). Fix: rewrite at config-write time in `src/core/config.ts`. Breaks existing config files that explicitly hold the slash form — defer to a v0.42+ config-migration wave that also handles the rewrite + once-per-process deprecation warn. Files: `src/core/config.ts`, `src/core/model-config.ts:saveConfig` path. Priority: P3 (latent, not user-visible).
 
 - [ ] **Non-Anthropic pricing tables.** `src/core/anthropic-pricing.ts` is the only pricing surface gbrain ships. Brainstorm + LSD users routing through OpenAI / Gemini / OpenRouter get `BUDGET_TRACKER_NO_PRICING` warn-once + bypass-gate (without `--max-cost`) OR `no_pricing` hard-fail (with `--max-cost`). The right shape: rename to `provider-pricing.ts`, add OpenAI / Gemini / OpenRouter tables, route `lookupPricing` through provider-routed table selection. OpenRouter is a special case (period-vs-dash key mismatch: their `claude-sonnet-4.6` won't match our `claude-sonnet-4-6` either way). Files: `src/core/anthropic-pricing.ts` (rename + extend), `src/core/budget/budget-tracker.ts`, `src/core/eval-contradictions/cost-tracker.ts`. Priority: P2 (real user pain when running brainstorm against non-Anthropic).
 
-- [ ] **Eval-contradictions duplicate ANTHROPIC_PRICING consolidation.** `src/core/eval-contradictions/cost-tracker.ts:28-38` ships its OWN copy of the Anthropic pricing table with different keys (both bare and `anthropic:`-prefixed forms) and a silent-Haiku fallback on unknown. v0.41.21.0 routed both tables' lookups through `parseModelId` but left the duplication. Right fix: delete the local table, import from `src/core/anthropic-pricing.ts`. Either (a) preserve the silent-Haiku-fallback semantic with an explicit `?? canonicalPricing['claude-haiku-4-5']` at the call site, or (b) tighten to warn-once on unknown (which changes the eval-contradictions soft-ceiling `--budget-usd` contract — coordinate with that subsystem). Files: `src/core/eval-contradictions/cost-tracker.ts`, `src/core/anthropic-pricing.ts`, `test/eval-contradictions/cost-tracker-slash.test.ts` (the legacy-Haiku-fallback pin would need updating). Priority: P3 (DRY cleanup, no user-visible impact).
+- [ ] **Eval-contradictions duplicate ANTHROPIC_PRICING consolidation.** `src/core/eval-contradictions/cost-tracker.ts:28-38` ships its OWN copy of the Anthropic pricing table with different keys (both bare and `anthropic:`-prefixed forms) and a silent-Haiku fallback on unknown. v0.41.22.1 routed both tables' lookups through `splitProviderModelId` but left the duplication. Right fix: delete the local table, import from `src/core/anthropic-pricing.ts`. Either (a) preserve the silent-Haiku-fallback semantic with an explicit `?? canonicalPricing['claude-haiku-4-5']` at the call site, or (b) tighten to warn-once on unknown (which changes the eval-contradictions soft-ceiling `--budget-usd` contract — coordinate with that subsystem). Files: `src/core/eval-contradictions/cost-tracker.ts`, `src/core/anthropic-pricing.ts`, `test/eval-contradictions/cost-tracker-slash.test.ts` (the legacy-Haiku-fallback pin would need updating). Priority: P3 (DRY cleanup, no user-visible impact).
 
-## v0.41.19.0 status + doctor-categories wave follow-ups (v0.42+)
+## v0.41.21.0 ops-fix-wave follow-ups (v0.41.22+)
+
+- **TODO-OPS-1 (P2)**: `gbrain sync print-cron` subcommand. Print the canonical
+  cron line based on the active source set: `gbrain sync --all --parallel N
+  --workers N --skip-failed` where N defaults to `min(sourceCount, 4)`. Reads
+  `sources` table for active (non-archived, `local_path IS NOT NULL`) entries.
+  Ergonomic upgrade over the v0.41.19.0 `sync_consolidation` doctor message —
+  operator pipes directly into `crontab -e` instead of copy-paste-massage.
+  ~80 LOC. Mirrors `gbrain sync --break-lock` argv shape.
+
+- **TODO-OPS-2 (P2)**: Lock-loss detection — extend `DbLockHandle.refresh()`
+  to throw `LockLostError` on 0 rows affected. Codex caught during the
+  v0.41.19.0 plan review: `refresh()` runs `UPDATE ... WHERE holder_pid = pid`
+  with no rows-affected check (`db-lock.ts:108-114`, `:151-156`). If the
+  TTL expired and another worker took over, the original keeps writing
+  silently. v0.41.19.0 ships TTL=5min + active in-phase refresh via
+  `buildYieldDuringPhase` which makes the race window much narrower, but
+  an `await chat()` call that exceeds the 5min wallclock window can still
+  hit it. Fix: `RETURNING id` on the UPDATE + check `rows.length === 0` →
+  throw tagged `LockLostError`. Phases catch + abort cleanly (write partial
+  progress, return `status: 'fail'` with reason `'lock_lost'`). Behavioral
+  contract change with phase-abort fallout; needs its own design pass.
+
+## v0.41.20.0 status + doctor-categories wave follow-ups (v0.42+)
 
 - **TODO-V19-A (P3)**: Persistent `cycle_runs` table. v0.41.19.0 infers
   "last full cycle" by querying `minion_jobs WHERE name = 'autopilot-cycle'`

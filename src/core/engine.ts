@@ -1597,6 +1597,32 @@ export interface BrainEngine {
   rewriteLinks(oldSlug: string, newSlug: string): Promise<void>;
 
   /**
+   * v0.42 type-unification (T2, plan D1+F10). Returns the canonical slug if
+   * `slug` is registered in `slug_aliases` for any of the provided source(s);
+   * otherwise returns `slug` unchanged. Defense-in-depth: also returns the
+   * input when the table doesn't exist yet (pre-v104 brains).
+   *
+   * Accepts either a single sourceId (scalar) OR a sourceIds array
+   * (federated reads). Multi-source ambiguity: when the same alias_slug
+   * exists in two registered sources, returns the first match in array
+   * order and emits a once-per-process stderr `multi_match` warning.
+   *
+   * Callers (the cluster the alias-table primitive is meant for):
+   *   - src/core/entities/resolve.ts: wikilink resolver short-circuit
+   *     (alias-table is authoritative; runs BEFORE fuzzy/prefix cascade)
+   *   - MCP `read_page` op (canonical lookup)
+   *   - Search rank stage `applyAliasResolvedBoost` (knows whether a
+   *     top-K result was reached via an alias)
+   *
+   * Source-scoped throughout per F12 (codex outside voice) — no cross-source
+   * false-positive resolution. v0.42 ships this method on both engines.
+   */
+  resolveSlugWithAlias(
+    slug: string,
+    sourceOrSources: string | readonly string[],
+  ): Promise<string>;
+
+  /**
    * v0.35.5 — narrow UPDATE of `pages.compiled_truth`, `pages.timeline`, and
    * `pages.content_hash` for a single slug+source. NO chunking, NO embedding,
    * NO link reconcile, NO `updated_at` advance beyond the trivial bump.

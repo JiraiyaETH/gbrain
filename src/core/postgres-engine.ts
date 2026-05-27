@@ -53,7 +53,7 @@ import { computeAnomaliesFromBuckets } from './cycle/anomaly.ts';
 import * as db from './db.ts';
 import { ConnectionManager } from './connection-manager.ts';
 import { logConnectionEvent } from './connection-audit.ts';
-import { validateSlug, contentHash, rowToPage, rowToChunk, rowToSearchResult, parseEmbedding, tryParseEmbedding, takeRowToTake } from './utils.ts';
+import { validateSlug, contentHash, rowToPage, rowToChunk, rowToSearchResult, parseEmbedding, tryParseEmbedding, takeRowToTake, isUndefinedTableError, warnOncePerProcess } from './utils.ts';
 import { resolveBoostMap, resolveHardExcludes } from './search/source-boost.ts';
 import { buildSourceFactorCase, buildHardExcludeClause, buildVisibilityClause, buildRecencyComponentSql } from './search/sql-ranking.ts';
 import { DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
@@ -4347,6 +4347,37 @@ export class PostgresEngine implements BrainEngine {
     // correct after updateSlug (page_id doesn't change, only slug does).
     // Textual [[wiki-links]] in compiled_truth are NOT rewritten here.
     // The maintain skill's dead link detector surfaces stale references.
+  }
+
+  async resolveSlugWithAlias(
+    slug: string,
+    sourceOrSources: string | readonly string[],
+  ): Promise<string> {
+    const sql = this.sql;
+    const sources = Array.isArray(sourceOrSources) ? sourceOrSources : [sourceOrSources];
+    if (sources.length === 0) return slug;
+    try {
+      const rows = await sql`
+        SELECT canonical_slug, source_id
+        FROM slug_aliases
+        WHERE alias_slug = ${slug}
+          AND source_id = ANY(${sources}::text[])
+        ORDER BY array_position(${sources}::text[], source_id), id
+      `;
+      if (rows.length === 0) return slug;
+      if (rows.length > 1) {
+        warnOncePerProcess(
+          `resolveSlugWithAlias:multi_match:${slug}`,
+          `[resolveSlugWithAlias] multi_match: alias '${slug}' exists in ${rows.length} sources; returning first by sourceOrSources order.`,
+        );
+      }
+      return (rows[0].canonical_slug as string) ?? slug;
+    } catch (e) {
+      // Pre-v105 brain: slug_aliases table doesn't exist yet. Defense-in-depth
+      // per the engine interface contract.
+      if (isUndefinedTableError(e)) return slug;
+      throw e;
+    }
   }
 
   // Config

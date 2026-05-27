@@ -2,14 +2,14 @@
 
 All notable changes to GBrain will be documented in this file.
 
-## [0.41.21.0] - 2026-05-27
+## [0.41.22.1] - 2026-05-27
 
 **Your `gbrain brainstorm` and `gbrain lsd` calls now actually score the ideas they generate.**
 
 Since the calibration cold-start landed, every brainstorm or LSD run was
 quietly returning `judge_failed: true` and saving the ideas with no
 scores. You'd ask for 72 ideas, get 72 unscored entries, and have no
-way to tell which ones the judge would have called good. v0.41.21.0
+way to tell which ones the judge would have called good. v0.41.22.1
 closes the two bugs that caused it. On the same 72-idea fixture that
 scored 0/72 before, you'll now see ~39/72 passing — real judgment, not
 silence.
@@ -105,7 +105,7 @@ and provided the first-pass diff for the two most visible sites.
 
 ### For contributors
 
-Three follow-up TODOs filed in `TODOS.md` from the v0.41.21.0 plan review:
+Three follow-up TODOs filed in `TODOS.md` from the v0.41.22.1 plan review:
 
 - Config-write normalization (canonicalize provider IDs to `:` form on config write)
 - Non-Anthropic pricing tables (OpenAI / Gemini / OpenRouter)
@@ -113,7 +113,7 @@ Three follow-up TODOs filed in `TODOS.md` from the v0.41.21.0 plan review:
 
 The first two are v0.42+ scope. The third is deferred from this wave per the explicit Step 0 scope decision (cleanup-the-pricing-system would double the blast radius of a brainstorm fix).
 
-## To take advantage of v0.41.21.0
+## To take advantage of v0.41.22.1
 
 `gbrain upgrade` is all you need. No schema migration, no config change.
 
@@ -130,6 +130,347 @@ gbrain brainstorm "topic" --judge-model anthropic/claude-sonnet-4-6 --max-cost 1
 ```
 
 If `gbrain brainstorm` still hits `judge_failed` after upgrading, file an issue at https://github.com/garrytan/gbrain/issues with the output of `gbrain --version` and the brainstorm command you ran. The fix is structural; failure post-upgrade indicates the fix didn't land properly.
+
+## [0.41.22.0] - 2026-05-27
+
+**Your brain runs on a real taxonomy now. Not 94 types of cruft. Fifteen
+canonical types you can name, plus a catch-all for the long tail.**
+
+A real production brain (186K pages) had accreted **94 distinct
+`pages.type` values** in 9 clusters of redundancy: tweet / tweet-thread
+/ tweet-bundle / tweet-single all coexisting, 5.5K concept-redirect
+pages bloating orphan counts, atom-partner-link pages that should be
+real link rows, company / yc-company / product / organization all
+fighting for the same idea. The type system is the foundation for
+schema packs, search filtering, extract behavior, enrichment routing,
+and expert routing. When types are noisy, every downstream feature
+degrades.
+
+This release ships the cathedral that collapses 94 → 14 canonical types
+(plus `note` as the catch-all = 15 total) on any brain that opts in.
+Run `gbrain onboard --check --explain` and see exactly which pages
+would move where. Run `gbrain jobs submit unify-types --allow-protected
+--params '{"target_pack":"gbrain-base-v2"}'` and the migration runs
+end-to-end: retypes pages, creates alias rows, converts edge-shaped
+pages into real link rows, then flips the active pack. Reversible via
+72h soft-delete TTL on alias/link pages + `frontmatter.legacy_type`
+preservation on retyped pages.
+
+What you can do that you couldn't before:
+
+- `gbrain init` now defaults to `gbrain-base-v2` (15 canonical types).
+  Override with `--schema-pack gbrain-base` for the legacy 24-type pack.
+  Banner prints the active pack on init so the choice is visible.
+- `gbrain onboard --check` surfaces THREE new checks alongside the
+  v0.41.18 four: `pack_upgrade_available` (your brain is on a pack with
+  a declared successor), `type_proliferation` (pack-aware ratio:
+  declared+5 warn, declared×2 fail — no false positives on custom
+  packs), `dangling_aliases` (source-scoped JOIN; no cross-source false
+  positives per codex F12).
+- `gbrain onboard --check --explain` runs the unify-types handler in
+  dry-run mode and prints the per-cluster narrative: how many pages
+  would retype, how many edge pages would convert to links, how many
+  redirects would become aliases. Trust UX delta vs a blob diff.
+- `gbrain jobs submit unify-types --allow-protected --params
+  '{"target_pack":"gbrain-base-v2"}'` runs the migration. PROTECTED
+  Minion handler — autopilot will NOT auto-fire it. Manual_only by
+  design (D17: taxonomy is user judgment).
+- Wikilinks like `[[old-redirect-slug]]` keep working after the
+  migration via `engine.resolveSlugWithAlias` short-circuit. The
+  slug_aliases table IS the resolver (D15: codex outside voice — don't
+  rewrite body text; the alias table is the right primitive).
+- Search ranking gains an `alias_resolved_boost` (1.05x) stage that
+  fires when a result's slug is a canonical of one or more aliases.
+  Lets canonicals outrank fuzzy matches that hit aliases by accident.
+
+The mapping_rules system makes the migration declarative:
+- `retype: from_type → to_type with subtype` retypes pages and stamps
+  `frontmatter.subtype` (plus always `frontmatter.legacy_type` for
+  rollback per D8). Strict allowlist on subtype_field
+  (`{subtype, legacy_type, origin, format, kind, period, domain}`)
+  prevents third-party packs from injecting `title` or `slug` via
+  mapping_rules (codex D9 security hardening).
+- `page_to_link: from_type → links table row` converts edge-shaped
+  pages (atom-partner-link, symlink) into real link rows.
+- `page_to_alias: from_type → slug_aliases row` converts redirect
+  pages into authoritative pointers.
+- Catch-all sentinel (`from_type: '*unknown*'`) retypes any page whose
+  type isn't covered by an explicit rule AND isn't a page_to_link /
+  page_to_alias source. Preserves the original type as
+  `frontmatter.legacy_type`. Guarantees ≤16 distinct types post-unify
+  on ANY brain (D12).
+
+Architecture story for engineers: this plugs into the v0.41.18.0
+`gbrain onboard` cathedral as migration #6. NO new orchestrator — the
+3 new doctor checks emit `RemediationStep[]` consumed by
+`runAllOnboardChecks`, and the `unify-types` PROTECTED Minion handler
+runs the migration with the same op_checkpoint + db-lock primitives
+the other handlers use. The original plan had a parallel `gbrain
+schema unify` orchestrator; codex outside voice caught it as
+rebuilding the same cathedral under a new name. Replaced with a
+~180-LOC handler + 3 onboard checks + 2 lines added to
+`render.ts:MANUAL_ONLY_PROTECTED_JOBS`.
+
+Schema additions:
+- v105 — `slug_aliases` table: `(source_id, alias_slug,
+  canonical_slug, notes, created_at)` with UNIQUE on `(source_id,
+  alias_slug)` + CHECK no-self-reference + partial canonical index for
+  the dangling-aliases doctor check. Originally claimed v104; bumped
+  to v105 after master merge from v0.41.21.0 took v104 for
+  `pages_atom_source_hash_idx`.
+
+Engine API additions:
+- `BrainEngine.resolveSlugWithAlias(slug, sourceOrSources)` — returns
+  the canonical slug if `slug` is in slug_aliases for any of the
+  provided source(s); else returns `slug` unchanged. Accepts scalar
+  sourceId OR sourceIds[] array (federated reads per F10). Multi-source
+  ambiguity emits a once-per-process `multi_match` warning + returns
+  first by array order. Defense-in-depth: pre-v105 brains without the
+  table return input unchanged via `isUndefinedTableError` predicate.
+
+Schema-pack manifest extensions:
+- `subtypes:` array per page_type (D5) drives `inferTypeAndSubtypeFromPack`.
+- `mapping_rules:` discriminated union over retype / page_to_link /
+  page_to_alias (D11+D12) — declarative migrations.
+- `migration_from:` field declares "I am the successor to (pack,
+  semver-range)" so `findPackSuccessors` can light up
+  `pack_upgrade_available` automatically.
+- `inferTypeAndSubtypeFromPack(filePath, pack, frontmatter)` overload
+  returns `{type, subtype?}` — ReDoS-guarded regex compile on
+  `path_pattern`; back-compat preserved via the legacy
+  `inferTypeFromPack` signature.
+
+KNOBS_HASH_VERSION bumped 5→6. One-time cache miss spike on upgrade
+(fills within `cache.ttl_seconds`, default 3600s) so cached pre-v0.41.22
+results don't leak past the new boost stage. Mid-deploy hit-rate dip
+is expected and self-healing.
+
+`ELIGIBLE_TYPES` for facts extraction (`src/core/facts/eligibility.ts`)
+extended with gbrain-base-v2 canonicals (`media`, `tweet`, `atom`,
+`concept`, `analysis`) so post-unify pages keep getting extracted.
+Codex F-ELIGIBLE caught the original deferred-to-v0.43 plan as a
+blocker: changing the default taxonomy while the backstop list
+hardcoded only gbrain-base's types would silently break facts
+extraction on the new canonical types. Undeferred.
+
+This wave went through CEO review + eng review + codex outside voice
+in plan mode before any code landed. 16 decisions locked (D1-D17), 12
+baseline fixes absorbed from codex (F7-F21), and 1 mid-implementation
+bug caught by the test suite (catch-all retype was claiming
+concept-redirect pages before the alias phase could process them —
+fixed before merge by extending the catch-all exclusion to also skip
+page_to_link / page_to_alias source types).
+
+Tests: 12 new test files, 82 unit/integration cases, 1 comprehensive
+E2E that seeds all 9 production clusters and asserts the full
+migration runs end-to-end (94 → ≤16 distinct types, alias rows
+created, link rows inserted, active pack flipped, idempotent re-run).
+
+### To take advantage of v0.41.22.0
+
+If you're a NEW user (no `~/.gbrain/` yet):
+1. `gbrain init` defaults to `gbrain-base-v2`. Done.
+
+If you're an EXISTING user on gbrain-base:
+1. `gbrain upgrade` — pulls v0.41.22 binaries and applies migration v105
+   (`slug_aliases` table).
+2. `gbrain onboard --check --explain` — see the per-cluster narrative
+   for the gbrain-base → gbrain-base-v2 migration. Shows you what
+   would change before you commit.
+3. `gbrain jobs submit unify-types --allow-protected --params
+   '{"target_pack":"gbrain-base-v2"}'` — run the migration. On a
+   186K-page brain expect ~10 min total runtime.
+4. `gbrain jobs follow <job_id>` — watch progress per phase.
+5. After completion: `gbrain onboard --check` should report
+   `pack_upgrade_available` and `type_proliferation` as `ok`.
+
+If you want to stay on gbrain-base for now: do nothing.
+`pack_upgrade_available` is `manual_only` — autopilot will never
+auto-fire it. Suppress the upgrade-banner with
+`GBRAIN_NO_ONBOARD_NUDGE=1` if you don't want to see it.
+
+If something goes wrong:
+- Per-page retypes preserve `frontmatter.legacy_type = <original>` so
+  rollback is one SQL UPDATE per page.
+- Page-to-alias and page-to-link soft-delete the source page with a
+  72h TTL — restore via `gbrain pages restore <slug>` within that window.
+- Active-pack flip is reversible via `gbrain schema use gbrain-base`.
+- File an issue: https://github.com/garrytan/gbrain/issues with
+  `gbrain doctor --json` output + contents of
+  `~/.gbrain/audit/schema-unify-YYYY-Www.jsonl` if it exists.
+## [0.41.21.0] - 2026-05-27
+
+**Five daily-driver ops pains, fixed in one wave. Your big brains stop
+silently wedging, you can see what the cycle is doing instead of
+guessing, and the 10-hour mention scan now resumes instead of restarting
+from zero.**
+
+If you run a 100K+ page brain you probably hit at least three of these
+this week. The cycle hung for ten minutes printing nothing, so you
+checked the database manually to see if it was alive. A worker crashed
+mid-phase and the lock held for 30 minutes before another worker could
+take over, so you cleared it by hand. Your mention scan died at 87% and
+you had to restart it from page 0. Your cron ran two separate sync
+entries because you didn't know `sync --all --parallel` existed. And the
+extract_atoms phase burned 5 to 10 minutes per cycle on a sequence of
+7,000 SQL roundtrips before it even started extracting anything. All five
+get fixed in this release.
+
+## To take advantage of v0.41.21.0
+
+`gbrain upgrade` should pick this up automatically. Migration v104 adds a
+partial expression index on `pages.frontmatter->>'source_hash'` for atom
+rows. On Postgres it builds with `CREATE INDEX CONCURRENTLY` so no
+table-level lock; PGLite uses plain `CREATE INDEX`. On a 100K-page brain
+the index takes seconds to build.
+
+1. **Confirm the migration applied:**
+   ```bash
+   gbrain doctor --json | jq '.checks[] | select(.name=="schema_version")'
+   ```
+2. **Confirm extract_atoms got fast:**
+   ```bash
+   time gbrain dream --phase extract_atoms --dry-run --json
+   ```
+   The idempotency check phase should finish in under a second instead
+   of taking 5 to 10 minutes.
+3. **Multi-source brains: pick up the new doctor nudge:**
+   ```bash
+   gbrain doctor --json | jq '.checks[] | select(.name=="sync_consolidation")'
+   ```
+   You'll see the paste-ready cron line for `sync --all --parallel`.
+
+If any step fails or the numbers look wrong, file an issue at
+https://github.com/garrytan/gbrain/issues with the output of `gbrain
+doctor` and `~/.gbrain/upgrade-errors.jsonl` if it exists.
+
+### What you'd see in a concrete example
+
+| Pain | Before | After |
+|---|---|---|
+| `extract_atoms` startup on 7K transcripts | 5-10 min of silent overhead | <1 s, then real work |
+| `extract_atoms` mid-run feedback | "start" then silence for 10+ min | tick every ~1s with running atom count |
+| `synthesize_concepts` mid-run feedback | "start" then silence | tick every ~1s with concept count |
+| Crashed cycle lock recovery | 30 min wait, often manual `gbrain sync --break-lock` | <5 min, no manual intervention |
+| `by-mention` resume after kill at 87% | re-scan 280K of 322K pages | resume from where you stopped |
+| Multi-source cron setup | two staggered per-source entries | one `sync --all --parallel 4` line |
+
+### Things to watch
+
+- **Lock TTL behavior changed (30 min → 5 min).** Cron-side
+  `gbrain sync --break-lock --max-age 1800` scripts that assumed the
+  old 30-min TTL still work, but the number is now larger than the
+  default TTL itself. Anyone who explicitly set `--max-age` against the
+  old TTL should drop the value to match the new shorter window.
+- **`by-mention --dry-run` no longer claims to be resumable.** Dry-run
+  intentionally skips both the checkpoint load and write so it stays an
+  inspection mode. To exercise the resume path you'll need a real run.
+- **One residual silent-failure window** under the new shorter TTL: if
+  a single `await chat()` call sits past 5 min wallclock, the lock can
+  expire mid-await without the original phase noticing. This is the
+  same silent-overwrite risk that existed before the wave, just on a
+  shorter timescale. Lock-loss detection is filed as a P2 follow-up
+  TODO (`DbLockHandle.refresh()` will throw on 0 rows affected, phases
+  catch + abort cleanly).
+
+### Itemized changes
+
+#### Added
+- `atomsExistingForHashes(engine, sourceId, hashes[])` exported from
+  `src/core/cycle/extract-atoms.ts` — one batched SQL roundtrip that
+  returns the set of `content_hash16` values already extracted as atoms
+  for this source. Replaces the prior per-hash loop that did 7K
+  individual queries on big brains. Fail-open: an SQL error logs to
+  stderr and returns an empty set so extraction proceeds.
+- `progress?: ProgressReporter` opt on `ExtractAtomsOpts` and
+  `SynthesizeConceptsOpts`. Cycle.ts now passes its phase-level reporter
+  down (NOT a child reporter — that would produce a path collision
+  `cycle.extract_atoms.extract_atoms.work`). Phases only call `tick()`
+  and `heartbeat()`; cycle.ts owns `start()` and `finish()`. You see
+  `[cycle.extract_atoms] N (atoms_created)` ticks every ~1s during both
+  long phases.
+- `yieldDuringPhase?: () => Promise<void>` opt on `ExtractAtomsOpts`
+  (and `synthesize_concepts` finally wires the existing one).
+  Cycle.ts builds a `buildYieldDuringPhase(lock, outer)` closure
+  (also exported for tests) that calls `lock.refresh()` AND any
+  external hook on every fire. Throttled to 30s inside each phase via
+  `maybeYield`. Fires both inside the main work loop AND immediately
+  after every `await chat(...)` LLM call so long Haiku/Sonnet calls
+  don't sit past TTL.
+- `mentionsFingerprint({source, type, since, gazetteerHash})` in
+  `src/core/op-checkpoint.ts`. The gazetteer hash is the load-bearing
+  field — adding new entity pages mid-pause shifts the hash, gets a
+  new fingerprint, and triggers a fresh scan against the new gazetteer
+  instead of silently skipping previously-scanned pages.
+- `gbrain extract links --by-mention` now resumes from where it died.
+  Wired through the existing `op_checkpoints` framework with a
+  `flushAndCheckpoint` ordering — links flush to the DB FIRST, page
+  keys commit to the checkpoint SECOND, persist THIRD. A crash between
+  `batch.push()` and the flush leaves the page un-checkpointed so
+  resume re-scans it. Persist cadence: every 1000 items OR every 30s,
+  whichever first. Clean exit clears the checkpoint.
+- `sync_consolidation` doctor check. Multi-source brains see a
+  paste-ready `gbrain sync --all --parallel 4 --workers 4
+  --skip-failed` recommendation. Single-source brains get
+  "not applicable." SQL errors return `warn` via the check's own
+  try/catch — outer doctor catch isn't a safe assumption.
+- "Multi-source brains" recipe block in
+  `skills/cron-scheduler/SKILL.md` documenting the `sync --all`
+  pattern as preferred over per-source entries.
+- Migration v104 `pages_atom_source_hash_idx` — partial expression
+  index on `frontmatter->>'source_hash'` for atom rows where
+  `deleted_at IS NULL`. Postgres uses `CREATE INDEX CONCURRENTLY` with
+  invalid-remnant pre-drop (mirrors v97 `pages_dedup_partial_index`);
+  PGLite uses plain `CREATE INDEX`. Without this, the new batch
+  idempotency check would seq-scan the pages table on big brains and
+  defeat the perf win.
+
+#### Changed
+- Cycle lock TTL dropped from 30 min to 5 min
+  (`src/core/cycle.ts:LOCK_TTL_MINUTES`). Combined with active
+  in-phase `lock.refresh()` via `buildYieldDuringPhase`, a healthy
+  long-running cycle keeps the lock alive while a crashed cycle
+  releases it 6x faster.
+- `synthesize_concepts` no longer fires `yieldDuringPhase` per-concept-
+  group. Same hook, throttled to 30s via the new shared `maybeYield`
+  helper — matches the actual lock-refresh budget instead of spamming
+  hundreds of redundant fires per phase.
+
+#### Fixed
+- The 7K-roundtrip overhead at the start of every `extract_atoms` cycle
+  on brains with conversation-transcript corpora.
+- The 30-min wait after a crashed cycle before another worker could
+  acquire the lock.
+- The 10+ hour `by-mention` sweep restarting from page 0 every time it
+  got interrupted.
+- Two correctness bugs in the original by-mention checkpoint design
+  that the codex review caught before merge: lost links if a crash
+  landed between `batch.push()` and `flush()`, and silent-miss-on-new-
+  entities if the gazetteer changed between paused runs. The fix
+  flushes links before committing the checkpoint and folds the
+  gazetteer hash into the fingerprint.
+- Multi-source brains seeing two separate cron entries with manual
+  staggering instead of one `sync --all --parallel` line.
+
+### For contributors
+
+- 44 new unit/PGLite tests across 9 files pinning every contract:
+  - `test/cycle/extract-atoms-batch.test.ts` (5 cases) — batch idempotency
+  - `test/cycle/cycle-lock-ttl.test.ts` (1 case) — regression pin on `LOCK_TTL_MINUTES === 5`
+  - `test/op-checkpoint-mentions-fingerprint.test.ts` (7 cases) — fingerprint sensitivity including gazetteer-hash regression guard
+  - `test/cycle/extract-atoms-progress.test.ts` (4 cases) — phase doesn't call start/finish, ticks fire per item
+  - `test/cycle/synthesize-concepts-progress.test.ts` (3 cases) — same shape
+  - `test/cycle/yield-during-phase-refresh.test.ts` (7 cases) — buildYieldDuringPhase actually calls lock.refresh() + outer hook, throws non-fatal
+  - `test/cycle/yield-during-phase-throttle.test.ts` (3 cases) — 30s throttle gate behavior
+  - `test/extract-by-mention-resume.test.ts` (5 cases) — checkpoint persistence ordering, dry-run skips persist, gazetteer change invalidates, filtered pages get checkpointed
+  - `test/doctor-sync-consolidation.test.ts` (6 cases) — edge case matrix for source counts + archived filtering + SQL error path
+- `LockHandle` and `buildYieldDuringPhase` exported from
+  `src/core/cycle.ts` for test seam access.
+- Two new follow-up TODOs filed in `TODOS.md` under
+  "v0.41.21.0 ops-fix-wave follow-ups": `gbrain sync print-cron`
+  subcommand and lock-loss detection (extending
+  `DbLockHandle.refresh()` to throw on 0 rows affected).
+
 ## [0.41.20.0] - 2026-05-26
 
 **One command tells you if your brain is healthy. And `gbrain doctor`

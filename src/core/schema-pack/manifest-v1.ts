@@ -42,6 +42,22 @@ const LinkTypeSchema = z.object({
   inference: LinkInferenceSchema.optional(),
 }).strict();
 
+/**
+ * v0.42 (T3, plan D5): per-page-type subtype-detection rule. The rule fires
+ * when (a) frontmatter has a matching key+value, OR (b) the source path
+ * matches the regex. ReDoS-guarded compile happens at pack-load (registry).
+ */
+const SubtypeMatchSchema = z.object({
+  name: z.string().min(1),
+  when: z.object({
+    path_pattern: z.string().optional(),
+    frontmatter_field: z.string().optional(),
+    frontmatter_value: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  }).strict(),
+}).strict();
+
+export type PackSubtypeMatch = z.infer<typeof SubtypeMatchSchema>;
+
 const PageTypeSchema = z.object({
   name: z.string().min(1),
   primitive: PackPrimitiveEnum,
@@ -69,6 +85,16 @@ const PageTypeSchema = z.object({
    * find_experts SQL hardcodes).
    */
   expert_routing: z.boolean().default(false),
+  /**
+   * v0.42 (T3, plan D5): per-type subtype declarations. `media` declaring
+   * subtypes: [{name: video, when: {path_pattern: "^videos/"}}] means
+   * inferTypeAndSubtypeFromPack returns `{type: 'media', subtype: 'video'}`
+   * for paths starting with `videos/`. Frontmatter-based detection
+   * supported via `frontmatter_field`+`frontmatter_value`. Optional for
+   * back-compat: pre-v0.42 pack manifests + test fixtures that don't
+   * declare it stay valid. Consumers MUST handle undefined via `?? []`.
+   */
+  subtypes: z.array(SubtypeMatchSchema).optional(),
 }).strict();
 
 const FrontmatterLinkSchema = z.object({
@@ -152,6 +178,95 @@ const CalibrationDomainSchema = z.object({
 export type CalibrationDomain = z.infer<typeof CalibrationDomainSchema>;
 
 /**
+ * v0.42 (T3, plan D9): allowed values for retype `subtype_field`. Strict
+ * allowlist prevents third-party-pack injection of `title` / `slug` / `type`
+ * via mapping_rules — a malicious pack could otherwise overwrite load-bearing
+ * frontmatter keys on every retyped page. Pack-load validation rejects
+ * mapping_rules whose `subtype_field` is outside this set.
+ */
+export const ALLOWED_SUBTYPE_FIELDS = [
+  'subtype', 'legacy_type', 'origin', 'format', 'kind', 'period', 'domain',
+] as const;
+export type AllowedSubtypeField = typeof ALLOWED_SUBTYPE_FIELDS[number];
+
+/**
+ * v0.42 (T3, plan D11+D12): pack-upgrade mapping_rules — declarative
+ * migrations that the `unify-types` Minion handler consumes. Discriminated
+ * union over three primitives:
+ *   - retype: change pages.type from from_type to to_type with optional
+ *     subtype JSONB stamp + legacy_type frontmatter preservation. Special
+ *     sentinel `from_type: '*unknown*'` is the catch-all (D12) that fires
+ *     LAST and retypes any page whose type isn't declared in page_types
+ *     AND isn't the target of any prior retype rule (substituting the
+ *     original type as the subtype value via `subtype: '*original_type*'`).
+ *   - page_to_link: convert edge-shaped pages (atom-partner-link, symlink)
+ *     into real links table rows + soft-delete the source page.
+ *   - page_to_alias: convert redirect-shaped pages (concept-redirect) into
+ *     slug_aliases table rows + soft-delete the source page. NO inbound
+ *     link rewrite (D15: alias-table IS the resolver).
+ */
+const RetypeMappingRuleSchema = z.object({
+  kind: z.literal('retype'),
+  from_type: z.string().min(1),
+  to_type: z.string().min(1),
+  subtype: z.string().optional(),
+  subtype_field: z.enum(ALLOWED_SUBTYPE_FIELDS).default('subtype'),
+  path_filter: z.string().optional(),
+}).strict();
+
+const ResolverSchema = z.union([
+  z.literal('frontmatter'),
+  z.literal('body_first_link'),
+  z.literal('slug'),
+  z.literal('body_excerpt'),
+  z.object({ frontmatter_field: z.string().min(1) }).strict(),
+]);
+
+const PageToLinkMappingRuleSchema = z.object({
+  kind: z.literal('page_to_link'),
+  from_type: z.string().min(1),
+  link_type: z.string().min(1),
+  source_slug_from: ResolverSchema,
+  target_slug_from: ResolverSchema,
+  inverse: z.string().optional(),
+  preserve_notes: z.boolean().optional(),
+}).strict();
+
+const PageToAliasMappingRuleSchema = z.object({
+  kind: z.literal('page_to_alias'),
+  from_type: z.string().min(1),
+  canonical_from: ResolverSchema,
+  alias_slug_from: ResolverSchema,
+  notes_from: ResolverSchema.optional(),
+}).strict();
+
+const MappingRuleSchema = z.discriminatedUnion('kind', [
+  RetypeMappingRuleSchema,
+  PageToLinkMappingRuleSchema,
+  PageToAliasMappingRuleSchema,
+]);
+
+export type PackMappingRule = z.infer<typeof MappingRuleSchema>;
+export type PackRetypeMappingRule = z.infer<typeof RetypeMappingRuleSchema>;
+export type PackPageToLinkMappingRule = z.infer<typeof PageToLinkMappingRuleSchema>;
+export type PackPageToAliasMappingRule = z.infer<typeof PageToAliasMappingRuleSchema>;
+export type PackResolverSpec = z.infer<typeof ResolverSchema>;
+
+/**
+ * v0.42 (T3, plan D7): pack-upgrade declaration. When a pack declares
+ * `migration_from: {pack: gbrain-base, version: "1.x"}`, the
+ * `checkPackUpgradeAvailable` onboard check fires for any brain whose
+ * active pack matches the (pack, semver-range) tuple. Version supports
+ * `M.x` / `M.m.x` shorthand or an exact `M.m.p` literal.
+ */
+const MigrationFromSchema = z.object({
+  pack: z.string().min(1),
+  version: z.string().min(1),
+}).strict();
+
+export type PackMigrationFrom = z.infer<typeof MigrationFromSchema>;
+
+/**
  * SchemaPackManifest v1 — the parsed + validated pack file shape.
  * `extends` resolution + closure expansion are done by registry.ts, not at
  * parse time.
@@ -208,6 +323,22 @@ export const SchemaPackManifestSchema = z.object({
    * with pre-v0.41 fixtures.
    */
   calibration_domains: z.array(CalibrationDomainSchema).optional(),
+  /**
+   * v0.42 (T3, plan D7): pack-upgrade source declaration. When set, the
+   * `checkPackUpgradeAvailable` onboard check fires for any brain whose
+   * active pack matches the (pack, semver-range) tuple.
+   */
+  migration_from: MigrationFromSchema.optional(),
+  /**
+   * v0.42 (T3, plan D11+D12): declarative migrations consumed by the
+   * `unify-types` Minion handler. Discriminated union over retype /
+   * page_to_link / page_to_alias. Pack-load validation (registry):
+   *   - All retype `to_type` values must exist in `page_types[]` (D11/F2)
+   *   - All page_to_link `link_type` values must exist in `link_types[]`
+   *   - Catch-all `from_type: '*unknown*'` rule must appear LAST (D12)
+   *   - Cycles between retype rules rejected (e.g. A→B + B→A)
+   */
+  mapping_rules: z.array(MappingRuleSchema).optional(),
 }).strict();
 
 export type SchemaPackManifest = z.infer<typeof SchemaPackManifestSchema>;

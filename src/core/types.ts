@@ -639,6 +639,14 @@ export interface SearchResult {
    *  Undefined when no reranker fired. The raw reranker relevance score
    *  is separately stamped as `rerank_score` for back-compat. */
   reranker_delta?: number;
+  /**
+   * v0.42 (T19, plan D6) — multiplier applied by applyAliasResolvedBoost
+   * (1.0 = unchanged; default 1.05x). Fires when the result's slug is
+   * a canonical_slug in slug_aliases — the page is the authoritative
+   * version of 1+ aliases. Signals "user explicitly disambiguated this
+   * as canonical" and lets canonicals outrank fuzzy matches.
+   */
+  alias_resolved_boost?: number;
 }
 
 /**

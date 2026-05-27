@@ -952,6 +952,24 @@ CREATE TRIGGER trg_pages_search_vector
 -- pages.timeline (markdown) still feeds search_vector via trg_pages_search_vector.
 DROP TRIGGER IF EXISTS trg_timeline_search_vector ON timeline_entries;
 DROP FUNCTION IF EXISTS update_page_search_vector_from_timeline();
+
+-- v0.42 type-unification (T1, plan D1+D11+D17): slug_aliases backs the
+-- concept-redirect → alias-table migration. Wikilinks like
+-- [[old-redirect-slug]] resolve to canonical via engine.resolveSlugWithAlias
+-- short-circuit. Source-scoped throughout (codex F12: dangling_aliases
+-- doctor check joins on (source_id, alias_slug)).
+CREATE TABLE IF NOT EXISTS slug_aliases (
+  id             BIGSERIAL PRIMARY KEY,
+  source_id      TEXT NOT NULL,
+  alias_slug     TEXT NOT NULL,
+  canonical_slug TEXT NOT NULL,
+  notes          TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT slug_aliases_no_self CHECK (alias_slug <> canonical_slug),
+  CONSTRAINT slug_aliases_uniq UNIQUE (source_id, alias_slug)
+);
+CREATE INDEX IF NOT EXISTS slug_aliases_canonical_idx
+  ON slug_aliases (source_id, canonical_slug);
 `;
 
 /**
