@@ -7,6 +7,7 @@ import { VERSION } from '../version.ts';
 import { buildToolDefs } from './tool-defs.ts';
 import { dispatchToolCall, validateParams, buildOperationContext } from './dispatch.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
+import { filterMcpOperationsForEnv, readOnlyBlockedToolResult } from './read-only.ts';
 
 export async function startMcpServer(engine: BrainEngine) {
   const server = new Server(
@@ -14,11 +15,14 @@ export async function startMcpServer(engine: BrainEngine) {
     { capabilities: { tools: {} } },
   );
 
+  const mcpOperations = filterMcpOperationsForEnv(operations);
+  const exposedOperationNames = new Set(mcpOperations.map(op => op.name));
+
   // Generate tool definitions from operations. Extracted to buildToolDefs so
   // the subagent tool registry (v0.15+) can call the same mapper against a
   // filtered OPERATIONS subset instead of duplicating this shape.
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: buildToolDefs(operations),
+    tools: buildToolDefs(mcpOperations),
   }));
 
   // Dispatch tool calls via shared dispatch.ts (parity with HTTP transport).
@@ -28,6 +32,10 @@ export async function startMcpServer(engine: BrainEngine) {
   // shape and cast through `any` (the SDK accepts it via the ServerResult union).
   server.setRequestHandler(CallToolRequestSchema, async (request: any): Promise<any> => {
     const { name, arguments: params } = request.params;
+    const requestedOperation = operations.find(op => op.name === name);
+    if (requestedOperation && !exposedOperationNames.has(name)) {
+      return readOnlyBlockedToolResult(name);
+    }
     // v0.28: stdio MCP has no per-token auth (local pipe). Default the
     // takes-holder allow-list to ['world'] so agent-facing callers don't
     // see private hunches via takes_list / takes_search / query. Operators

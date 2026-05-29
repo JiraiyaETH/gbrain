@@ -2679,6 +2679,7 @@ const pause_job: Operation = {
   params: {
     id: { type: 'number', required: true, description: 'Job ID' },
   },
+  mutating: true,
   scope: 'admin',
   handler: async (ctx, p) => {
     const { MinionQueue } = await import('./minions/queue.ts');
@@ -2695,6 +2696,7 @@ const resume_job: Operation = {
   params: {
     id: { type: 'number', required: true, description: 'Job ID' },
   },
+  mutating: true,
   scope: 'admin',
   handler: async (ctx, p) => {
     const { MinionQueue } = await import('./minions/queue.ts');
@@ -2712,6 +2714,7 @@ const replay_job: Operation = {
     id: { type: 'number', required: true, description: 'Source job ID to replay' },
     data_overrides: { type: 'object', required: false, description: 'Data fields to override (merged with original)' },
   },
+  mutating: true,
   scope: 'admin',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'replay_job', id: p.id };
@@ -2731,6 +2734,7 @@ const send_job_message: Operation = {
     payload: { type: 'object', required: true, description: 'Message payload (arbitrary JSON)' },
     sender: { type: 'string', required: false, description: 'Sender identity (default: admin)' },
   },
+  mutating: true,
   scope: 'admin',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'send_job_message', id: p.id };
