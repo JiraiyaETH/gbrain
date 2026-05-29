@@ -167,4 +167,50 @@ describe('dispatchToolCall — MCP slug-prefix write fence', () => {
     const body = JSON.parse(result.content[0].text);
     expect(body.denied_slugs).toEqual(['raw/transcripts/leak']);
   });
+
+  test('remote add_timeline_entry requires the slug to stay inside the slug fence', async () => {
+    const result = await dispatchToolCall({} as never, 'add_timeline_entry', {
+      slug: 'raw/transcripts/leak',
+      date: '2026-05-29',
+      summary: 'should not write',
+    }, {
+      remote: true,
+      allowedSlugPrefixes: ['companies/*', 'people/*', 'projects/tailored/*'],
+    });
+
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.denied_slugs).toEqual(['raw/transcripts/leak']);
+  });
+
+  test('remote put_page rejects traversal-like slugs before dry-run can bypass validation', async () => {
+    const result = await dispatchToolCall({} as never, 'put_page', {
+      slug: 'companies/../raw/leak',
+      content: '---\ntype: note\n---\nraw dump',
+      dry_run: true,
+    }, {
+      remote: true,
+      allowedSlugPrefixes: ['companies/*'],
+    });
+
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toBe('invalid_params');
+    expect(body.message).toContain('Invalid page_slug');
+  });
+
+  test('remote mutating ops without slug-fence coverage fail closed when a slug fence is configured', async () => {
+    const result = await dispatchToolCall({} as never, 'remove_link', {
+      from: 'companies/tailored-labs',
+      to: 'companies/other',
+    }, {
+      remote: true,
+      allowedSlugPrefixes: ['companies/*'],
+    });
+
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toBe('permission_denied');
+    expect(body.message).toContain('not covered by GBRAIN_MCP_ALLOWED_SLUG_PREFIXES');
+  });
 });

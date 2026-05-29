@@ -149,13 +149,15 @@ let mockNow = 0;
 function freezeClock(at: number) { mockNow = at; }
 function advanceClock(deltaMs: number) { mockNow += deltaMs; }
 
-async function startTest(cfg: FakeEngineConfig & { lruCap?: number; ipLimit?: number; tokenLimit?: number; corsOrigin?: string; bodyCap?: number; trustProxy?: boolean } = {}): Promise<TestServer> {
+async function startTest(cfg: FakeEngineConfig & { lruCap?: number; ipLimit?: number; tokenLimit?: number; corsOrigin?: string; bodyCap?: number; trustProxy?: boolean; allowedSlugPrefixes?: string } = {}): Promise<TestServer> {
   if (cfg.corsOrigin) process.env.GBRAIN_HTTP_CORS_ORIGIN = cfg.corsOrigin;
   else delete process.env.GBRAIN_HTTP_CORS_ORIGIN;
   if (cfg.bodyCap) process.env.GBRAIN_HTTP_MAX_BODY_BYTES = String(cfg.bodyCap);
   else delete process.env.GBRAIN_HTTP_MAX_BODY_BYTES;
   if (cfg.trustProxy) process.env.GBRAIN_HTTP_TRUST_PROXY = '1';
   else delete process.env.GBRAIN_HTTP_TRUST_PROXY;
+  if (cfg.allowedSlugPrefixes) process.env.GBRAIN_MCP_ALLOWED_SLUG_PREFIXES = cfg.allowedSlugPrefixes;
+  else delete process.env.GBRAIN_MCP_ALLOWED_SLUG_PREFIXES;
 
   const engine = makeFakeEngine(cfg);
   const clock = () => mockNow || Date.now();
@@ -339,6 +341,35 @@ describe('http-transport: tools/call dispatch', () => {
     const body = await r.json();
     expect(body.result.isError).toBe(true);
     expect(body.result.content[0].text).toContain('Unknown tool');
+  });
+
+  test('9c. HTTP transport threads GBRAIN_MCP_ALLOWED_SLUG_PREFIXES into dispatch', async () => {
+    const scoped = await startTest({
+      validTokens: new Map([[hash('tok-scoped'), { id: 'tok-scoped-id', name: 'scoped' }]]),
+      allowedSlugPrefixes: 'companies/*',
+    });
+    try {
+      const r = await fetch(`${scoped.url}/mcp`, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer tok-scoped', 'Content-Type': 'application/json' },
+        body: rpc('tools/call', {
+          name: 'put_page',
+          arguments: {
+            slug: 'raw/transcripts/leak',
+            content: '---\ntype: note\n---\nleak',
+            dry_run: true,
+          },
+        }),
+      });
+      expect(r.status).toBe(200);
+      const body = await r.json();
+      expect(body.result.isError).toBe(true);
+      const text = JSON.parse(body.result.content[0].text);
+      expect(text.error).toBe('permission_denied');
+      expect(text.denied_slugs).toEqual(['raw/transcripts/leak']);
+    } finally {
+      scoped.stop();
+    }
   });
 });
 

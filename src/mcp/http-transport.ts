@@ -31,7 +31,7 @@ import { buildToolDefs } from './tool-defs.ts';
 import { operations } from '../core/operations.ts';
 import { VERSION } from '../version.ts';
 import { dispatchToolCall } from './dispatch.ts';
-import { filterMcpOperationsForEnv, readOnlyBlockedToolResult } from './read-only.ts';
+import { filterMcpOperationsForEnv, parseMcpAllowedSlugPrefixes, readOnlyBlockedToolResult } from './read-only.ts';
 import { buildDefaultLimiters, type RateLimiter } from './rate-limit.ts';
 import { sqlQueryForEngine } from '../core/sql-query.ts';
 
@@ -126,6 +126,7 @@ function resolveClientIp(req: Request, server: { requestIP: (r: Request) => { ad
 
 export async function startHttpTransport(opts: HttpTransportOptions) {
   const { port, engine } = opts;
+  const allowedSlugPrefixes = parseMcpAllowedSlugPrefixes(process.env) ?? undefined;
 
   // Engine-aware: route SQL through the active BrainEngine. Both Postgres
   // and PGLite carry access_tokens + mcp_request_log in their schemas
@@ -370,6 +371,7 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
             remote: true,
             takesHoldersAllowList: auth.takesHoldersAllowList,
             sourceId: auth.sourceId,
+            allowedSlugPrefixes,
           });
         }
         const status = result.isError ? 'error' : 'success';

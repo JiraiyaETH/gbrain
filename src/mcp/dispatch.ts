@@ -7,7 +7,7 @@
  */
 
 import type { BrainEngine } from '../core/engine.ts';
-import { operations, OperationError, matchesSlugAllowList } from '../core/operations.ts';
+import { operations, OperationError, matchesSlugAllowList, validatePageSlug } from '../core/operations.ts';
 import type { Operation, OperationContext, AuthInfo } from '../core/operations.ts';
 import { loadConfig } from '../core/config.ts';
 
@@ -221,7 +221,7 @@ export function buildOperationContext(
   };
 }
 
-function collectSlugFenceParams(opName: string, params: Record<string, unknown>): string[] {
+function collectSlugFenceParams(opName: string, params: Record<string, unknown>): string[] | null {
   const slugs: string[] = [];
   const push = (value: unknown) => {
     if (typeof value === 'string' && value.trim()) slugs.push(value.trim());
@@ -231,16 +231,14 @@ function collectSlugFenceParams(opName: string, params: Record<string, unknown>)
     case 'put_page':
     case 'add_timeline_entry':
       push(params.slug);
-      break;
+      return slugs;
     case 'add_link':
       push(params.from);
       push(params.to);
-      break;
+      return slugs;
     default:
-      break;
+      return null;
   }
-
-  return slugs;
 }
 
 function validateMcpSlugFence(op: Operation, params: Record<string, unknown>, opts: DispatchOpts): ToolResult | null {
@@ -250,7 +248,34 @@ function validateMcpSlugFence(op: Operation, params: Record<string, unknown>, op
   if (op.mutating !== true) return null;
 
   const slugs = collectSlugFenceParams(op.name, params);
+  if (slugs === null) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          error: 'permission_denied',
+          message: `Tool ${op.name} is mutating but not covered by GBRAIN_MCP_ALLOWED_SLUG_PREFIXES`,
+          allowed_slug_prefixes: prefixes,
+        }, null, 2),
+      }],
+      isError: true,
+    };
+  }
   if (slugs.length === 0) return null;
+
+  for (const slug of slugs) {
+    try {
+      validatePageSlug(slug);
+    } catch (e) {
+      const body = e instanceof OperationError
+        ? e.toJSON()
+        : { error: 'invalid_params', message: e instanceof Error ? e.message : String(e) };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(body, null, 2) }],
+        isError: true,
+      };
+    }
+  }
 
   const denied = slugs.filter(slug => !matchesSlugAllowList(slug, prefixes));
   if (denied.length === 0) return null;
