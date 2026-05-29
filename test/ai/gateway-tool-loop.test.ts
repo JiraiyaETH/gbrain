@@ -47,8 +47,10 @@ describe('gateway.toolLoop (v0.38 D11 — provider-agnostic loop control)', () =
 
   it('dispatches a single tool call and feeds the result back to the next turn', async () => {
     let turn = 0;
-    __setChatTransportForTests(async () => {
+    let secondTurnMessages: any[] = [];
+    __setChatTransportForTests(async (opts) => {
       turn++;
+      if (turn === 2) secondTurnMessages = [...(opts.messages as any[])];
       if (turn === 1) {
         return {
           text: '',
@@ -92,6 +94,8 @@ describe('gateway.toolLoop (v0.38 D11 — provider-agnostic loop control)', () =
     expect(result.finalText).toBe('final answer');
     expect(result.totalUsage.input_tokens).toBe(25); // 10 + 15
     expect(result.totalUsage.output_tokens).toBe(9); // 4 + 5
+    expect(secondTurnMessages.at(-1)?.role).toBe('tool');
+    expect(secondTurnMessages.at(-1)?.content?.[0]?.toolCallId).toBe('tc1');
   });
 
   it('captures persistence callbacks in order: assistant → tool start → tool complete', async () => {

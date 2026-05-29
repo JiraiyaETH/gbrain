@@ -21,7 +21,7 @@
  *     rotation (via configureGateway()) invalidates stale entries.
  */
 
-import { embed as aiEmbed, embedMany, generateObject, generateText } from 'ai';
+import { embed as aiEmbed, embedMany, generateObject, generateText, jsonSchema } from 'ai';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { listRecipes } from './recipes/index.ts';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -2170,6 +2170,42 @@ export interface ChatMessage {
   content: string | ChatBlock[];
 }
 
+function toJsonSerializable(value: unknown): unknown {
+  if (value === undefined) return null;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return String(value);
+  }
+}
+
+function toAiSdkToolOutput(output: unknown, isError?: boolean): Record<string, unknown> {
+  if (isError) {
+    if (typeof output === 'string') return { type: 'error-text', value: output };
+    return { type: 'error-json', value: toJsonSerializable(output) };
+  }
+  if (typeof output === 'string') return { type: 'text', value: output };
+  return { type: 'json', value: toJsonSerializable(output) };
+}
+
+function normalizeMessagesForAiSdk(messages: ChatMessage[]): any[] {
+  return messages.map(message => {
+    if (!Array.isArray(message.content)) return message;
+    return {
+      ...message,
+      content: message.content.map(block => {
+        if (block.type !== 'tool-result') return block;
+        return {
+          type: 'tool-result',
+          toolCallId: block.toolCallId,
+          toolName: block.toolName,
+          output: toAiSdkToolOutput(block.output, block.isError),
+        };
+      }),
+    };
+  });
+}
+
 export interface ChatToolDef {
   name: string;
   description: string;
@@ -2528,7 +2564,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   const tools = (opts.tools ?? []).reduce((acc, t) => {
     acc[t.name] = {
       description: t.description,
-      inputSchema: { jsonSchema: t.inputSchema } as any,
+      inputSchema: jsonSchema(t.inputSchema as any) as any,
     };
     return acc;
   }, {} as Record<string, any>);
@@ -2558,7 +2594,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
     const result = await generateText({
       model,
       system: opts.system,
-      messages: opts.messages as any,
+      messages: normalizeMessagesForAiSdk(opts.messages),
       tools: opts.tools && opts.tools.length > 0 ? tools : undefined,
       maxOutputTokens: opts.maxTokens ?? 4096,
       abortSignal: opts.abortSignal,
@@ -2932,10 +2968,11 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
 
     if (stopReason === 'aborted') break;
 
-    // Feed all tool results back as a single user message.
+    // Feed all tool results back as a tool message so OpenAI-compatible providers
+    // can match each result to the assistant tool-call IDs.
     const userMessageIdx = messageIdx++;
     void userMessageIdx;
-    messages.push({ role: 'user', content: toolResultBlocks });
+    messages.push({ role: 'tool', content: toolResultBlocks });
 
     turnIdx++;
   }
