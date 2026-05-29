@@ -17,7 +17,7 @@
  *   gbrain autopilot --status [--json]
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, utimesSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, utimesSync, unlinkSync, statSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import type { BrainEngine } from '../core/engine.ts';
@@ -1150,7 +1150,30 @@ function uninstallDaemon() {
   }
 }
 
-function showStatus(json: boolean) {
+export interface AutopilotStatusSnapshot {
+  installed: boolean;
+  last_log: string;
+  lock: {
+    path: string;
+    exists: boolean;
+    pid: number | null;
+    pid_alive: boolean | null;
+    age_seconds: number | null;
+    stale: boolean | null;
+  };
+}
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function getAutopilotStatusSnapshot(now: number = Date.now()): AutopilotStatusSnapshot {
   const logFile = join(process.env.HOME || '', '.gbrain', 'autopilot.log');
   let lastLine = '';
   try {
@@ -1169,11 +1192,53 @@ function showStatus(json: boolean) {
     } catch { /* no crontab */ }
   }
 
+  const lockPath = gbrainHomePath('autopilot.lock');
+  const lock = {
+    path: lockPath,
+    exists: false,
+    pid: null as number | null,
+    pid_alive: null as boolean | null,
+    age_seconds: null as number | null,
+    stale: null as boolean | null,
+  };
+  if (existsSync(lockPath)) {
+    lock.exists = true;
+    try {
+      const stat = statSync(lockPath);
+      lock.age_seconds = Math.max(0, Math.round((now - stat.mtimeMs) / 1000));
+      lock.stale = lock.age_seconds >= 10 * 60;
+    } catch { /* best-effort */ }
+    try {
+      const rawPid = readFileSync(lockPath, 'utf-8').trim();
+      const pid = Number(rawPid);
+      if (Number.isInteger(pid) && pid > 0) {
+        lock.pid = pid;
+        lock.pid_alive = isPidAlive(pid);
+      } else {
+        lock.pid_alive = false;
+      }
+    } catch {
+      lock.pid_alive = false;
+    }
+  }
+
+  return { installed, last_log: lastLine, lock };
+}
+
+function showStatus(json: boolean) {
+  const snapshot = getAutopilotStatusSnapshot();
   if (json) {
-    console.log(JSON.stringify({ installed, last_log: lastLine }));
+    console.log(JSON.stringify(snapshot));
   } else {
-    console.log(`Autopilot: ${installed ? 'installed' : 'not installed'}`);
-    if (lastLine) console.log(`Last log: ${lastLine}`);
+    console.log(`Autopilot: ${snapshot.installed ? 'installed' : 'not installed'}`);
+    if (snapshot.last_log) console.log(`Last log: ${snapshot.last_log}`);
+    if (snapshot.lock.exists) {
+      const age = snapshot.lock.age_seconds === null ? 'unknown' : `${snapshot.lock.age_seconds}s`;
+      const pid = snapshot.lock.pid === null ? 'unknown' : String(snapshot.lock.pid);
+      const alive = snapshot.lock.pid_alive === null ? 'unknown' : String(snapshot.lock.pid_alive);
+      const stale = snapshot.lock.stale === null ? 'unknown' : String(snapshot.lock.stale);
+      console.log(`Lock: ${snapshot.lock.path} pid=${pid} alive=${alive} age=${age} stale=${stale}`);
+    }
   }
 }
 
