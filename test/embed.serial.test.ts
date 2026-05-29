@@ -656,6 +656,42 @@ describe('runEmbed CLI flag wiring (--stale --source)', () => {
 });
 
 describe('embedAllStale wall-clock budget end-to-end (D3 + D3a)', () => {
+  test('--catch-up disables the wall-clock cutoff without overflowing the timer', async () => {
+    const { runEmbedCore } = await import('../src/commands/embed.ts');
+    process.env.GBRAIN_EMBED_TIME_BUDGET_MS = '1';
+    process.env.GBRAIN_EMBED_CONCURRENCY = '1';
+
+    const stale = Array.from({ length: 3 }, (_, i) => ({
+      slug: `catchup-${i}`,
+      chunk_index: 0,
+      chunk_text: `catchup text ${i}`,
+      chunk_source: 'compiled_truth' as const,
+      model: null,
+      token_count: 1,
+      source_id: 'default',
+      page_id: i + 1,
+    }));
+
+    const engine = mockEngine({
+      countStaleChunks: async () => stale.length,
+      listStaleChunks: async () => stale,
+      getChunks: async (slug: string) => stale
+        .filter(s => s.slug === slug)
+        .map(s => ({ chunk_index: s.chunk_index, chunk_text: s.chunk_text, chunk_source: s.chunk_source, embedded_at: null, token_count: 1 })),
+      upsertChunks: async () => {},
+    });
+
+    embedBatchBehavior = async (texts) => {
+      await new Promise(r => setTimeout(r, 30));
+      return texts.map(() => new Float32Array(1536));
+    };
+
+    const result = await runEmbedCore(engine, { stale: true, catchUp: true });
+
+    expect(result.embedded).toBe(3);
+    expect(result.pages_processed).toBe(3);
+  });
+
   test('GBRAIN_EMBED_TIME_BUDGET_MS=N cuts the outer loop short on stuck workers', async () => {
     const { runEmbedCore } = await import('../src/commands/embed.ts');
     // Tiny budget: 100ms. Each embed call sleeps 50ms; with budget + multiple

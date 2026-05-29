@@ -612,14 +612,16 @@ async function embedAllStale(
 
   // D3 + D3a + D8: wall-clock budget. 30 min default; env override.
   // v0.41.18.0 (A13): --catch-up removes the wall-clock cap entirely so the
-  // handler runs until countStaleChunks() returns 0. Use Number.MAX_SAFE_INTEGER
-  // (effectively unbounded) instead of the 30-min default. The AbortController
-  // still wraps for SIGINT propagation; just the timer never fires.
-  const BUDGET_MS = staleOpts?.catchUp
-    ? Number.MAX_SAFE_INTEGER
+  // handler runs until countStaleChunks() returns 0. In catch-up mode we avoid
+  // installing any wall-clock timer; Bun clamps oversized timers to ~1ms, which
+  // would otherwise abort immediately. The AbortController still wraps worker
+  // calls for explicit abort propagation; just no budget timer fires.
+  const catchUp = !!staleOpts?.catchUp;
+  const BUDGET_MS = catchUp
+    ? null
     : parseInt(process.env.GBRAIN_EMBED_TIME_BUDGET_MS || `${30 * 60 * 1000}`, 10);
   const budgetController = new AbortController();
-  const budgetTimer = setTimeout(() => budgetController.abort(), BUDGET_MS);
+  const budgetTimer = BUDGET_MS === null ? undefined : setTimeout(() => budgetController.abort(), BUDGET_MS);
   const budgetSignal = budgetController.signal;
 
   // v0.41.18.0 (A13): --priority recent threads orderBy='updated_desc' to
@@ -642,7 +644,7 @@ async function embedAllStale(
     while (true) {
       if (budgetSignal.aborted) {
         if (!budgetExitNotified) {
-          serr(`\n  [embed] wall-clock budget (${BUDGET_MS}ms) exceeded; exiting cleanly. Re-run picks up via partial index.`);
+          serr(`\n  [embed] wall-clock budget (${BUDGET_MS ?? 'disabled'}ms) exceeded; exiting cleanly. Re-run picks up via partial index.`);
           budgetExitNotified = true;
         }
         break;
@@ -745,7 +747,7 @@ async function embedAllStale(
       if (batch.length < PAGE_SIZE) break;
     }
   } finally {
-    clearTimeout(budgetTimer);
+    if (budgetTimer !== undefined) clearTimeout(budgetTimer);
   }
 
   slog(`Embedded ${result.embedded} chunks across ${totalProcessedPages} pages`);
