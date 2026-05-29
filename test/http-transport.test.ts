@@ -343,7 +343,7 @@ describe('http-transport: tools/call dispatch', () => {
     expect(body.result.content[0].text).toContain('Unknown tool');
   });
 
-  test('9c. HTTP transport threads GBRAIN_MCP_ALLOWED_SLUG_PREFIXES into dispatch', async () => {
+  test('9c. legacy startHttpTransport also threads GBRAIN_MCP_ALLOWED_SLUG_PREFIXES into dispatch', async () => {
     const scoped = await startTest({
       validTokens: new Map([[hash('tok-scoped'), { id: 'tok-scoped-id', name: 'scoped' }]]),
       allowedSlugPrefixes: 'companies/*',

@@ -29,6 +29,7 @@ import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oa
 import type { SqlQuery } from '../core/oauth-provider.ts';
 import { hasScope, ALLOWED_SCOPES_LIST, normalizeScopesInput } from '../core/scope.ts';
 import { summarizeMcpParams, dispatchToolCall } from '../mcp/dispatch.ts';
+import { parseMcpAllowedSlugPrefixes } from '../mcp/read-only.ts';
 import { paramDefToSchema } from '../mcp/tool-defs.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig } from '../core/config.ts';
@@ -406,6 +407,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // than silently binding loopback only.
   const bind = options.bind ?? '127.0.0.1';
   const config = loadConfig() || { engine: 'pglite' as const };
+  const allowedSlugPrefixes = parseMcpAllowedSlugPrefixes(process.env) ?? undefined;
 
   if (logFullParams) {
     console.error(
@@ -1580,6 +1582,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           // but forgot to pass authInfo; whoami fell through to the
           // unknown_transport throw because ctx.auth was undefined.
           auth: authInfo,
+          allowedSlugPrefixes,
           logger: {
             info: (msg: string) => console.error(`[INFO] ${msg}`),
             warn: (msg: string) => console.error(`[WARN] ${msg}`),
