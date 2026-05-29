@@ -3,7 +3,8 @@
  *
  * After a page row lands in the DB (via importFromContent / putPage), this
  * renders the row to markdown via `serializePageToMarkdown` and writes it to
- * `sync.repo_path` so the brain repo has a committable `.md` artifact that
+ * the page source's `sources.local_path` when available, otherwise the legacy
+ * `sync.repo_path`, so the brain repo has a committable `.md` artifact that
  * round-trips cleanly through `gbrain sync`. The file is rendered FROM the DB
  * row, so the two sinks cannot diverge.
  *
@@ -22,10 +23,12 @@
  */
 
 import { existsSync, statSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs';
-import { dirname } from 'path';
+import { dirname, resolve, relative, sep } from 'path';
 import { randomBytes } from 'crypto';
 import type { BrainEngine } from './engine.ts';
 import { serializePageToMarkdown, resolvePageFilePath } from './markdown.ts';
+import { fetchSource } from './sources-load.ts';
+import { validateSourceId } from './utils.ts';
 
 /** Minimal logger surface — structurally compatible with operations.ts `Logger`. */
 export interface WriteThroughLogger {
@@ -42,7 +45,12 @@ export interface WriteThroughResult {
    *   - page_not_found_after_write: the DB row isn't readable back (the caller's
    *     DB write failed or targeted a different source).
    */
-  skipped?: 'no_repo_configured' | 'repo_not_found' | 'page_not_found_after_write';
+  skipped?:
+    | 'no_repo_configured'
+    | 'repo_not_found'
+    | 'page_not_found_after_write'
+    | 'source_archived'
+    | 'path_escape';
   /** Set when the render/write/rename itself threw (EACCES, ENOTDIR, disk full). */
   error?: string;
 }
@@ -54,11 +62,57 @@ export interface WritePageThroughOpts {
   logger?: WriteThroughLogger;
 }
 
+type WriteThroughTarget =
+  | { repoPath: string; layoutSourceId: string }
+  | { skipped: NonNullable<WriteThroughResult['skipped']> };
+
+async function resolveWriteThroughTarget(
+  engine: BrainEngine,
+  sourceId: string,
+): Promise<WriteThroughTarget> {
+  validateSourceId(sourceId);
+
+  const source = await fetchSource(engine, sourceId);
+  if (source?.archived === true) {
+    return { skipped: 'source_archived' };
+  }
+
+  const sourceLocalPath = typeof source?.local_path === 'string'
+    ? source.local_path.trim()
+    : '';
+  if (sourceLocalPath) {
+    // The sources table is authoritative for multi-source brains. A source
+    // local_path is already that source's filesystem root, so write directly
+    // under it. Do not use global sync.repo_path here: that mutable legacy
+    // config can point at a different source clone.
+    return { repoPath: sourceLocalPath, layoutSourceId: 'default' };
+  }
+
+  const legacyRepoPath = await engine.getConfig('sync.repo_path');
+  if (!legacyRepoPath) {
+    return { skipped: 'no_repo_configured' };
+  }
+
+  // Legacy shared-root layout for sources that predate per-source local_path.
+  return { repoPath: legacyRepoPath, layoutSourceId: sourceId };
+}
+
+function isLexicallyInside(root: string, filePath: string): boolean {
+  const rootAbs = resolve(root);
+  const fileAbs = resolve(filePath);
+  const rel = relative(rootAbs, fileAbs);
+  return rel !== ''
+    && !rel.startsWith('..')
+    && !rel.startsWith(`..${sep}`)
+    && resolve(rootAbs, rel) === fileAbs;
+}
+
 /**
  * Render the DB row for `slug` to markdown and atomically write it under
- * `sync.repo_path`. Never throws — failures are reported via the result's
- * `skipped` / `error` fields (the DB write is the durable sink; the file is
- * best-effort and reconciled by the next `gbrain sync`).
+ * the source-local filesystem root when the source has `local_path`, else
+ * the legacy `sync.repo_path` root. Never throws — failures are reported via
+ * the result's `skipped` / `error` fields (the DB write is the durable sink;
+ * the file is best-effort and reconciled by the next `gbrain sync`).
  */
 export async function writePageThrough(
   engine: BrainEngine,
@@ -67,11 +121,11 @@ export async function writePageThrough(
 ): Promise<WriteThroughResult> {
   const sourceId = opts.sourceId ?? 'default';
   try {
-    const repoPath = await engine.getConfig('sync.repo_path');
-    if (!repoPath) {
-      return { written: false, skipped: 'no_repo_configured' };
+    const target = await resolveWriteThroughTarget(engine, sourceId);
+    if ('skipped' in target) {
+      return { written: false, skipped: target.skipped };
     }
-    if (!existsSync(repoPath) || !statSync(repoPath).isDirectory()) {
+    if (!existsSync(target.repoPath) || !statSync(target.repoPath).isDirectory()) {
       return { written: false, skipped: 'repo_not_found' };
     }
 
@@ -85,7 +139,10 @@ export async function writePageThrough(
       frontmatterOverrides: opts.frontmatterOverrides,
     });
 
-    const filePath = resolvePageFilePath(repoPath, slug, sourceId);
+    const filePath = resolvePageFilePath(target.repoPath, slug, target.layoutSourceId);
+    if (!isLexicallyInside(target.repoPath, filePath)) {
+      return { written: false, skipped: 'path_escape' };
+    }
     mkdirSync(dirname(filePath), { recursive: true });
 
     // Atomic write: unique temp sibling + rename. Unique name (pid + random)

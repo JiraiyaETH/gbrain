@@ -196,7 +196,57 @@ describe('put_page write-through — config edge cases', () => {
 });
 
 describe('put_page write-through — multi-source filing', () => {
-  test('non-default source lands at brainDir/.sources/<id>/<slug>.md', async () => {
+  test('default source local_path wins over stale global sync.repo_path', async () => {
+    const canonicalDefaultRoot = path.join(tmpRoot, 'canonical-default');
+    const staleCodeRoot = path.join(tmpRoot, 'stale-code-clone');
+    fs.mkdirSync(canonicalDefaultRoot, { recursive: true });
+    fs.mkdirSync(staleCodeRoot, { recursive: true });
+    await engine.executeRaw(
+      "UPDATE sources SET local_path = $1 WHERE id = 'default'",
+      [canonicalDefaultRoot],
+    );
+    await engine.setConfig('sync.repo_path', staleCodeRoot);
+
+    const ctx = makeCtx({ sourceId: 'default', remote: true });
+    const result = (await putPage.handler(ctx, {
+      slug: 'capabilities/source-safe-write',
+      content: '---\ntitle: Source-safe write\n---\n\nbody',
+    })) as { write_through?: { written: boolean; path?: string } };
+
+    const expectedPath = path.join(canonicalDefaultRoot, 'capabilities/source-safe-write.md');
+    const wrongPath = path.join(staleCodeRoot, 'capabilities/source-safe-write.md');
+    expect(result.write_through?.written).toBe(true);
+    expect(result.write_through?.path).toBe(expectedPath);
+    expect(fs.existsSync(expectedPath)).toBe(true);
+    expect(fs.existsSync(wrongPath)).toBe(false);
+  });
+
+  test('non-default source with local_path writes under that source root', async () => {
+    const sourceRoot = path.join(tmpRoot, 'team-x-root');
+    const staleDefaultRoot = path.join(tmpRoot, 'stale-default-root');
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.mkdirSync(staleDefaultRoot, { recursive: true });
+    await engine.executeRaw(
+      "INSERT INTO sources (id, name, local_path) VALUES ('team-x-local', 'team-x-local', $1)",
+      [sourceRoot],
+    );
+    await engine.setConfig('sync.repo_path', staleDefaultRoot);
+
+    const ctx = makeCtx({ sourceId: 'team-x-local' });
+    const result = (await putPage.handler(ctx, {
+      slug: 'shared/page',
+      content: '---\ntitle: X\n---\n\nbody',
+    })) as { write_through?: { written: boolean; path?: string } };
+
+    const expectedPath = path.join(sourceRoot, 'shared/page.md');
+    const wrongPath = path.join(staleDefaultRoot, '.sources/team-x-local/shared/page.md');
+    expect(result.write_through?.written).toBe(true);
+    expect(result.write_through?.path).toBe(expectedPath);
+    expect(fs.existsSync(expectedPath)).toBe(true);
+    expect(fs.existsSync(wrongPath)).toBe(false);
+  });
+
+  test('non-default source without local_path keeps legacy .sources layout', async () => {
     // Create a non-default source row first. Schema fields: id (PK),
     // name (UNIQUE), plus the v0.26.5 archive columns with defaults.
     await engine.executeRaw(
