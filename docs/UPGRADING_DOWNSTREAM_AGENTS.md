@@ -104,7 +104,7 @@ to meeting page" can be replaced with:
 **Where:** Append to the end of `### Phase 2: Entity Detection`.
 
 **Why:** Same logic as brain-ops — eliminates manual `gbrain link` after writing
-originals/ideas pages that reference people or companies.
+ideas pages that reference people or companies.
 
 ```markdown
 **Auto-link (v0.12.0):** When you write/update an originals or ideas page that

@@ -63,23 +63,23 @@ describe('matchesSlugAllowList — glob semantics', () => {
   });
 
   test('shallow glob: prefix/* matches any single direct child segment', () => {
-    expect(matchesSlugAllowList('wiki/personal/reflections/2026-04-25-arete-paradox-a3f8c1',
-      ['wiki/personal/reflections/*'])).toBe(true);
-    expect(matchesSlugAllowList('wiki/personal/reflections',
-      ['wiki/personal/reflections/*'])).toBe(false);
+    expect(matchesSlugAllowList('reflections/2026-04-25-arete-paradox-a3f8c1',
+      ['reflections/*'])).toBe(true);
+    expect(matchesSlugAllowList('reflections',
+      ['reflections/*'])).toBe(false);
   });
 
   test('recursive: prefix/* matches deep children too', () => {
-    expect(matchesSlugAllowList('wiki/originals/ideas/2026-04-25-foo',
-      ['wiki/originals/*'])).toBe(true);
-    expect(matchesSlugAllowList('wiki/originals/ideas/foo/bar',
-      ['wiki/originals/*'])).toBe(true);
+    expect(matchesSlugAllowList('ideas/2026-04-25-foo',
+      ['ideas/*'])).toBe(true);
+    expect(matchesSlugAllowList('ideas/foo/bar',
+      ['ideas/*'])).toBe(true);
   });
 
   test('rejects slugs outside every prefix', () => {
     const list = [
-      'wiki/personal/reflections/*',
-      'wiki/originals/*',
+      'reflections/*',
+      'ideas/*',
     ];
     expect(matchesSlugAllowList('wiki/finance/secret', list)).toBe(false);
     expect(matchesSlugAllowList('wiki/people/alice', list)).toBe(false);
@@ -90,8 +90,8 @@ describe('matchesSlugAllowList — glob semantics', () => {
   });
 
   test('does NOT match prefix without trailing segment', () => {
-    expect(matchesSlugAllowList('wiki/personal/reflections',
-      ['wiki/personal/reflections/*'])).toBe(false);
+    expect(matchesSlugAllowList('reflections',
+      ['reflections/*'])).toBe(false);
   });
 });
 
@@ -100,7 +100,7 @@ describe('put_page — trusted-workspace allow-list', () => {
 
   test('REJECTS when slug is outside the allow-list', async () => {
     const ctx = makeCtx({
-      allowedSlugPrefixes: ['wiki/personal/reflections/*', 'wiki/originals/*'],
+      allowedSlugPrefixes: ['reflections/*', 'ideas/*'],
     });
     await expect(put_page.handler(ctx, {
       slug: 'wiki/finance/secret',
@@ -112,7 +112,7 @@ describe('put_page — trusted-workspace allow-list', () => {
 
   test('REJECTS path-traversal-like slug (slug regex catches it earlier in the import path; allow-list also catches via no-match)', async () => {
     const ctx = makeCtx({
-      allowedSlugPrefixes: ['wiki/personal/reflections/*'],
+      allowedSlugPrefixes: ['reflections/*'],
     });
     // The slug regex in validatePageSlug rejects `..`; here we test the
     // allow-list layer specifically with a slug that LOOKS legal but isn't on the list.
@@ -134,7 +134,7 @@ describe('put_page — legacy namespace check (regression guard)', () => {
     // ensures v0.21 doesn't regress that boundary.
     const ctx = makeCtx({ allowedSlugPrefixes: undefined });
     await expect(put_page.handler(ctx, {
-      slug: 'wiki/personal/reflections/2026-04-25-foo',
+      slug: 'reflections/2026-04-25-foo',
       content: '---\ntitle: x\n---\nbody',
     })).rejects.toMatchObject({
       code: 'permission_denied',
@@ -144,7 +144,7 @@ describe('put_page — legacy namespace check (regression guard)', () => {
   test('REJECTS write outside wiki/agents/<id>/ when allow-list is empty array', async () => {
     const ctx = makeCtx({ allowedSlugPrefixes: [] });
     await expect(put_page.handler(ctx, {
-      slug: 'wiki/personal/reflections/2026-04-25-foo',
+      slug: 'reflections/2026-04-25-foo',
       content: '---\ntitle: x\n---\nbody',
     })).rejects.toMatchObject({
       code: 'permission_denied',

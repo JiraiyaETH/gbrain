@@ -440,8 +440,8 @@ export interface SubagentHandlerData {
    * Trusted-workspace allow-list for put_page (v0.23 dream cycle).
    *
    * When set, the subagent's put_page calls are bounded to slugs matching
-   * any of these prefix globs (e.g. ["wiki/personal/reflections/*",
-   * "wiki/originals/*"]). When unset/empty, the legacy
+   * any of these prefix globs (e.g. ["reflections/*",
+   * "ideas/*"]). When unset/empty, the legacy
    * `wiki/agents/<subagentId>/...` namespace check applies.
    *
    * Trust comes from PROTECTED_JOB_NAMES gating subagent submission — MCP

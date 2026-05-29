@@ -321,7 +321,7 @@ describe('E2E synthesize — round-trip self-consumption guard (v0.23.2)', () =>
       await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
 
       // 1. Insert a reflection page in the DB the way the subagent would.
-      const slug = 'wiki/personal/reflections/2026-04-30-test-roundtrip-abc123';
+      const slug = 'reflections/2026-04-30-test-roundtrip-abc123';
       await rig.engine.putPage(slug, {
         type: 'note',
         title: 'Test reflection (E2E round-trip)',
@@ -386,7 +386,7 @@ describe('E2E synthesize — round-trip self-consumption guard (v0.23.2)', () =>
       await rig.engine.setConfig('dream.synthesize.enabled', 'true');
       await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
 
-      const slug = 'wiki/personal/reflections/2026-04-30-bypass-test-def456';
+      const slug = 'reflections/2026-04-30-bypass-test-def456';
       await rig.engine.putPage(slug, {
         type: 'note',
         title: 'Bypass test',
@@ -439,7 +439,7 @@ describe('E2E synthesize — round-trip self-consumption guard (v0.23.2)', () =>
       await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
 
       // Leaked reflection.
-      const slug = 'wiki/personal/reflections/2026-04-30-mixed-ghi789';
+      const slug = 'reflections/2026-04-30-mixed-ghi789';
       await rig.engine.putPage(slug, {
         type: 'note',
         title: 'Leaked',
@@ -453,7 +453,7 @@ describe('E2E synthesize — round-trip self-consumption guard (v0.23.2)', () =>
       // Real conversation transcript (no frontmatter, plain prose).
       writeFileSync(
         join(rig.corpusDir, '2026-04-30-real-convo.txt'),
-        'User: today I want to think about wiki/personal/reflections/identity.\n' +
+        'User: today I want to think about reflections/identity.\n' +
         'Agent: ' + 'meaningful conversation '.repeat(200),
       );
 

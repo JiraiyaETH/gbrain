@@ -100,6 +100,24 @@
       "description": "Pages where the user is the primary author of the idea — original thinking, not summarizations of someone else's work. voice-note-ingest, archive-crawler, signal-detector route content here when the user is the originator."
     },
     {
+      "kind": "reflection",
+      "directory": "reflections/",
+      "examples": ["reflections/YYYY-MM-DD-topic-hash.md"],
+      "description": "Dream-generated self-knowledge, emotional processing, and pattern-recognition notes distilled from conversations. Cite source transcripts/reflection evidence and cross-link relevant people/concepts."
+    },
+    {
+      "kind": "pattern",
+      "directory": "patterns/",
+      "examples": ["patterns/recurring-decision-loop.md"],
+      "description": "Recurring themes detected across multiple reflections. Must cite the reflection pages that constitute evidence."
+    },
+    {
+      "kind": "dream-cycle",
+      "directory": "projects/gbrain/dream-cycles/",
+      "examples": ["projects/gbrain/dream-cycles/YYYY-MM-DD.md"],
+      "description": "Generated Dream cycle indexes and closeout summaries. These are Brain-facing receipts for one maintenance pass, not live control-plane state."
+    },
+    {
       "kind": "voice-note",
       "directory": "voice-notes/",
       "examples": ["raw transcripts", "audio capture pages"],
@@ -153,13 +171,20 @@
     "Cross-link from related directories via back-links — do not duplicate content."
   ],
   "dream_synthesize_paths": {
-    "description": "Single source of truth for the v0.23 dream-cycle synthesize/patterns trusted-workspace allow-list. The cycle's synthesize phase reads this list and threads it as `allowed_slug_prefixes` to every subagent it dispatches; put_page enforces it server-side. Editing this list is the ONLY way to add a new directory the synthesis subagent may write to.",
+    "description": "Single source of truth for the Dream synthesize/patterns trusted-workspace allow-list and semantic write topology. The cycle threads globs as allowed_slug_prefixes to subagents; prompts and orchestrator summary writes consume routes. Editing this block is the only way to add a new directory Dream may write to.",
+    "routes": {
+      "reflections": "reflections",
+      "original_ideas": "ideas",
+      "patterns": "patterns",
+      "people": "people",
+      "cycle_summaries": "projects/gbrain/dream-cycles"
+    },
     "globs": [
-      "wiki/personal/reflections/*",
-      "wiki/originals/*",
-      "wiki/personal/patterns/*",
-      "wiki/people/*",
-      "dream-cycle-summaries/*"
+      "reflections/*",
+      "ideas/*",
+      "patterns/*",
+      "people/*",
+      "projects/gbrain/dream-cycles/*"
     ]
   }
 }

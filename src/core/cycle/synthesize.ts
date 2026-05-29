@@ -29,6 +29,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { chat as gatewayChat, validateModelId, type ChatResult } from '../ai/gateway.ts';
+import { resolveRecipe } from '../ai/model-resolver.ts';
 import { AIConfigError } from '../ai/errors.ts';
 import { normalizeModelId } from '../model-id.ts';
 import { hasAnthropicKey } from '../ai/anthropic-key.ts';
@@ -43,6 +44,12 @@ import { serializeMarkdown, serializePageToMarkdown } from '../markdown.ts';
 import type { Page, PageType } from '../types.ts';
 import { validateSourceId } from '../utils.ts';
 import { safeSplitIndex } from '../text-safe.ts';
+import {
+  buildDreamCycleSummarySlug,
+  loadAllowedSlugPrefixes,
+  loadDreamSlugTopology,
+  type DreamSlugTopology,
+} from './dream-topology.ts';
 
 // Slug regex from validatePageSlug — kept in sync.
 // Used for the orchestrator-written summary index slug.
@@ -397,6 +404,7 @@ export async function runPhaseSynthesize(
 
     // Fan-out: submit one subagent per worth-processing transcript (or one
     // per chunk for transcripts that exceed the model's per-prompt budget).
+    const topology = await loadDreamSlugTopology();
     const allowedSlugPrefixes = await loadAllowedSlugPrefixes();
     if (allowedSlugPrefixes.length === 0) {
       return failed(makeError('InternalError', 'NO_ALLOWLIST',
@@ -460,7 +468,7 @@ export async function runPhaseSynthesize(
           : config.model;
       for (let i = 0; i < chunks.length; i++) {
         const childData: SubagentHandlerData = {
-          prompt: buildSynthesisPrompt(t, chunks[i], i, chunks.length, priorContradictionsBlock),
+          prompt: buildSynthesisPrompt(t, chunks[i], i, chunks.length, priorContradictionsBlock, topology),
           model: subagentModel,
           max_turns: 30,
           allowed_slug_prefixes: allowedSlugPrefixes,
@@ -531,7 +539,7 @@ export async function runPhaseSynthesize(
     // Summary index page (deterministic; orchestrator-written via direct
     // engine.putPage so no allow-list path needed).
     const summaryDate = opts.date ?? today();
-    const summarySlug = `dream-cycle-summaries/${summaryDate}`;
+    const summarySlug = buildSummarySlug(summaryDate, topology);
     // Back-compat: writeSummaryPage takes string[] for display; map refs back to slugs.
     const writtenSlugs = writtenRefs.map(r => r.slug);
     if (SUMMARY_SLUG_RE.test(summarySlug)) {
@@ -673,29 +681,6 @@ async function checkCooldown(
   const expiresMs = lastMs + hours * 60 * 60 * 1000;
   if (Date.now() >= expiresMs) return { active: false };
   return { active: true, expires_at: new Date(expiresMs).toISOString() };
-}
-
-// ── Allow-list source of truth ───────────────────────────────────────
-
-async function loadAllowedSlugPrefixes(): Promise<string[]> {
-  // Search a few known locations relative to the binary / repo. The first
-  // hit wins; if none found, return [].
-  const candidates = [
-    join(process.cwd(), 'skills', '_brain-filing-rules.json'),
-    join(__dirname, '..', '..', '..', 'skills', '_brain-filing-rules.json'),
-  ];
-  for (const path of candidates) {
-    if (!existsSync(path)) continue;
-    try {
-      const raw = readFileSync(path, 'utf8');
-      const parsed = JSON.parse(raw) as { dream_synthesize_paths?: { globs?: unknown } };
-      const globs = parsed?.dream_synthesize_paths?.globs;
-      if (Array.isArray(globs) && globs.every(g => typeof g === 'string')) {
-        return globs as string[];
-      }
-    } catch { /* try next */ }
-  }
-  return [];
 }
 
 // ── Significance judge (gateway-routed; provider-agnostic) ──────────────
@@ -939,6 +924,7 @@ function buildSynthesisPrompt(
   chunkIdx: number,
   chunkTotal: number,
   priorContradictionsBlock = '',
+  topology: DreamSlugTopology,
 ): string {
   const dateHint = t.inferredDate ?? today();
   const baseSlugSegment = sanitizeForSlug(t.basename) || `session-${dateHint}`;
@@ -967,10 +953,10 @@ OUTPUT POLICY (ALL of these are required)
 
 TASKS
 A. Reflections (self-knowledge, pattern recognition, emotional processing):
-   slug: \`wiki/personal/reflections/${dateHint}-<topic-slug>-${hashSuffix}\`
+   slug: \`${topology.reflections}/${dateHint}-<topic-slug>-${hashSuffix}\`
 
 B. Originals (new ideas, frames, theses, mental models):
-   slug: \`wiki/originals/ideas/${dateHint}-<idea-slug>-${hashSuffix}\`
+   slug: \`${topology.originalIdeas}/${dateHint}-<idea-slug>-${hashSuffix}\`
 
 C. People mentions: search first; if a page exists, do not put_page over it (the orchestrator handles people enrichment via timeline entries — your job is the reflection/original synthesis, NOT modifying existing person pages).
 
@@ -982,6 +968,10 @@ ${chunkText}
 ---
 
 When done, briefly list the slugs you wrote in your final message so the orchestrator can audit.`;
+}
+
+function buildSummarySlug(date: string, topology: DreamSlugTopology): string {
+  return buildDreamCycleSummarySlug(date, topology);
 }
 
 function sanitizeForSlug(s: string): string {
@@ -1242,4 +1232,6 @@ function makeError(cls: string, code: string, message: string, hint?: string): P
 // double-encoded jsonb regression). Not part of the runtime contract.
 export const __testing = {
   collectChildPutPageSlugs,
+  buildSynthesisPrompt,
+  buildSummarySlug,
 };

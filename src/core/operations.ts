@@ -174,8 +174,8 @@ export function validatePageSlug(slug: string): void {
  * Glob form: `<prefix>/*` matches any slug starting with `<prefix>/` and
  * having at least one more segment (single or multi). Bare `<prefix>` (no
  * trailing `/*`) matches that exact slug only. The `*` is intentionally
- * permissive — depth is unbounded, so `wiki/originals/*` matches both
- * `wiki/originals/idea-x` and `wiki/originals/ideas/2026-04-25-idea-y`.
+ * permissive — depth is unbounded, so `ideas/*` matches both
+ * `originals/idea-x` and `ideas/2026-04-25-idea-y`.
  *
  * Used by the v0.23 dream-cycle trusted-workspace path. Order doesn't
  * matter; the first match wins (returns true on any match).
@@ -315,7 +315,7 @@ export interface OperationContext {
   /**
    * Trusted-workspace allow-list (v0.23 dream cycle). When the cycle's
    * synthesize/patterns phases dispatch a subagent, they thread an
-   * explicit list of slug-prefix globs (e.g. "wiki/personal/reflections/*")
+   * explicit list of slug-prefix globs (e.g. "reflections/*")
    * through this field. put_page enforces it BEFORE the legacy
    * `wiki/agents/<id>/...` namespace check.
    *

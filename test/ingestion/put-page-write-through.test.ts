@@ -148,10 +148,10 @@ describe('put_page write-through — trust gating', () => {
       remote: true,
       viaSubagent: true,
       subagentId: 7,
-      allowedSlugPrefixes: ['wiki/personal/reflections/*'],
+      allowedSlugPrefixes: ['reflections/*'],
     });
     const result = (await putPage.handler(ctx, {
-      slug: 'wiki/personal/reflections/note',
+      slug: 'reflections/note',
       content: '---\ntitle: R\n---\n\nreflection',
     })) as { write_through?: { written: boolean; path?: string } };
     expect(result.write_through?.written).toBe(true);

@@ -48,14 +48,14 @@ describe('E2E allow-list — trusted-workspace path', () => {
       subagentId: 999,
       engine,
       config,
-      allowedSlugPrefixes: ['wiki/personal/reflections/*'],
+      allowedSlugPrefixes: ['reflections/*'],
     });
     const tool = findPutPageTool(tools);
     await tool.execute(
-      { slug: 'wiki/personal/reflections/2026-04-25-arete-paradox-a3f8c1', content: SAMPLE_BODY },
+      { slug: 'reflections/2026-04-25-arete-paradox-a3f8c1', content: SAMPLE_BODY },
       { engine, jobId: 7777, remote: true },
     );
-    const page = await engine.getPage('wiki/personal/reflections/2026-04-25-arete-paradox-a3f8c1');
+    const page = await engine.getPage('reflections/2026-04-25-arete-paradox-a3f8c1');
     expect(page).not.toBeNull();
     expect(page!.title).toBe('A reflection');
   });
@@ -65,7 +65,7 @@ describe('E2E allow-list — trusted-workspace path', () => {
       subagentId: 999,
       engine,
       config,
-      allowedSlugPrefixes: ['wiki/personal/reflections/*'],
+      allowedSlugPrefixes: ['reflections/*'],
     });
     const tool = findPutPageTool(tools);
     let threw = false;
@@ -89,14 +89,14 @@ describe('E2E allow-list — trusted-workspace path', () => {
       subagentId: 999,
       engine,
       config,
-      allowedSlugPrefixes: ['wiki/personal/reflections/*', 'wiki/originals/*'],
+      allowedSlugPrefixes: ['reflections/*', 'ideas/*'],
     });
     const tool = findPutPageTool(tools);
     await tool.execute(
-      { slug: 'wiki/originals/ideas/2026-04-25-thousand-pound-armor', content: SAMPLE_BODY },
+      { slug: 'ideas/2026-04-25-thousand-pound-armor', content: SAMPLE_BODY },
       { engine, jobId: 7779, remote: true },
     );
-    expect(await engine.getPage('wiki/originals/ideas/2026-04-25-thousand-pound-armor')).not.toBeNull();
+    expect(await engine.getPage('ideas/2026-04-25-thousand-pound-armor')).not.toBeNull();
   });
 });
 
@@ -113,7 +113,7 @@ describe('E2E allow-list — legacy namespace fallback', () => {
     let threw = false;
     try {
       await tool.execute(
-        { slug: 'wiki/personal/reflections/2026-04-25-bypass-attempt', content: SAMPLE_BODY },
+        { slug: 'reflections/2026-04-25-bypass-attempt', content: SAMPLE_BODY },
         { engine, jobId: 7780, remote: true },
       );
     } catch (e) {
