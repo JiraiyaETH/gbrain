@@ -3,6 +3,8 @@ import { operations } from '../src/core/operations.ts';
 import {
   filterMcpOperationsForEnv,
   isReadOnlyMcpEnabled,
+  mcpToolNotExposedResult,
+  parseMcpAllowedTools,
   readOnlyBlockedToolResult,
 } from '../src/mcp/read-only.ts';
 
@@ -40,6 +42,39 @@ describe('MCP read-only mode', () => {
     ]) {
       expect(names.has(name)).toBe(false);
     }
+  });
+
+  test('GBRAIN_MCP_ALLOWED_TOOLS scopes stdio exposure without enabling admin sprawl', () => {
+    const env = {
+      GBRAIN_MCP_ALLOWED_TOOLS: 'get_page, search, put_page, add_link, add_timeline_entry',
+    };
+    const allowed = parseMcpAllowedTools(env);
+    expect(allowed).toEqual(new Set(['get_page', 'search', 'put_page', 'add_link', 'add_timeline_entry']));
+
+    const names = new Set(filterMcpOperationsForEnv(operations, env).map(op => op.name));
+    expect(names).toEqual(new Set(['get_page', 'search', 'put_page', 'add_link', 'add_timeline_entry']));
+    expect(names.has('delete_page')).toBe(false);
+    expect(names.has('sources_remove')).toBe(false);
+  });
+
+  test('read-only mode wins over allowed-tools and cannot be bypassed by listing write tools', () => {
+    const names = new Set(filterMcpOperationsForEnv(operations, {
+      GBRAIN_MCP_READ_ONLY: '1',
+      GBRAIN_MCP_ALLOWED_TOOLS: 'get_page,put_page,add_link',
+    }).map(op => op.name));
+
+    expect(names).toEqual(new Set(['get_page']));
+  });
+
+  test('allow-list block response names the configured scope', () => {
+    const result = mcpToolNotExposedResult('delete_page', {
+      GBRAIN_MCP_ALLOWED_TOOLS: 'get_page,put_page',
+    });
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toBe('mcp_tool_not_allowed');
+    expect(body.allowed_scope).toBe('configured_allowlist');
+    expect(body.allowed_tools).toEqual(['get_page', 'put_page']);
   });
 
   test('read-only block response is JSON-shaped MCP error content', () => {

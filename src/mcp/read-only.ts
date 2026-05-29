@@ -7,6 +7,16 @@ export function isReadOnlyMcpEnabled(env: Record<string, string | undefined> = p
   return typeof value === 'string' && TRUE_VALUES.has(value.trim().toLowerCase());
 }
 
+export function parseMcpAllowedTools(env: Record<string, string | undefined> = process.env): Set<string> | null {
+  const raw = env.GBRAIN_MCP_ALLOWED_TOOLS;
+  if (typeof raw !== 'string' || raw.trim() === '') return null;
+  const names = raw
+    .split(',')
+    .map(name => name.trim())
+    .filter(Boolean);
+  return names.length > 0 ? new Set(names) : null;
+}
+
 const READ_ONLY_ADMIN_TOOLS = new Set([
   'get_stats',
   'get_health',
@@ -26,20 +36,33 @@ export function filterMcpOperationsForEnv(
   ops: readonly Operation[],
   env: Record<string, string | undefined> = process.env,
 ): Operation[] {
-  if (!isReadOnlyMcpEnabled(env)) return [...ops];
-  return ops.filter(isReadOnlyOperation);
+  const allowedTools = parseMcpAllowedTools(env);
+  const scoped = isReadOnlyMcpEnabled(env) ? ops.filter(isReadOnlyOperation) : [...ops];
+  if (!allowedTools) return scoped;
+  return scoped.filter(op => allowedTools.has(op.name));
 }
 
-export function readOnlyBlockedToolResult(name: string) {
+export function mcpToolNotExposedResult(name: string, env: Record<string, string | undefined> = process.env) {
+  const readOnly = isReadOnlyMcpEnabled(env);
+  const allowedTools = parseMcpAllowedTools(env);
+  const reason = readOnly ? 'read_only_mcp' : 'mcp_tool_not_allowed';
+  const message = readOnly
+    ? `Tool is not exposed because GBRAIN_MCP_READ_ONLY=1: ${name}`
+    : `Tool is not exposed by GBRAIN_MCP_ALLOWED_TOOLS: ${name}`;
   return {
     content: [{
       type: 'text' as const,
       text: JSON.stringify({
-        error: 'read_only_mcp',
-        message: `Tool is not exposed because GBRAIN_MCP_READ_ONLY=1: ${name}`,
-        allowed_scope: 'read',
+        error: reason,
+        message,
+        allowed_scope: readOnly ? 'read' : 'configured_allowlist',
+        allowed_tools: allowedTools ? [...allowedTools].sort() : undefined,
       }, null, 2),
     }],
     isError: true,
   };
+}
+
+export function readOnlyBlockedToolResult(name: string) {
+  return mcpToolNotExposedResult(name, { GBRAIN_MCP_READ_ONLY: '1' });
 }

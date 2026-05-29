@@ -7,7 +7,7 @@ import { VERSION } from '../version.ts';
 import { buildToolDefs } from './tool-defs.ts';
 import { dispatchToolCall, validateParams, buildOperationContext } from './dispatch.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
-import { filterMcpOperationsForEnv, readOnlyBlockedToolResult } from './read-only.ts';
+import { filterMcpOperationsForEnv, mcpToolNotExposedResult } from './read-only.ts';
 
 export async function startMcpServer(engine: BrainEngine) {
   const server = new Server(
@@ -34,7 +34,7 @@ export async function startMcpServer(engine: BrainEngine) {
     const { name, arguments: params } = request.params;
     const requestedOperation = operations.find(op => op.name === name);
     if (requestedOperation && !exposedOperationNames.has(name)) {
-      return readOnlyBlockedToolResult(name);
+      return mcpToolNotExposedResult(name);
     }
     // v0.28: stdio MCP has no per-token auth (local pipe). Default the
     // takes-holder allow-list to ['world'] so agent-facing callers don't
