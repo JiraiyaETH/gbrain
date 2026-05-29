@@ -66,6 +66,24 @@ function parseArg(args: string[], flag: string): string | undefined {
   return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
 }
 
+const AUTOPILOT_VALUE_FLAGS = new Set(['--repo', '--interval', '--target']);
+
+export type AutopilotControlCommand = 'install' | 'uninstall' | 'status';
+
+export function resolveAutopilotControlCommand(args: string[]): AutopilotControlCommand | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (AUTOPILOT_VALUE_FLAGS.has(arg)) {
+      i += 1;
+      continue;
+    }
+    if (arg === '--install' || arg === 'install') return 'install';
+    if (arg === '--uninstall' || arg === 'uninstall') return 'uninstall';
+    if (arg === '--status' || arg === 'status') return 'status';
+  }
+  return undefined;
+}
+
 function logError(phase: string, e: unknown) {
   const msg = e instanceof Error ? e.message : String(e);
   const ts = new Date().toISOString().slice(0, 19);
@@ -130,15 +148,16 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
     return;
   }
 
-  if (args.includes('--install')) {
+  const controlCommand = resolveAutopilotControlCommand(args);
+  if (controlCommand === 'install') {
     await installDaemon(engine, args);
     return;
   }
-  if (args.includes('--uninstall')) {
+  if (controlCommand === 'uninstall') {
     uninstallDaemon();
     return;
   }
-  if (args.includes('--status')) {
+  if (controlCommand === 'status') {
     showStatus(args.includes('--json'));
     return;
   }
