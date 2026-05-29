@@ -31,6 +31,7 @@ import { buildToolDefs } from './tool-defs.ts';
 import { operations } from '../core/operations.ts';
 import { VERSION } from '../version.ts';
 import { dispatchToolCall } from './dispatch.ts';
+import { filterMcpOperationsForEnv, readOnlyBlockedToolResult } from './read-only.ts';
 import { buildDefaultLimiters, type RateLimiter } from './rate-limit.ts';
 import { sqlQueryForEngine } from '../core/sql-query.ts';
 
@@ -135,7 +136,9 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
   const limiters = opts.limiters || buildDefaultLimiters();
   const bodyCap = envInt('GBRAIN_HTTP_MAX_BODY_BYTES', DEFAULT_BODY_CAP);
   const corsAllowlist = parseCorsAllowlist();
-  const tools = buildToolDefs(operations);
+  const mcpOperations = filterMcpOperationsForEnv(operations);
+  const exposedOperationNames = new Set(mcpOperations.map(op => op.name));
+  const tools = buildToolDefs(mcpOperations);
 
   /**
    * v0.41.3 (T6): single consolidated CORS header builder. Pre-fix there were
@@ -358,11 +361,17 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
         // takes_search / query (when it returns takes) can server-side filter.
         // v0.34.1 (#861): thread source-isolation scope. Legacy access_tokens
         // path defaults to 'default' per AuthResult.sourceId above.
-        const result = await dispatchToolCall(engine, toolName, args, {
-          remote: true,
-          takesHoldersAllowList: auth.takesHoldersAllowList,
-          sourceId: auth.sourceId,
-        });
+        let result;
+        const requestedOperation = operations.find(op => op.name === toolName);
+        if (requestedOperation && !exposedOperationNames.has(toolName)) {
+          result = readOnlyBlockedToolResult(toolName);
+        } else {
+          result = await dispatchToolCall(engine, toolName, args, {
+            remote: true,
+            takesHoldersAllowList: auth.takesHoldersAllowList,
+            sourceId: auth.sourceId,
+          });
+        }
         const status = result.isError ? 'error' : 'success';
         logRequest(auth.tokenName!, `tools/call:${toolName}`, status, Date.now() - startedMs);
         return Response.json(
