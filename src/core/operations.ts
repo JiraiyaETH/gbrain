@@ -3766,16 +3766,23 @@ const code_def: Operation = {
   name: 'code_def',
   description: CODE_DEF_DESCRIPTION,
   params: {
-    symbol: { type: 'string', required: true, description: 'Symbol name (bare token; e.g., parseMarkdown, BrainEngine).' },
+    symbol: { type: 'string', required: true, description: 'Symbol name (bare token; e.g. parseMarkdown, BrainEngine).' },
     limit: { type: 'number', description: 'Max definition sites returned. Default 20.' },
     lang: { type: 'string', description: "Filter by content_chunks.language (e.g. 'typescript', 'python')." },
+    source_id: { type: 'string', description: "Scope to a single source. Defaults to ctx.sourceId; pass '__all__' to force cross-source." },
+    all_sources: { type: 'boolean', description: 'Force cross-source search (equivalent to source_id=__all__).' },
   },
   scope: 'read',
   handler: async (ctx, p) => {
     const { findCodeDef } = await import('../commands/code-def.ts');
+    const sourceIdParam = typeof p.source_id === 'string' ? p.source_id : undefined;
+    const allSources = p.all_sources === true || sourceIdParam === '__all__';
+    const sourceId = allSources ? undefined : sourceIdParam ?? ctx.sourceId;
     const defs = await findCodeDef(ctx.engine, p.symbol as string, {
       limit: (p.limit as number) ?? 20,
       language: (p.lang as string) || undefined,
+      sourceId,
+      allSources,
     });
     return { symbol: p.symbol as string, count: defs.length, defs };
   },
@@ -3789,13 +3796,20 @@ const code_refs: Operation = {
     symbol: { type: 'string', required: true, description: 'Symbol to find references to.' },
     limit: { type: 'number', description: 'Max references returned. Default 50.' },
     lang: { type: 'string', description: "Filter by content_chunks.language." },
+    source_id: { type: 'string', description: "Scope to a single source. Defaults to ctx.sourceId; pass '__all__' to force cross-source." },
+    all_sources: { type: 'boolean', description: 'Force cross-source search (equivalent to source_id=__all__).' },
   },
   scope: 'read',
   handler: async (ctx, p) => {
     const { findCodeRefs } = await import('../commands/code-refs.ts');
+    const sourceIdParam = typeof p.source_id === 'string' ? p.source_id : undefined;
+    const allSources = p.all_sources === true || sourceIdParam === '__all__';
+    const sourceId = allSources ? undefined : sourceIdParam ?? ctx.sourceId;
     const refs = await findCodeRefs(ctx.engine, p.symbol as string, {
       limit: (p.limit as number) ?? 50,
       language: (p.lang as string) || undefined,
+      sourceId,
+      allSources,
     });
     return { symbol: p.symbol as string, count: refs.length, refs };
   },
@@ -3812,6 +3826,7 @@ const code_blast: Operation = {
     depth: { type: 'number', description: 'Hop cap (default 5, max 8)' },
     max_nodes: { type: 'number', description: 'Result-set cap (default 200)' },
     exact: { type: 'boolean', description: 'Skip bare-name disambiguation; treat symbol as exact qualified name' },
+    source_id: { type: 'string', description: 'Scope to a single source. Defaults to ctx.sourceId.' },
   },
   scope: 'read',
   handler: async (ctx, p) => {
@@ -3821,14 +3836,15 @@ const code_blast: Operation = {
     const depth = Math.min((p.depth as number) ?? 5, 8);
     const max_nodes = Math.min((p.max_nodes as number) ?? 200, 200);
     const exact = (p.exact as boolean) ?? false;
+    const sourceId = (p.source_id as string | undefined) ?? ctx.sourceId ?? 'default';
     return getCachedOrCompute(
       ctx.engine,
-      { symbol_qualified: symbol, depth, source_id: ctx.sourceId },
+      { symbol_qualified: symbol, depth, source_id: sourceId },
       () => runRecursiveWalk(ctx.engine, symbol, {
         direction: 'callers',
         depth,
         maxNodes: max_nodes,
-        sourceId: ctx.sourceId,
+        sourceId,
         exact,
       }),
     );
@@ -3844,6 +3860,7 @@ const code_flow: Operation = {
     depth: { type: 'number', description: 'Hop cap (default 8, max 12)' },
     max_nodes: { type: 'number', description: 'Result-set cap (default 200)' },
     exact: { type: 'boolean', description: 'Skip bare-name disambiguation' },
+    source_id: { type: 'string', description: 'Scope to a single source. Defaults to ctx.sourceId.' },
   },
   scope: 'read',
   handler: async (ctx, p) => {
@@ -3853,14 +3870,15 @@ const code_flow: Operation = {
     const depth = Math.min((p.depth as number) ?? 8, 12);
     const max_nodes = Math.min((p.max_nodes as number) ?? 200, 200);
     const exact = (p.exact as boolean) ?? false;
+    const sourceId = (p.source_id as string | undefined) ?? ctx.sourceId ?? 'default';
     return getCachedOrCompute(
       ctx.engine,
-      { symbol_qualified: symbol + ':flow', depth, source_id: ctx.sourceId },
+      { symbol_qualified: symbol + ':flow', depth, source_id: sourceId },
       () => runRecursiveWalk(ctx.engine, symbol, {
         direction: 'callees',
         depth,
         maxNodes: max_nodes,
-        sourceId: ctx.sourceId,
+        sourceId,
         exact,
       }),
     );

@@ -44,11 +44,11 @@ describe('BRAIN_TOOL_ALLOWLIST', () => {
     expect(missing).toEqual([]);
   });
 
-  test('contains the v0.15 read-only 10 + put_page + v0.29 salience pair', () => {
+  test('contains read-only brain tools, put_page, salience pair, and code-intel tools', () => {
     // v0.29 added get_recent_salience + find_anomalies (read-only).
     // get_recent_transcripts is deliberately excluded — subagent calls always
     // have ctx.remote=true, and the v0.29 trust gate rejects remote callers.
-    expect(BRAIN_TOOL_ALLOWLIST.size).toBe(13);
+    expect(BRAIN_TOOL_ALLOWLIST.size).toBe(19);
     expect(BRAIN_TOOL_ALLOWLIST.has('query')).toBe(true);
     expect(BRAIN_TOOL_ALLOWLIST.has('search')).toBe(true);
     expect(BRAIN_TOOL_ALLOWLIST.has('get_page')).toBe(true);
@@ -57,6 +57,9 @@ describe('BRAIN_TOOL_ALLOWLIST', () => {
     expect(BRAIN_TOOL_ALLOWLIST.has('get_recent_salience')).toBe(true);
     expect(BRAIN_TOOL_ALLOWLIST.has('find_anomalies')).toBe(true);
     expect(BRAIN_TOOL_ALLOWLIST.has('get_recent_transcripts')).toBe(false);
+    for (const name of ['code_callers', 'code_callees', 'code_def', 'code_refs', 'code_blast', 'code_flow']) {
+      expect(BRAIN_TOOL_ALLOWLIST.has(name)).toBe(true);
+    }
   });
 
   test('does NOT contain destructive ops', () => {
@@ -64,6 +67,7 @@ describe('BRAIN_TOOL_ALLOWLIST', () => {
     expect(BRAIN_TOOL_ALLOWLIST.has('delete_page')).toBe(false);
     expect(BRAIN_TOOL_ALLOWLIST.has('delete_file')).toBe(false);
     expect(BRAIN_TOOL_ALLOWLIST.has('sync')).toBe(false);
+    expect(BRAIN_TOOL_ALLOWLIST.has('code_traversal_cache_clear')).toBe(false);
   });
 });
 
@@ -93,6 +97,15 @@ describe('buildBrainTools', () => {
     const getPage = tools.find(t => t.name === 'brain_get_page');
     const op = operations.find(o => o.name === 'get_page');
     expect(getPage?.description).toBe(op!.description);
+  });
+
+  test('surfaces read-only code-intelligence tools for subagents', () => {
+    const tools = buildBrainTools({ subagentId: 1, engine, config });
+    const toolNames = new Set(tools.map(t => t.name));
+    for (const name of ['code_callers', 'code_callees', 'code_def', 'code_refs', 'code_blast', 'code_flow']) {
+      expect(toolNames.has(`brain_${name}`)).toBe(true);
+    }
+    expect(toolNames.has('brain_code_traversal_cache_clear')).toBe(false);
   });
 
   test('put_page schema is namespace-wrapped per subagent', () => {

@@ -29,7 +29,7 @@ export interface CodeDefResult {
 export async function findCodeDef(
   engine: BrainEngine,
   symbol: string,
-  opts: { limit?: number; language?: string } = {},
+  opts: { limit?: number; language?: string; sourceId?: string; allSources?: boolean } = {},
 ): Promise<CodeDefResult[]> {
   const limit = opts.limit ?? 20;
   // v0.41 D2: SQL DDL targets (table/view/index/procedure/schema/database/
@@ -40,12 +40,22 @@ export async function findCodeDef(
     'function', 'class', 'interface', 'type', 'enum', 'struct', 'trait', 'module', 'contract',
     'table', 'view', 'index', 'procedure', 'schema', 'database', 'trigger',
   ];
-  const params: unknown[] = [symbol, limit];
-  let whereLang = '';
+  const sourceId = opts.allSources || opts.sourceId === '__all__' ? undefined : opts.sourceId;
+  const params: unknown[] = [symbol];
+  const filters = [
+    'cc.symbol_name = $1',
+    `p.page_kind = 'code'`,
+    `cc.symbol_type IN ('${DEF_TYPES.join("','")}', 'export statement')`,
+  ];
   if (opts.language) {
-    params.splice(1, 0, opts.language);
-    whereLang = 'AND cc.language = $2';
+    params.push(opts.language);
+    filters.push(`cc.language = $${params.length}`);
   }
+  if (sourceId) {
+    params.push(sourceId);
+    filters.push(`p.source_id = $${params.length}`);
+  }
+  params.push(limit);
   // Deterministic ordering: exact type matches first (functions before
   // export_statement wrappers), then page slug, then line number.
   const rows = await engine.executeRaw<{
@@ -57,10 +67,7 @@ export async function findCodeDef(
             cc.start_line, cc.end_line, cc.chunk_text
      FROM content_chunks cc
      JOIN pages p ON p.id = cc.page_id
-     WHERE cc.symbol_name = $1
-       ${whereLang}
-       AND p.page_kind = 'code'
-       AND cc.symbol_type IN ('${DEF_TYPES.join("','")}', 'export statement')
+     WHERE ${filters.join('\n       AND ')}
      ORDER BY
        CASE cc.symbol_type
          WHEN 'function' THEN 1 WHEN 'class' THEN 2 WHEN 'interface' THEN 3
@@ -116,8 +123,15 @@ export async function runCodeDef(engine: BrainEngine, args: string[]): Promise<v
   }
   const limit = parseInt(parseFlag(args, '--limit') || '20', 10);
   const language = parseFlag(args, '--lang');
+  const sourceId = parseFlag(args, '--source');
+  const allSources = args.includes('--all-sources') || sourceId === '__all__';
   try {
-    const results = await findCodeDef(engine, sym, { limit, language });
+    const results = await findCodeDef(engine, sym, {
+      limit,
+      language,
+      sourceId: allSources ? undefined : sourceId,
+      allSources,
+    });
     if (shouldEmitJson(args)) {
       console.log(JSON.stringify({ symbol: sym, count: results.length, results }, null, 2));
     } else {

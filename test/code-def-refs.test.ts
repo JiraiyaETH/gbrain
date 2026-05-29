@@ -22,6 +22,9 @@ beforeAll(async () => {
   engine = new PGLiteEngine();
   await engine.connect({});
   await engine.initSchema();
+  await engine.executeRaw(
+    `INSERT INTO sources (id, name, config) VALUES ('other-code', 'Other Code', '{}'::jsonb) ON CONFLICT (id) DO NOTHING`,
+  );
 
   // Seed: two TypeScript files. One defines BrainEngine, another uses it.
   // Each symbol is deliberately large enough to stay independent under
@@ -144,6 +147,27 @@ export async function performDump(engine: BrainEngine, slug: string): Promise<Br
 `;
   await importCodeFile(engine, 'src/engine.ts', brainEngineSrc, { noEmbed: true });
   await importCodeFile(engine, 'src/sync.ts', consumerSrc, { noEmbed: true });
+
+  const otherBrainEngineSrc = `export interface BrainEngine {
+  lookupOnlyFromOtherSource(slug: string): Promise<string>;
+  codeSourceMarker(): string;
+}
+
+export function makeOtherBrainEngine(): BrainEngine {
+  return {
+    async lookupOnlyFromOtherSource(slug: string) {
+      return 'other:' + slug;
+    },
+    codeSourceMarker() {
+      return 'other-code';
+    },
+  };
+}
+`;
+  await importCodeFile(engine, 'src/other-engine.ts', otherBrainEngineSrc, {
+    noEmbed: true,
+    sourceId: 'other-code',
+  });
 });
 
 afterAll(async () => {
@@ -182,6 +206,19 @@ describe('findCodeDef', () => {
     const results = await findCodeDef(engine, 'BrainEngine', { language: 'python' });
     expect(results).toEqual([]);
   });
+
+  test('source filter narrows definitions to the requested code source', async () => {
+    const results = await findCodeDef(engine, 'BrainEngine', { sourceId: 'other-code' });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results.every((r) => r.slug === 'src-other-engine-ts')).toBe(true);
+  });
+
+  test('allSources bypass includes definitions from every code source', async () => {
+    const results = await findCodeDef(engine, 'BrainEngine', { allSources: true });
+    const slugs = new Set(results.map((r) => r.slug));
+    expect(slugs.has('src-engine-ts')).toBe(true);
+    expect(slugs.has('src-other-engine-ts')).toBe(true);
+  });
 });
 
 describe('findCodeRefs', () => {
@@ -218,5 +255,11 @@ describe('findCodeRefs', () => {
       expect(r.snippet.length).toBeGreaterThan(0);
       expect(r.snippet.length).toBeLessThanOrEqual(500);
     }
+  });
+
+  test('source filter narrows references to the requested code source', async () => {
+    const results = await findCodeRefs(engine, 'BrainEngine', { sourceId: 'other-code' });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results.every((r) => r.slug === 'src-other-engine-ts')).toBe(true);
   });
 });

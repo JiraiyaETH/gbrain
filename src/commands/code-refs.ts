@@ -35,14 +35,19 @@ export interface CodeRefResult {
 export async function findCodeRefs(
   engine: BrainEngine,
   symbol: string,
-  opts: { limit?: number; language?: string } = {},
+  opts: { limit?: number; language?: string; sourceId?: string; allSources?: boolean } = {},
 ): Promise<CodeRefResult[]> {
   const limit = opts.limit ?? 50;
+  const sourceId = opts.allSources || opts.sourceId === '__all__' ? undefined : opts.sourceId;
   const params: unknown[] = [`%${symbol}%`];
-  let whereLang = '';
+  const filters = [`p.page_kind = 'code'`, 'cc.chunk_text ILIKE $1'];
   if (opts.language) {
     params.push(opts.language);
-    whereLang = `AND cc.language = $${params.length}`;
+    filters.push(`cc.language = $${params.length}`);
+  }
+  if (sourceId) {
+    params.push(sourceId);
+    filters.push(`p.source_id = $${params.length}`);
   }
   params.push(limit);
   const rows = await engine.executeRaw<{
@@ -56,9 +61,7 @@ export async function findCodeRefs(
             cc.chunk_text
      FROM content_chunks cc
      JOIN pages p ON p.id = cc.page_id
-     WHERE p.page_kind = 'code'
-       AND cc.chunk_text ILIKE $1
-       ${whereLang}
+     WHERE ${filters.join('\n       AND ')}
      ORDER BY p.slug, cc.start_line NULLS LAST
      LIMIT $${params.length}`,
     params,
@@ -105,8 +108,15 @@ export async function runCodeRefs(engine: BrainEngine, args: string[]): Promise<
   }
   const limit = parseInt(parseFlag(args, '--limit') || '50', 10);
   const language = parseFlag(args, '--lang');
+  const sourceId = parseFlag(args, '--source');
+  const allSources = args.includes('--all-sources') || sourceId === '__all__';
   try {
-    const results = await findCodeRefs(engine, sym, { limit, language });
+    const results = await findCodeRefs(engine, sym, {
+      limit,
+      language,
+      sourceId: allSources ? undefined : sourceId,
+      allSources,
+    });
     if (shouldEmitJson(args)) {
       console.log(JSON.stringify({ symbol: sym, count: results.length, results }, null, 2));
     } else {

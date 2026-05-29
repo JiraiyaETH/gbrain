@@ -64,6 +64,14 @@ export const BRAIN_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   // The cycle synthesize phase already calls discoverTranscripts directly.
   'get_recent_salience',
   'find_anomalies',
+  // Code-intelligence read tools. These are structural lookup only; the
+  // mutating/admin `code_traversal_cache_clear` op is deliberately excluded.
+  'code_callers',
+  'code_callees',
+  'code_def',
+  'code_refs',
+  'code_blast',
+  'code_flow',
 ]);
 
 /**
@@ -94,6 +102,12 @@ export const BRAIN_TOOL_USAGE_HINTS: Readonly<Record<string, string>> = {
   put_page: 'Write a markdown page to the gbrain DATABASE (NOT the local filesystem). Page becomes searchable + linkable. Slug must match the agent\'s allowed namespace.',
   get_recent_salience: 'Read pages ranked by emotional + activity salience over a recency window. Use for "what\'s been on my mind lately".',
   find_anomalies: 'Read cohort-level activity outliers (e.g. tag-cohort or type-cohort with unusual recent volume). Use for "what\'s unusual lately".',
+  code_callers: 'Read the structural call graph: who calls a symbol. Always pass `source_id` for code repos such as `hermes-agent-code` or `gbrain-runtime-code` unless intentionally using the job source.',
+  code_callees: 'Read the structural call graph: what a symbol calls. Always pass `source_id` for code repos such as `hermes-agent-code` or `gbrain-runtime-code` unless intentionally using the job source.',
+  code_def: 'Find definition sites for a symbol in indexed code. Pass `source_id` for the target code repo; use before opening files when you need a definition.',
+  code_refs: 'Find textual/code references to a symbol in indexed code. Pass `source_id` for the target code repo; useful for rename/deprecation planning.',
+  code_blast: 'Read transitive callers/blast radius before editing a function. Pass `source_id`; this is structural planning, not filesystem editing.',
+  code_flow: 'Read a forward execution chain from an entry point to side-effect sinks. Pass `source_id`; use when tracing request flow through code.',
 };
 
 /** Matches Anthropic's tool-name constraint. No dots. */
