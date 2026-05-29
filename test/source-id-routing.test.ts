@@ -12,7 +12,7 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
-import { importFromContent } from '../src/core/import-file.ts';
+import { importCodeFile, importFromContent } from '../src/core/import-file.ts';
 
 let engine: PGLiteEngine;
 
@@ -105,6 +105,43 @@ describe('source-id routing (v0.36.x #891 + #978 regression)', () => {
     );
     expect(tags.length).toBeGreaterThan(0);
     for (const t of tags) expect(t.source_id).toBe('work');
+  });
+
+  test('code import call edges land under the requested source', async () => {
+    const filler = Array.from({ length: 25 }, (_, i) => `  const value${i} = input.length + ${i};`).join('\n');
+    const source = `
+export function callerInWork(input: string) {
+${filler}
+  return parseMarkdown(input);
+}
+
+export function parseMarkdown(input: string) {
+${filler}
+  return input;
+}
+`;
+
+    const result = await importCodeFile(engine, 'src/caller.ts', source, {
+      noEmbed: true,
+      sourceId: 'work',
+    });
+    expect(result.status).toBe('imported');
+
+    const edgeRows = await engine.executeRaw<{
+      source_id: string | null;
+      from_symbol_qualified: string;
+      to_symbol_qualified: string;
+    }>(
+      `SELECT source_id, from_symbol_qualified, to_symbol_qualified
+         FROM code_edges_symbol
+        WHERE to_symbol_qualified = 'parseMarkdown'
+        ORDER BY from_symbol_qualified`,
+    );
+    expect(edgeRows.length).toBeGreaterThan(0);
+    expect(edgeRows.every((row) => row.source_id === 'work')).toBe(true);
+
+    const callers = await engine.getCallersOf('parseMarkdown', { sourceId: 'work' });
+    expect(callers.map((c) => c.from_symbol_qualified)).toContain('callerInWork');
   });
 });
 

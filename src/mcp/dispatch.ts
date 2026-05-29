@@ -7,7 +7,7 @@
  */
 
 import type { BrainEngine } from '../core/engine.ts';
-import { operations, OperationError } from '../core/operations.ts';
+import { operations, OperationError, matchesSlugAllowList } from '../core/operations.ts';
 import type { Operation, OperationContext, AuthInfo } from '../core/operations.ts';
 import { loadConfig } from '../core/config.ts';
 
@@ -70,6 +70,13 @@ export interface DispatchOpts {
    * was replaced by dispatchToolCall.
    */
   auth?: AuthInfo;
+  /**
+   * Optional server-side slug-prefix fence for remote MCP write-capable profiles.
+   * This is separate from the Minion/subagent trusted-workspace allow-list: stdio
+   * MCP profiles like Bestie/Seksi are not Minion subagents, but still need a
+   * hard boundary so write access cannot become raw-dump/admin sprawl.
+   */
+  allowedSlugPrefixes?: string[];
 }
 
 /**
@@ -210,6 +217,55 @@ export function buildOperationContext(
     // this fallback covers code paths that historically passed undefined.
     sourceId: opts.sourceId ?? 'default',
     auth: opts.auth,
+    allowedSlugPrefixes: opts.allowedSlugPrefixes,
+  };
+}
+
+function collectSlugFenceParams(opName: string, params: Record<string, unknown>): string[] {
+  const slugs: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value === 'string' && value.trim()) slugs.push(value.trim());
+  };
+
+  switch (opName) {
+    case 'put_page':
+    case 'add_timeline_entry':
+      push(params.slug);
+      break;
+    case 'add_link':
+      push(params.from);
+      push(params.to);
+      break;
+    default:
+      break;
+  }
+
+  return slugs;
+}
+
+function validateMcpSlugFence(op: Operation, params: Record<string, unknown>, opts: DispatchOpts): ToolResult | null {
+  const prefixes = opts.allowedSlugPrefixes?.filter(Boolean) ?? [];
+  if (prefixes.length === 0) return null;
+  if (opts.remote === false) return null;
+  if (op.mutating !== true) return null;
+
+  const slugs = collectSlugFenceParams(op.name, params);
+  if (slugs.length === 0) return null;
+
+  const denied = slugs.filter(slug => !matchesSlugAllowList(slug, prefixes));
+  if (denied.length === 0) return null;
+
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        error: 'permission_denied',
+        message: `Tool ${op.name} is fenced by GBRAIN_MCP_ALLOWED_SLUG_PREFIXES`,
+        denied_slugs: denied,
+        allowed_slug_prefixes: prefixes,
+      }, null, 2),
+    }],
+    isError: true,
   };
 }
 
@@ -246,6 +302,9 @@ export async function dispatchToolCall(
       isError: true,
     };
   }
+
+  const slugFenceError = validateMcpSlugFence(op, safeParams, opts);
+  if (slugFenceError) return slugFenceError;
 
   const ctx = buildOperationContext(engine, safeParams, opts);
 

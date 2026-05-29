@@ -4,6 +4,7 @@ import {
   filterMcpOperationsForEnv,
   isReadOnlyMcpEnabled,
   mcpToolNotExposedResult,
+  parseMcpAllowedSlugPrefixes,
   parseMcpAllowedTools,
   readOnlyBlockedToolResult,
 } from '../src/mcp/read-only.ts';
@@ -55,6 +56,15 @@ describe('MCP read-only mode', () => {
     expect(names).toEqual(new Set(['get_page', 'search', 'put_page', 'add_link', 'add_timeline_entry']));
     expect(names.has('delete_page')).toBe(false);
     expect(names.has('sources_remove')).toBe(false);
+  });
+
+  test('GBRAIN_MCP_ALLOWED_SLUG_PREFIXES parses comma-separated write fences', () => {
+    const prefixes = parseMcpAllowedSlugPrefixes({
+      GBRAIN_MCP_ALLOWED_SLUG_PREFIXES: 'people/*, companies/*, projects/tailored/*, food/alina/*',
+    });
+
+    expect(prefixes).toEqual(['people/*', 'companies/*', 'projects/tailored/*', 'food/alina/*']);
+    expect(parseMcpAllowedSlugPrefixes({})).toBeNull();
   });
 
   test('read-only mode wins over allowed-tools and cannot be bypassed by listing write tools', () => {

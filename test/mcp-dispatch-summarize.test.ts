@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { summarizeMcpParams, type ParamSummary } from '../src/mcp/dispatch.ts';
+import { dispatchToolCall, summarizeMcpParams, type ParamSummary } from '../src/mcp/dispatch.ts';
 
 describe('summarizeMcpParams — declared-keys allow-list', () => {
   test('declared keys are preserved alphabetically', () => {
@@ -118,5 +118,53 @@ describe('summarizeMcpParams — declared-keys allow-list', () => {
     // Bucket cannot be less than the actual size and must round UP, so
     // a ~2KB payload lands in the 2KB or 3KB bucket.
     expect(medium.approx_bytes!).toBeGreaterThanOrEqual(2048);
+  });
+});
+
+describe('dispatchToolCall — MCP slug-prefix write fence', () => {
+  test('remote put_page is denied outside GBRAIN_MCP_ALLOWED_SLUG_PREFIXES', async () => {
+    const result = await dispatchToolCall({} as never, 'put_page', {
+      slug: 'raw/transcripts/leak',
+      content: '---\ntype: note\n---\nraw dump',
+      dry_run: true,
+    }, {
+      remote: true,
+      allowedSlugPrefixes: ['companies/*', 'people/*', 'projects/tailored/*'],
+    });
+
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toBe('permission_denied');
+    expect(body.denied_slugs).toEqual(['raw/transcripts/leak']);
+  });
+
+  test('remote put_page dry-run is allowed inside the slug fence', async () => {
+    const result = await dispatchToolCall({} as never, 'put_page', {
+      slug: 'companies/tailored-labs',
+      content: '---\ntype: company\n---\n# Tailored Labs',
+      dry_run: true,
+    }, {
+      remote: true,
+      allowedSlugPrefixes: ['companies/*', 'people/*', 'projects/tailored/*'],
+    });
+
+    expect(result.isError).toBeUndefined();
+    const body = JSON.parse(result.content[0].text);
+    expect(body).toEqual({ dry_run: true, action: 'put_page', slug: 'companies/tailored-labs' });
+  });
+
+  test('remote add_link requires both endpoints to stay inside the slug fence', async () => {
+    const result = await dispatchToolCall({} as never, 'add_link', {
+      from: 'companies/tailored-labs',
+      to: 'raw/transcripts/leak',
+      link_type: 'mentions',
+    }, {
+      remote: true,
+      allowedSlugPrefixes: ['companies/*', 'people/*', 'projects/tailored/*'],
+    });
+
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.denied_slugs).toEqual(['raw/transcripts/leak']);
   });
 });

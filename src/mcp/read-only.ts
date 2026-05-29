@@ -17,6 +17,16 @@ export function parseMcpAllowedTools(env: Record<string, string | undefined> = p
   return names.length > 0 ? new Set(names) : null;
 }
 
+export function parseMcpAllowedSlugPrefixes(env: Record<string, string | undefined> = process.env): string[] | null {
+  const raw = env.GBRAIN_MCP_ALLOWED_SLUG_PREFIXES;
+  if (typeof raw !== 'string' || raw.trim() === '') return null;
+  const prefixes = raw
+    .split(',')
+    .map(prefix => prefix.trim())
+    .filter(Boolean);
+  return prefixes.length > 0 ? prefixes : null;
+}
+
 const READ_ONLY_ADMIN_TOOLS = new Set([
   'get_stats',
   'get_health',
