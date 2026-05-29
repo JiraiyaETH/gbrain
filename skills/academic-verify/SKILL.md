@@ -207,7 +207,6 @@ doesn't, the trace speaks for itself.
   skill checks whether the cited claim is true
 - `skills/conventions/quality.md` — citation + back-link rules
 
-
 ## Contract
 
 This skill guarantees:

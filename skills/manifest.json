@@ -2,7 +2,7 @@
   "name": "gbrain",
   "version": "0.25.1",
   "conformance_version": "1.0.0",
-  "description": "Personal knowledge brain with hybrid RAG search \u2014 GStack mod for agent platforms",
+  "description": "Personal knowledge brain with hybrid RAG search — GStack mod for agent platforms",
   "skills": [
     {
       "name": "ingest",
@@ -198,6 +198,11 @@
       "name": "voice-note-ingest",
       "path": "voice-note-ingest/SKILL.md",
       "description": "Ingest voice notes with exact-phrasing preservation (never paraphrased); routes content based on a decision tree across originals/concepts/people/companies/ideas/personal/voice-notes."
+    },
+    {
+      "name": "consortium-operator-tracker",
+      "path": "consortium-operator-tracker/SKILL.md",
+      "description": "Apply Tailored DeFi Consortium outreach/member/vendor updates to the Operator Friendly Google Sheet and local OpenClaw tracker state."
     }
   ],
   "dependencies": {

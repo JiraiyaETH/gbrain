@@ -124,6 +124,12 @@ bun test 2>&1
 
 Parse: total passed, total failed, total skipped, file-level results.
 
+For Python/Hermes focused suites, clear repository-level pytest addopts when they interfere with explicit file selection or xdist discovery:
+```bash
+python -m pytest -o 'addopts=' <paths> -q --tb=short
+```
+Browser/tool smoke testing has extra order-dependency and process-residue checks; see `references/browser-tool-smoke-testing.md`.
+
 #### 2. Run evals (if the project has an evals config)
 
 ```bash
@@ -166,6 +172,7 @@ For each failing test:
 | **FLAKE** — API timeout, service down, LLM variance | ⚠️ | Note, don't alarm; retry once |
 | **NEW** — test was just added and isn't passing yet | 🟢 | Check if intentional |
 | **INFRA** — container restart wiped state | 🛠 | Run bootstrap, retest |
+| **ORDER/ISOLATION** — each test/file passes alone, but fails after another test left globals, temp files, sessions, or process state behind | 🧹 | Fix test cleanup/mocking; do not classify as product regression unless behavior reproduces outside pytest |
 
 #### 6. Report format
 

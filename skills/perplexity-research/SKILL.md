@@ -180,7 +180,6 @@ for news-cycle topics; omit for evergreen research.
 - `skills/data-research/SKILL.md` — structured-data trackers (different
   shape: parameterized YAML recipes, not free-form research)
 
-
 ## Contract
 
 This skill guarantees:

@@ -182,7 +182,6 @@ No batching.
 - `skills/idea-ingest/SKILL.md` — for typed-text idea ingestion
 - `skills/conventions/quality.md` — citation + back-link rules
 
-
 ## Contract
 
 This skill guarantees:

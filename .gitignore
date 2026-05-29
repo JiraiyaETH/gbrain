@@ -35,6 +35,14 @@ export/
 # .context/test-shards/. Workspace-local by design — never committed.
 .context/
 
+# Agent/session scratch produced by Hermes/OpenClaw/Kanban runs. These are
+# archived/promoted intentionally when useful; they should not dirty source by default.
+.context-snapshot-*
+.context-snapshot-ts-*
+workspace/tmp/
+memory/
+seksi-user.md
+
 # Tier 3 PGLite snapshot fixture (built on demand by build:pglite-snapshot)
 test/fixtures/pglite-snapshot.tar
 test/fixtures/pglite-snapshot.version

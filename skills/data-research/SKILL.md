@@ -112,12 +112,51 @@ Three example recipes ship with GBrain (see `~/.gbrain/recipes/`):
 2. **expense-tracker** — extract amounts, recipients, platforms from receipt emails (subscriptions, services, recurring charges)
 3. **company-updates** — extract revenue, users, key metrics from portfolio company update emails
 
+## API / Integration Reconnaissance
+
+When a research request asks whether a product has an API/integration surface for automation:
+
+1. Prefer official developer docs first; use search-engine results mainly to discover exact endpoint doc slugs when docs are JS-rendered or route IDs are opaque.
+2. Extract the practical integration shape, not a full doc mirror: auth options, read/write endpoints, scopes, limits, webhook support, paid-plan gates, and caveats.
+3. Distinguish “can read availability/busy state” from “can create bookings” and from “can mutate the underlying calendar provider.” Recommend pairing with Google/Apple/Microsoft calendar APIs when the product API only exposes scheduling-layer data.
+4. If a compact API note is likely reusable, save it under `references/<product>-api-recon.md` and link it here.
+
+Reusable API notes:
+- `references/calendly-api-recon.md` — Calendly auth, busy/available slots, scheduled events, booking creation, one-off event types, webhooks, and caveats.
+
+## Social / Practitioner Research
+
+When a research request asks for “what users/practitioners are doing” rather than just official design:
+
+1. Separate evidence classes explicitly: official docs, upstream GitHub, third-party repos, practitioner blogs, X/Twitter, and local context.
+2. Use rendered browser/cloud browser for X or other JS-heavy social surfaces when API/CLI access is unavailable, but label login-wall or indexed-snippet limitations.
+3. If X search is blocked, use search-engine indexed snippets only as low-confidence leads; verify visible snippets with screenshots/vision when possible before quoting.
+4. Distinguish “migration support” from “integration in active use.” Migration commands prove ecosystem overlap, not a mature workflow.
+5. For cross-agent ecosystem research, preserve provenance: who said it, source URL, date if visible, exact snippet/claim, and confidence/assessment.
+
+Reference notes: see `references/hermes-openclaw-integration-research.md` for a concrete Hermes/OpenClaw integration research pass and source-confidence ladder.
+
+## Consumer Vendor / Ticket Legitimacy Research
+
+When the user asks whether a travel/event/ticket vendor is “legit” and wants pricing/recommendations:
+
+1. Use browser/cloud browser agents for live vendor pages when available; otherwise fall back to direct browser plus terminal HTTP extraction. Dynamic pricing and package inclusions often require rendered pages.
+2. Separate **platform legitimacy** from **specific listing risk**. A major OTA/marketplace can be legitimate while a marketplace product has low booking count, unclear operator identity, contradictory policies, language constraints, or package ambiguity.
+3. Compare against the official seller first. Capture official warnings about authorized channels, especially for add-ons like fast-pass/Premier Access where third-party listings may be concierge workarounds rather than official products.
+4. Extract exact visible fields: product title, URL, product/listing ID, date-specific price, currency, what is included/excluded, whether admission is included, cancellation/refund terms, confirmation timing, review count/booked count, service language, and operator/platform legal footer if visible.
+5. Present recommendations in plain terms: cheapest legitimate entry, best official/value bundle, what to avoid, and the specific booking path. Avoid tables for Telegram; use short labeled bullets.
+6. Flag currency conversions as rough unless live FX was fetched. Do not book, enter passport/payment info, or click final purchase without explicit confirmation.
+
+Reference notes: see `references/shanghai-disney-ticket-legitimacy.md` for a concrete ticket/vendor legitimacy comparison format and pitfalls.
+
 ## Anti-Patterns
 
 - Trusting LLM working memory for amounts after batch processing (use extraction integrity rule)
 - Creating tracker entries without raw source links
 - Running without deduplication (leads to double-counted entries)
 - Hardcoding source-specific patterns in the pipeline code (use recipes)
+- Presenting Google-indexed X/Twitter snippets as verified full practitioner threads
+- Treating third-party MVP bridge repos as canonical production standards without adoption evidence
 
 ## Output Format
 

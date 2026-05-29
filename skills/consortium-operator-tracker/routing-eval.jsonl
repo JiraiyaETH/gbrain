@@ -1,0 +1,8 @@
+// Routing eval fixtures for skills/consortium-operator-tracker.
+// Intents paraphrase real operator language without copy-pasting trigger strings.
+{"intent":"Ankr got the consortium form today — mark that vendor as form sent","expected_skill":"consortium-operator-tracker"}
+{"intent":"Bailsec submitted the Tailored consortium form, update the operator tab","expected_skill":"consortium-operator-tracker"}
+{"intent":"GVRN agreed to work with us as a vendor, set the net status correctly","expected_skill":"consortium-operator-tracker"}
+{"intent":"Alvara signed on as a consortium member, reflect that in the sheet","expected_skill":"consortium-operator-tracker"}
+{"intent":"Refresh the primary DeFi Consortium operator-facing Google Sheet from the local CSV tracker","expected_skill":"consortium-operator-tracker","ambiguous_with":["google-workspace","data-research"]}
+{"intent":"The Operator Friendly row for Cookie3 should now say Form filled","expected_skill":"consortium-operator-tracker"}

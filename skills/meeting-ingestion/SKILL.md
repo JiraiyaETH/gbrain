@@ -44,6 +44,25 @@ This skill guarantees:
 Every attendee and company mentioned MUST get a back-link from their page to
 the meeting page. An unlinked mention is a broken brain.
 
+## Read-only retrieval path
+
+Use this before ingesting when the user asks for existing meeting notes, Fireflies notes, latest notes, or a meeting summary by title/date.
+
+1. Search both Brain meeting pages and the local meeting-intelligence database before assuming the meeting title is exact.
+2. Treat Fireflies titles as noisy; match by date, participants, organizer, keywords, and content when the requested title differs from the stored title.
+3. Check `meeting_page_sync_state` for the synced Brain page path, then read that page for the canonical summary/action items.
+4. If needed, query `meetings` and `sentences` in `/Users/jarvis/.openclaw-jarvis-v2/data/intelligence/meeting-intelligence.db` for source rows and transcript snippets.
+5. Return the Fireflies link, date/time, duration, local Brain page path, summary, topics, and action items. Do not ingest or mutate unless the user explicitly asks to process/update the meeting.
+
+Example local lookup pattern:
+```bash
+sqlite3 -json /Users/jarvis/.openclaw-jarvis-v2/data/intelligence/meeting-intelligence.db \
+  "select id,title,date_recorded,duration_seconds,organizer_email,transcript_url,short_summary,action_items_json from meetings where date(date_recorded)='YYYY-MM-DD' order by date_recorded desc;"
+
+sqlite3 -json /Users/jarvis/.openclaw-jarvis-v2/data/intelligence/meeting-intelligence.db \
+  "select * from meeting_page_sync_state where meeting_id='<meeting_id>';"
+```
+
 ## Phases
 
 ### Phase 1: Parse the transcript
@@ -122,3 +141,5 @@ updated, {N} action items captured."
 - Not merging timelines across all mentioned entities
 - Creating attendee stubs without meaningful content
 - Filing meeting pages without cross-linking to all participants
+- Assuming the user's remembered meeting title exactly matches the Fireflies stored title; verify by date, participants, organizer, and transcript/content before saying not found
+- Mutating or re-ingesting a meeting when the user only asked to retrieve existing notes

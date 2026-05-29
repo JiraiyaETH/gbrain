@@ -93,6 +93,18 @@ to the graph (`links` table) with inferred relationship types. Stale links
 - Timeline entries with specific dates still need explicit `gbrain timeline-add`
   (or batch via `gbrain extract timeline --source db`).
 
+### Phase 2.6: Memory-to-Brain Offload
+
+When an agent/user asks to audit Hermes memory or reduce persistent memory bloat, use Brain as the canonical store for detailed mutable facts and leave memory as a short routing index.
+
+1. Identify detailed facts in memory that are operational, historical, nutrition/workout state, addresses/order details, or other mutable domain state.
+2. Create/update canonical Brain pages for those details, with source scoping and citations/provenance where available.
+3. Replace memory entries with concise pointers to the Brain page (declarative, not imperative).
+4. If the offload is itself useful operational history, write an offload ledger page and link it to the pages it created/updated.
+5. Verify via `get`/query/graph traversal; for synthesis pages, also verify embeddings or retrieval when practical.
+
+Do not duplicate the same full fact in both memory and Brain. Duplicates rot; memory should answer “where do I look?”, not carry the whole filing cabinet.
+
 ### Phase 3: On Every Outbound Response (READ → PULL → RESPOND)
 
 Before answering any question about a person, company, or topic:
