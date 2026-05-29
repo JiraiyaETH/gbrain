@@ -2627,7 +2627,7 @@ See also:
         result.status !== 'blocked_by_failures' &&
         result.status !== 'partial'
       ) {
-        manageGitignore(src.local_path!, engine.kind);
+        manageGitignore(src.local_path!, engine.kind, cfg.strategy);
       }
       // D18: auto-enqueue embed-backfill per source (unless opted out).
       // v0.41.13.0 (T7 / D-V3-5): partial excluded — the next clean sync
@@ -2851,7 +2851,7 @@ See also:
     ) {
       const effectiveRepoPath = opts.repoPath ?? (await getDefaultSourcePath(engine));
       if (effectiveRepoPath) {
-        manageGitignore(effectiveRepoPath, engine.kind);
+        manageGitignore(effectiveRepoPath, engine.kind, opts.strategy);
       }
     }
     return;
@@ -2879,7 +2879,7 @@ See also:
       ) {
         const effectiveRepoPath = opts.repoPath ?? (await getDefaultSourcePath(engine));
         if (effectiveRepoPath) {
-          manageGitignore(effectiveRepoPath, engine.kind);
+          manageGitignore(effectiveRepoPath, engine.kind, opts.strategy);
         }
       }
     } catch (e: unknown) {
@@ -3344,8 +3344,15 @@ export function __resetPGLiteTierWarn(): void {
 export function manageGitignore(
   repoPath: string,
   engineKind?: 'pglite' | 'postgres',
+  strategy?: 'markdown' | 'code' | 'auto',
 ): void {
   if (process.env.GBRAIN_NO_GITIGNORE === '1') {
+    return;
+  }
+  // Code-source syncs index repository code as `page_kind=code`; storage
+  // tiering/db_only ignore management is a markdown-corpus side effect. Do not
+  // dirty managed code clones with Brain .gitignore entries.
+  if (strategy === 'code') {
     return;
   }
 

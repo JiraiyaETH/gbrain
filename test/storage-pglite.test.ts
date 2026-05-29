@@ -131,6 +131,17 @@ describe('Storage tiering on PGLite — full lifecycle (D8 + D4)', () => {
     }
   });
 
+  test('manageGitignore skips code-strategy repos so code-source syncs stay clean', () => {
+    try {
+      writeGbrainYml();
+      manageGitignore(tmp, 'postgres', 'code');
+      expect(existsSync(join(tmp, '.gitignore'))).toBe(false);
+      expect(warnings).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
   test('slugPrefix engine filter works on PGLite (Issue #13)', async () => {
     try {
       await engine.putPage('media/x/tweet-1', { type: 'concept', title: 'T1', compiled_truth: '', timeline: '' });
