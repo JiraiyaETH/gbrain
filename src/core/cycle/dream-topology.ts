@@ -32,7 +32,7 @@ export const SEMANTIC_DREAM_TOPOLOGY: DreamSlugTopology = Object.freeze({
   originalIdeas: 'ideas',
   patterns: 'patterns',
   people: 'people',
-  cycleSummaries: 'projects/gbrain/dream-cycles',
+  cycleSummaries: 'dream-cycles',
 });
 
 const SLUG_PREFIX_RE = /^[a-z0-9][a-z0-9-]*(\/[a-z0-9][a-z0-9-]*)*$/;

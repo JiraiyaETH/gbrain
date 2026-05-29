@@ -21,7 +21,7 @@ describe('Dream semantic topology', () => {
       'ideas/*',
       'patterns/*',
       'people/*',
-      'projects/gbrain/dream-cycles/*',
+      'dream-cycles/*',
     ]));
     expect(prefixes.some(prefix => prefix.startsWith('wiki/'))).toBe(false);
     expect(prefixes.some(prefix => prefix.includes('/personal/'))).toBe(false);
@@ -35,7 +35,7 @@ describe('Dream semantic topology', () => {
       originalIdeas: 'ideas',
       patterns: 'patterns',
       people: 'people',
-      cycleSummaries: 'projects/gbrain/dream-cycles',
+      cycleSummaries: 'dream-cycles',
     });
   });
 
@@ -60,7 +60,7 @@ describe('Dream semantic topology', () => {
   test('summary and pattern helpers use semantic routes', async () => {
     const topology = await loadDreamSlugTopology();
 
-    expect(synthTesting.buildSummarySlug('2026-05-29', topology)).toBe('projects/gbrain/dream-cycles/2026-05-29');
+    expect(synthTesting.buildSummarySlug('2026-05-29', topology)).toBe('dream-cycles/2026-05-29');
     expect(patternsTesting.buildReflectionLikePattern(topology)).toBe('reflections/%');
 
     const prompt = patternsTesting.buildPatternsPrompt([

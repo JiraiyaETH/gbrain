@@ -146,7 +146,7 @@ subagent may write to:
 | Original idea | `ideas/YYYY-MM-DD-<idea>-<hash[:6]>` | New frames, theses, mental models, "conceptive ideologist" outputs. Capture the user's exact phrasing — that's the artifact. |
 | People enrichment | `people/<existing-slug>` | Timeline entries appended to existing people pages from session mentions. Stub pages for new substantive people. |
 | Pattern | `patterns/<theme>` | Cross-session theme detected across ≥3 reflections. Highest-leverage output: a pattern can span 25 years if reflections reference dated content. |
-| Cycle summary | `projects/gbrain/dream-cycles/YYYY-MM-DD` | Index of every page produced by one dream cycle. Auto-written deterministically by the orchestrator. |
+| Cycle summary | `dream-cycles/YYYY-MM-DD` | Index of every page produced by one dream cycle. Auto-written deterministically by the orchestrator. |
 
 **Iron Law for synthesize output:**
 1. Quote the user verbatim. Do not paraphrase memorable phrasings.

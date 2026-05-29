@@ -113,8 +113,8 @@
     },
     {
       "kind": "dream-cycle",
-      "directory": "projects/gbrain/dream-cycles/",
-      "examples": ["projects/gbrain/dream-cycles/YYYY-MM-DD.md"],
+      "directory": "dream-cycles/",
+      "examples": ["dream-cycles/YYYY-MM-DD.md"],
       "description": "Generated Dream cycle indexes and closeout summaries. These are Brain-facing receipts for one maintenance pass, not live control-plane state."
     },
     {
@@ -177,14 +177,14 @@
       "original_ideas": "ideas",
       "patterns": "patterns",
       "people": "people",
-      "cycle_summaries": "projects/gbrain/dream-cycles"
+      "cycle_summaries": "dream-cycles"
     },
     "globs": [
       "reflections/*",
       "ideas/*",
       "patterns/*",
       "people/*",
-      "projects/gbrain/dream-cycles/*"
+      "dream-cycles/*"
     ]
   }
 }
