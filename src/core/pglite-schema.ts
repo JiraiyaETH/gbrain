@@ -80,6 +80,22 @@ CREATE INDEX IF NOT EXISTS pages_deleted_at_purge_idx
   ON pages (deleted_at) WHERE deleted_at IS NOT NULL;
 
 -- ============================================================
+-- page_aliases: source-scoped old-slug aliases for canonical page renames
+-- ============================================================
+CREATE TABLE IF NOT EXISTS page_aliases (
+  id          BIGSERIAL PRIMARY KEY,
+  source_id   TEXT    NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  page_id     INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+  alias_slug  TEXT    NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT page_aliases_source_alias_key UNIQUE (source_id, alias_slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_page_aliases_page ON page_aliases(page_id);
+CREATE INDEX IF NOT EXISTS idx_page_aliases_source_page ON page_aliases(source_id, page_id);
+
+-- ============================================================
 -- content_chunks: chunked content with embeddings
 -- ============================================================
 CREATE TABLE IF NOT EXISTS content_chunks (

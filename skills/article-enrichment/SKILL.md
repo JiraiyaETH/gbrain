@@ -6,7 +6,13 @@ triggers:
   - "enrich this article"
   - "enrich brain pages"
   - "batch enrich"
+  - "batch enrich pass"
+  - "unstructured articles"
+  - "enrich articles"
+  - "enrich article dumps"
+  - "raw content but no executive summary"
   - "make brain pages useful"
+  - "make article pages useful"
 mutating: true
 writes_pages: true
 writes_to:

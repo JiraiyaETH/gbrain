@@ -8,6 +8,11 @@ triggers:
   - "archive crawler"
   - "scan my dropbox for"
   - "mine my old files for"
+  - "scan my Dropbox"
+  - "old files"
+  - "old letters"
+  - "journal entries"
+  - "archive mining"
 mutating: true
 writes_pages: true
 writes_to:

@@ -1,5 +1,6 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, beforeAll, beforeEach, afterAll } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { resetPgliteState } from './helpers/reset-pglite.ts';
 
 async function addAltSource(engine: PGLiteEngine): Promise<void> {
   const db = (engine as any).db;
@@ -22,16 +23,20 @@ async function putPage(engine: PGLiteEngine, slug: string, sourceId: string, tit
 describe('source-scoped link graph operations', () => {
   let engine: PGLiteEngine;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     engine = new PGLiteEngine();
     await engine.connect({});
     await engine.initSchema();
-    await addAltSource(engine);
   }, 60_000);
 
-  afterEach(async () => {
+  afterAll(async () => {
     if (engine) await engine.disconnect();
   }, 60_000);
+
+  beforeEach(async () => {
+    await resetPgliteState(engine);
+    await addAltSource(engine);
+  });
 
   test('getLinks and getBacklinks honor explicit source scope when slugs collide', async () => {
     await putPage(engine, 'people/alice', 'default', 'Default Alice');

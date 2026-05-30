@@ -13,6 +13,9 @@ triggers:
   - "process this book"
   - "what's in this screenshot"
   - "check out this repo"
+  - "ingest this PDF book"
+  - "summarize this book"
+  - "video/audio/PDF/book/YouTube/screenshot"
 tools:
   - search
   - query

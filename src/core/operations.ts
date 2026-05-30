@@ -323,6 +323,12 @@ function explicitSourceParam(params: Record<string, unknown>): string | undefine
   return process.env.GBRAIN_SOURCE || undefined;
 }
 
+function explicitSourceIdParam(params: Record<string, unknown>): string | undefined {
+  const sourceId = params.source_id;
+  if (typeof sourceId === 'string' && sourceId.length > 0) return sourceId;
+  return process.env.GBRAIN_SOURCE || undefined;
+}
+
 async function readSourceParam(ctx: OperationContext, params: Record<string, unknown>): Promise<string | undefined> {
   const explicit = explicitSourceParam(params);
   if (explicit) return explicit;
@@ -362,7 +368,7 @@ const get_page: Operation = {
     let resolved_slug: string | undefined;
 
     if (!page && fuzzy) {
-      const candidates = await ctx.engine.resolveSlugs(slug);
+      const candidates = await ctx.engine.resolveSlugs(slug, { sourceId });
       if (candidates.length === 1) {
         page = await ctx.engine.getPage(candidates[0], { sourceId, includeDeleted });
         resolved_slug = candidates[0];
@@ -684,6 +690,35 @@ async function runAutoLink(
 
   return { ...result, unresolved };
 }
+
+const rename_page: Operation = {
+  name: 'rename_page',
+  description: 'Atomically rename a page slug and optionally create an old-slug alias so existing links/search/discovery keep resolving to the canonical page.',
+  params: {
+    old_slug: { type: 'string', required: true, description: 'Current canonical page slug' },
+    new_slug: { type: 'string', required: true, description: 'New canonical page slug' },
+    source: { type: 'string', description: 'Write within one source id (or GBRAIN_SOURCE)' },
+    create_alias: { type: 'boolean', description: 'Create old_slug -> new_slug alias (default true)' },
+    rewrite_references: { type: 'boolean', description: 'Rewrite textual references from old_slug to new_slug (default true)' },
+    dry_run: { type: 'boolean', description: 'Preview without mutating' },
+  },
+  mutating: true,
+  scope: 'write',
+  handler: async (ctx, p) => {
+    const oldSlug = p.old_slug as string;
+    const newSlug = p.new_slug as string;
+    const sourceId = explicitSourceParam(p);
+    if (ctx.dryRun || p.dry_run === true) {
+      return { dry_run: true, action: 'rename_page', old_slug: oldSlug, new_slug: newSlug, source: sourceId };
+    }
+    return ctx.engine.renamePage(oldSlug, newSlug, {
+      sourceId,
+      createAlias: p.create_alias === undefined ? true : (p.create_alias as boolean),
+      rewriteReferences: p.rewrite_references === undefined ? true : (p.rewrite_references as boolean),
+    });
+  },
+  cliHints: { name: 'rename', positional: ['old_slug', 'new_slug'] },
+};
 
 const delete_page: Operation = {
   name: 'delete_page',
@@ -1225,9 +1260,11 @@ const get_timeline: Operation = {
   description: 'Get timeline entries for a page',
   params: {
     slug: { type: 'string', required: true },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getTimeline(p.slug as string);
+    const sourceId = await readSourceParam(ctx, p);
+    return ctx.engine.getTimeline(p.slug as string, { sourceId });
   },
   scope: 'read',
   cliHints: { name: 'timeline', positional: ['slug'] },
@@ -1262,9 +1299,11 @@ const get_versions: Operation = {
   description: 'Page version history',
   params: {
     slug: { type: 'string', required: true },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getVersions(p.slug as string);
+    const sourceId = await readSourceParam(ctx, p);
+    return ctx.engine.getVersions(p.slug as string, sourceId);
   },
   scope: 'read',
   cliHints: { name: 'history', positional: ['slug'] },
@@ -1340,10 +1379,15 @@ const get_raw_data: Operation = {
   description: 'Retrieve raw data for a page',
   params: {
     slug: { type: 'string', required: true },
-    source: { type: 'string', description: 'Filter by source' },
+    source: { type: 'string', description: 'Filter by raw data source' },
+    source_id: { type: 'string', description: 'Limit page lookup to one Brain source id (or GBRAIN_SOURCE)' },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getRawData(p.slug as string, p.source as string | undefined);
+    return ctx.engine.getRawData(
+      p.slug as string,
+      p.source as string | undefined,
+      explicitSourceIdParam(p),
+    );
   },
   scope: 'read',
 };
@@ -1355,9 +1399,11 @@ const resolve_slugs: Operation = {
   description: 'Fuzzy-resolve a partial slug to matching page slugs',
   params: {
     partial: { type: 'string', required: true },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.resolveSlugs(p.partial as string);
+    const sourceId = await readSourceParam(ctx, p);
+    return ctx.engine.resolveSlugs(p.partial as string, { sourceId });
   },
   scope: 'read',
 };
@@ -1367,9 +1413,11 @@ const get_chunks: Operation = {
   description: 'Get content chunks for a page',
   params: {
     slug: { type: 'string', required: true },
+    source: { type: 'string', description: 'Limit to one source id (or GBRAIN_SOURCE)' },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getChunks(p.slug as string);
+    const sourceId = await readSourceParam(ctx, p);
+    return ctx.engine.getChunks(p.slug as string, sourceId);
   },
   scope: 'read',
 };
@@ -1973,7 +2021,7 @@ const sources_status: Operation = {
 
 export const operations: Operation[] = [
   // Page CRUD
-  get_page, put_page, delete_page, list_pages,
+  get_page, put_page, rename_page, delete_page, list_pages,
   // v0.26.5 destructive-guard ops (page-level soft-delete + recovery + admin purge)
   restore_page, purge_deleted_pages,
   // Search

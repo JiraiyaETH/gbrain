@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import type { BrainEngine } from '../src/core/engine.ts';
 import { resolveImportSourceId } from '../src/commands/import.ts';
+import { withEnv } from './helpers/with-env.ts';
 
 function makeStub(
   registeredSources: string[],
@@ -59,12 +60,9 @@ describe('resolveImportSourceId', () => {
       null,
     );
 
-    process.env.GBRAIN_SOURCE = 'env-wins';
-    try {
+    await withEnv({ GBRAIN_SOURCE: 'env-wins' }, async () => {
       const id = await resolveImportSourceId(engine, ['/repo/brain/companies'], '/repo/brain/companies');
       expect(id).toBe('env-wins');
-    } finally {
-      delete process.env.GBRAIN_SOURCE;
-    }
+    });
   });
 });

@@ -8,6 +8,9 @@ triggers:
   - "convert brain page to pdf"
   - "publish this page as pdf"
   - "export brain page"
+  - "export brain page to pdf"
+  - "clean PDF"
+  - "printable brain-page deliverable"
 ---
 
 # brain-pdf — Render a Brain Page to Publication-Quality PDF

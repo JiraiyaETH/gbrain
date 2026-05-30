@@ -63,6 +63,28 @@ export interface TimelineBatchInput {
   source_id?: string;
 }
 
+export interface RenamePageOpts {
+  /** Source that owns both the canonical page row and the old-slug alias. */
+  sourceId?: string;
+  /** Create an alias from oldSlug to the renamed page. Defaults to true. */
+  createAlias?: boolean;
+  /** Rewrite textual references from oldSlug to newSlug. Defaults to true. */
+  rewriteReferences?: boolean;
+}
+
+export interface RenamePageResult {
+  status: 'renamed' | 'noop';
+  old_slug: string;
+  new_slug: string;
+  source_id: string;
+  page_id: number;
+  alias_created: boolean;
+  references_rewritten: {
+    pages: number;
+    chunks: number;
+  };
+}
+
 /**
  * A single dedicated database connection, isolated from the engine's pool.
  *
@@ -274,7 +296,7 @@ export interface BrainEngine {
    * `filters.includeDeleted: true` to surface them.
    */
   listPages(filters?: PageFilters): Promise<Page[]>;
-  resolveSlugs(partial: string): Promise<string[]>;
+  resolveSlugs(partial: string, opts?: { sourceId?: string }): Promise<string[]>;
   /**
    * Returns the slug of every page in the brain. Used by batch commands as a
    * mutation-immune iteration source (alternative to listPages OFFSET pagination,
@@ -417,7 +439,7 @@ export interface BrainEngine {
 
   // Raw data
   putRawData(slug: string, source: string, data: object): Promise<void>;
-  getRawData(slug: string, source?: string): Promise<RawData[]>;
+  getRawData(slug: string, source?: string, sourceId?: string): Promise<RawData[]>;
 
   // ============================================================
   // v0.28: Takes (typed/weighted/attributed claims) + synthesis evidence
@@ -505,7 +527,7 @@ export interface BrainEngine {
 
   // Versions
   createVersion(slug: string, sourceId?: string): Promise<PageVersion>;
-  getVersions(slug: string): Promise<PageVersion[]>;
+  getVersions(slug: string, sourceId?: string): Promise<PageVersion[]>;
   revertToVersion(slug: string, versionId: number): Promise<void>;
 
   // Stats + health
@@ -519,6 +541,7 @@ export interface BrainEngine {
   // Sync
   updateSlug(oldSlug: string, newSlug: string, sourceId?: string): Promise<void>;
   rewriteLinks(oldSlug: string, newSlug: string): Promise<void>;
+  renamePage(oldSlug: string, newSlug: string, opts?: RenamePageOpts): Promise<RenamePageResult>;
 
   // Config
   getConfig(key: string): Promise<string | null>;

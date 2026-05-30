@@ -266,16 +266,22 @@ describe('BrainRegistry — lazy init', () => {
   });
 
   test('empty/null/undefined id routes to host', async () => {
-    // We can't actually call getBrain('') without a host config, so we just
-    // verify the routing logic by observing the default-branch path. This
-    // test proves the fall-through to HOST_BRAIN_ID happens before any
-    // lookup, not that host init actually succeeds.
+    // Empty ids should fall through to HOST_BRAIN_ID before any mount lookup.
+    // Depending on the developer machine, host init may either succeed (local
+    // config exists) or fail (clean test env); either outcome proves the path as
+    // long as it is not the mount-layer UnknownBrainError.
     const reg = new BrainRegistry([]);
-    // Expect the host-init path to be attempted (it'll fail on missing
-    // ~/.gbrain/config.json in test env, but the error will come from
-    // initHostBrain, not UnknownBrainError — proving routing hit host).
-    await expect(reg.getBrain(null)).rejects.not.toBeInstanceOf(UnknownBrainError);
-    await expect(reg.getBrain(undefined)).rejects.not.toBeInstanceOf(UnknownBrainError);
-    await expect(reg.getBrain('')).rejects.not.toBeInstanceOf(UnknownBrainError);
+    try {
+      for (const id of [null, undefined, '']) {
+        try {
+          const brain = await reg.getBrain(id as any);
+          expect(brain).toBeDefined();
+        } catch (err) {
+          expect(err).not.toBeInstanceOf(UnknownBrainError);
+        }
+      }
+    } finally {
+      await reg.disconnectAll();
+    }
   });
 });

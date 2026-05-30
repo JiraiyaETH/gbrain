@@ -13,6 +13,16 @@ triggers:
   - "Consortium vendor signed"
   - "Consortium member signed"
   - "Consortium form update"
+  - "consortium form"
+  - "operator friendly"
+  - "operator tab"
+  - "net status"
+  - "consortium member"
+  - "consortium vendor"
+  - "consortium operator"
+  - "consortium outreach"
+  - "form sent"
+  - "form filled"
 tools:
   - shell
   - read
@@ -241,6 +251,12 @@ Blocked: <reason>
 Needed: <canonical ID / role / signed evidence / source file>
 Safe default: no status change applied.
 ```
+
+## Anti-Patterns
+
+- Treating relationship or vendor-selection evidence as proof that a protocol signed.
+- Updating only the local CSV/JSON mirror when the live Operator Friendly sheet is the requested surface.
+- Printing Google OAuth/client/refresh/access tokens while debugging sheet access.
 
 ## Common Pitfalls
 

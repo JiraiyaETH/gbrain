@@ -328,6 +328,8 @@ export interface TimelineOpts {
   limit?: number;
   after?: string;
   before?: string;
+  /** Limit slug resolution to one Brain source. Falls back to GBRAIN_SOURCE. */
+  sourceId?: string;
 }
 
 // Raw data

@@ -8,6 +8,9 @@ triggers:
   - "transcribe and file"
   - "voice note ingest"
   - "save this audio note"
+  - "voice memo"
+  - "audio note"
+  - "audio message"
 mutating: true
 writes_pages: true
 writes_to:

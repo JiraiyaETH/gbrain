@@ -9,6 +9,7 @@ import type {
   DreamVerdict, DreamVerdictInput,
   TakeBatchInput, Take, TakesListOpts, TakeHit, StaleTakeRow,
   TakeResolution, SynthesisEvidenceInput,
+  RenamePageOpts, RenamePageResult,
 } from './engine.ts';
 import { MAX_SEARCH_LIMIT, clampSearchLimit } from './engine.ts';
 import { runMigrations } from './migrate.ts';
@@ -432,12 +433,34 @@ export class PGLiteEngine implements BrainEngine {
       where.push('deleted_at IS NULL');
     }
     const { rows } = await this.db.query(
-      `SELECT id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at, deleted_at
+      `SELECT id, source_id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at, deleted_at
        FROM pages WHERE ${where.join(' AND ')} LIMIT 1`,
       params
     );
-    if (rows.length === 0) return null;
-    return rowToPage(rows[0] as Record<string, unknown>);
+    if (rows.length > 0) return rowToPage(rows[0] as Record<string, unknown>);
+
+    // Alias fallback: old slugs remain durable read addresses after renamePage.
+    const aliasWhere: string[] = ['a.alias_slug = $1'];
+    const aliasParams: unknown[] = [slug];
+    if (sourceId) {
+      aliasParams.push(this.activeSourceId(sourceId));
+      aliasWhere.push(`a.source_id = $${aliasParams.length}`);
+    }
+    if (!includeDeleted) {
+      aliasWhere.push('p.deleted_at IS NULL');
+    }
+    const alias = await this.db.query(
+      `SELECT p.id, p.source_id, p.slug, p.type, p.title, p.compiled_truth, p.timeline,
+              p.frontmatter, p.content_hash, p.created_at, p.updated_at, p.deleted_at
+       FROM page_aliases a
+       JOIN pages p ON p.id = a.page_id
+       WHERE ${aliasWhere.join(' AND ')}
+       ORDER BY a.updated_at DESC
+       LIMIT 1`,
+      aliasParams,
+    );
+    if (alias.rows.length === 0) return null;
+    return rowToPage(alias.rows[0] as Record<string, unknown>);
   }
 
   async putPage(slug: string, page: PageInput): Promise<Page> {
@@ -580,19 +603,62 @@ export class PGLiteEngine implements BrainEngine {
     return new Set((rows as { slug: string }[]).map(r => r.slug));
   }
 
-  async resolveSlugs(partial: string): Promise<string[]> {
-    // Try exact match first
-    const exact = await this.db.query('SELECT slug FROM pages WHERE slug = $1', [partial]);
+  async resolveSlugs(partial: string, opts?: { sourceId?: string }): Promise<string[]> {
+    const sourceId = opts?.sourceId || process.env.GBRAIN_SOURCE;
+    const exactParams: unknown[] = [partial];
+    const sourcePageWhere = sourceId ? ' AND source_id = $2' : '';
+    if (sourceId) exactParams.push(this.activeSourceId(sourceId));
+
+    // Try exact canonical match first.
+    const exact = await this.db.query(
+      `SELECT slug FROM pages WHERE slug = $1${sourcePageWhere} AND deleted_at IS NULL LIMIT 1`,
+      exactParams,
+    );
     if (exact.rows.length > 0) return [(exact.rows[0] as { slug: string }).slug];
 
-    // Fuzzy match via pg_trgm
-    const { rows } = await this.db.query(
-      `SELECT slug, similarity(title, $1) AS sim
-       FROM pages
-       WHERE title % $1 OR slug ILIKE $2
-       ORDER BY sim DESC
+    // Then exact alias match, returning the canonical slug.
+    const aliasParams: unknown[] = [partial];
+    const aliasWhere = ['a.alias_slug = $1', 'p.deleted_at IS NULL'];
+    if (sourceId) {
+      aliasParams.push(this.activeSourceId(sourceId));
+      aliasWhere.push(`a.source_id = $${aliasParams.length}`);
+    }
+    const alias = await this.db.query(
+      `SELECT DISTINCT p.slug
+       FROM page_aliases a
+       JOIN pages p ON p.id = a.page_id
+       WHERE ${aliasWhere.join(' AND ')}
+       ORDER BY p.slug
        LIMIT 5`,
-      [partial, '%' + partial + '%']
+      aliasParams,
+    );
+    if (alias.rows.length > 0) return (alias.rows as { slug: string }[]).map(r => r.slug);
+
+    // Fuzzy match via pg_trgm, including alias slugs as compatibility hints.
+    const fuzzyParams: unknown[] = [partial, '%' + partial + '%'];
+    const fuzzySourcePage = sourceId ? ` AND p.source_id = $${fuzzyParams.length + 1}` : '';
+    if (sourceId) fuzzyParams.push(this.activeSourceId(sourceId));
+    const { rows } = await this.db.query(
+      `WITH candidates AS (
+         SELECT p.slug, similarity(p.title, $1) AS sim
+         FROM pages p
+         WHERE p.deleted_at IS NULL
+           AND (p.title % $1 OR p.slug ILIKE $2)
+           ${fuzzySourcePage}
+         UNION
+         SELECT p.slug, similarity(a.alias_slug, $1) AS sim
+         FROM page_aliases a
+         JOIN pages p ON p.id = a.page_id
+         WHERE p.deleted_at IS NULL
+           AND (a.alias_slug % $1 OR a.alias_slug ILIKE $2)
+           ${sourceId ? ` AND a.source_id = $${fuzzyParams.length}` : ''}
+       )
+       SELECT slug, max(sim) AS sim
+       FROM candidates
+       GROUP BY slug
+       ORDER BY sim DESC, slug ASC
+       LIMIT 5`,
+      fuzzyParams,
     );
     return (rows as { slug: string }[]).map(r => r.slug);
   }
@@ -931,7 +997,10 @@ export class PGLiteEngine implements BrainEngine {
     const { rows } = await this.db.query(
       `SELECT cc.* FROM content_chunks cc
        JOIN pages p ON p.id = cc.page_id
-       WHERE p.slug = $1 AND p.source_id = $2
+       WHERE p.id = COALESCE(
+         (SELECT id FROM pages WHERE slug = $1 AND source_id = $2 LIMIT 1),
+         (SELECT page_id FROM page_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1)
+       )
        ORDER BY cc.chunk_index`,
       [slug, src]
     );
@@ -1085,7 +1154,15 @@ export class PGLiteEngine implements BrainEngine {
   async getLinks(slug: string, sourceId?: string): Promise<Link[]> {
     const params: unknown[] = [slug];
     const src = sourceId || process.env.GBRAIN_SOURCE;
-    const sourceSql = src ? ` AND f.source_id = $2` : '';
+    const pageIdExpr = src
+      ? `COALESCE(
+           (SELECT id FROM pages WHERE slug = $1 AND source_id = $2 LIMIT 1),
+           (SELECT page_id FROM page_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1)
+         )`
+      : `COALESCE(
+           (SELECT id FROM pages WHERE slug = $1 LIMIT 1),
+           (SELECT page_id FROM page_aliases WHERE alias_slug = $1 LIMIT 1)
+         )`;
     if (src) params.push(this.activeSourceId(src));
     const { rows } = await this.db.query(
       `SELECT f.slug as from_slug, t.slug as to_slug,
@@ -1095,7 +1172,7 @@ export class PGLiteEngine implements BrainEngine {
        JOIN pages f ON f.id = l.from_page_id
        JOIN pages t ON t.id = l.to_page_id
        LEFT JOIN pages o ON o.id = l.origin_page_id
-       WHERE f.slug = $1${sourceSql}`,
+       WHERE f.id = ${pageIdExpr}`,
       params
     );
     return rows as unknown as Link[];
@@ -1104,7 +1181,15 @@ export class PGLiteEngine implements BrainEngine {
   async getBacklinks(slug: string, sourceId?: string): Promise<Link[]> {
     const params: unknown[] = [slug];
     const src = sourceId || process.env.GBRAIN_SOURCE;
-    const sourceSql = src ? ` AND t.source_id = $2` : '';
+    const pageIdExpr = src
+      ? `COALESCE(
+           (SELECT id FROM pages WHERE slug = $1 AND source_id = $2 LIMIT 1),
+           (SELECT page_id FROM page_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1)
+         )`
+      : `COALESCE(
+           (SELECT id FROM pages WHERE slug = $1 LIMIT 1),
+           (SELECT page_id FROM page_aliases WHERE alias_slug = $1 LIMIT 1)
+         )`;
     if (src) params.push(this.activeSourceId(src));
     const { rows } = await this.db.query(
       `SELECT f.slug as from_slug, t.slug as to_slug,
@@ -1114,7 +1199,7 @@ export class PGLiteEngine implements BrainEngine {
        JOIN pages f ON f.id = l.from_page_id
        JOIN pages t ON t.id = l.to_page_id
        LEFT JOIN pages o ON o.id = l.origin_page_id
-       WHERE t.slug = $1${sourceSql}`,
+       WHERE t.id = ${pageIdExpr}`,
       params
     );
     return rows as unknown as Link[];
@@ -1363,7 +1448,10 @@ export class PGLiteEngine implements BrainEngine {
     const src = this.activeSourceId(sourceId);
     const { rows } = await this.db.query(
       `SELECT tag FROM tags
-       WHERE page_id = (SELECT id FROM pages WHERE slug = $1 AND source_id = $2)
+       WHERE page_id = COALESCE(
+         (SELECT id FROM pages WHERE slug = $1 AND source_id = $2 LIMIT 1),
+         (SELECT page_id FROM page_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1)
+       )
        ORDER BY tag`,
       [slug, src]
     );
@@ -1416,33 +1504,36 @@ export class PGLiteEngine implements BrainEngine {
 
   async getTimeline(slug: string, opts?: TimelineOpts): Promise<TimelineEntry[]> {
     const limit = opts?.limit || 100;
+    const params: unknown[] = [slug];
+    const sourceId = opts?.sourceId || process.env.GBRAIN_SOURCE;
+    const pageIdExpr = sourceId
+      ? `COALESCE(
+          (SELECT id FROM pages WHERE slug = $1 AND source_id = $2 LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1)
+        )`
+      : `COALESCE(
+          (SELECT id FROM pages WHERE slug = $1 LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = $1 LIMIT 1)
+        )`;
+    if (sourceId) params.push(this.activeSourceId(sourceId));
 
-    let result;
-    if (opts?.after && opts?.before) {
-      result = await this.db.query(
-        `SELECT te.* FROM timeline_entries te
-         JOIN pages p ON p.id = te.page_id
-         WHERE p.slug = $1 AND te.date >= $2::date AND te.date <= $3::date
-         ORDER BY te.date DESC LIMIT $4`,
-        [slug, opts.after, opts.before, limit]
-      );
-    } else if (opts?.after) {
-      result = await this.db.query(
-        `SELECT te.* FROM timeline_entries te
-         JOIN pages p ON p.id = te.page_id
-         WHERE p.slug = $1 AND te.date >= $2::date
-         ORDER BY te.date DESC LIMIT $3`,
-        [slug, opts.after, limit]
-      );
-    } else {
-      result = await this.db.query(
-        `SELECT te.* FROM timeline_entries te
-         JOIN pages p ON p.id = te.page_id
-         WHERE p.slug = $1
-         ORDER BY te.date DESC LIMIT $2`,
-        [slug, limit]
-      );
+    let dateFilter = '';
+    if (opts?.after) {
+      params.push(opts.after);
+      dateFilter += ` AND te.date >= $${params.length}::date`;
     }
+    if (opts?.before) {
+      params.push(opts.before);
+      dateFilter += ` AND te.date <= $${params.length}::date`;
+    }
+    params.push(limit);
+
+    const result = await this.db.query(
+      `SELECT te.* FROM timeline_entries te
+       WHERE te.page_id = ${pageIdExpr}${dateFilter}
+       ORDER BY te.date DESC LIMIT $${params.length}`,
+      params,
+    );
 
     return result.rows as unknown as TimelineEntry[];
   }
@@ -1460,23 +1551,31 @@ export class PGLiteEngine implements BrainEngine {
     );
   }
 
-  async getRawData(slug: string, source?: string): Promise<RawData[]> {
-    let result;
+  async getRawData(slug: string, source?: string, sourceId?: string): Promise<RawData[]> {
+    const params: unknown[] = [slug];
+    const brainSourceId = sourceId || process.env.GBRAIN_SOURCE;
+    const pageIdExpr = brainSourceId
+      ? `COALESCE(
+          (SELECT id FROM pages WHERE slug = $1 AND source_id = $2 LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1)
+        )`
+      : `COALESCE(
+          (SELECT id FROM pages WHERE slug = $1 LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = $1 LIMIT 1)
+        )`;
+    if (brainSourceId) params.push(this.activeSourceId(brainSourceId));
+
+    let sourceFilter = '';
     if (source) {
-      result = await this.db.query(
-        `SELECT rd.source, rd.data, rd.fetched_at FROM raw_data rd
-         JOIN pages p ON p.id = rd.page_id
-         WHERE p.slug = $1 AND rd.source = $2`,
-        [slug, source]
-      );
-    } else {
-      result = await this.db.query(
-        `SELECT rd.source, rd.data, rd.fetched_at FROM raw_data rd
-         JOIN pages p ON p.id = rd.page_id
-         WHERE p.slug = $1`,
-        [slug]
-      );
+      params.push(source);
+      sourceFilter = ` AND rd.source = $${params.length}`;
     }
+
+    const result = await this.db.query(
+      `SELECT rd.source, rd.data, rd.fetched_at FROM raw_data rd
+       WHERE rd.page_id = ${pageIdExpr}${sourceFilter}`,
+      params,
+    );
     return result.rows as unknown as RawData[];
   }
 
@@ -1820,13 +1919,24 @@ export class PGLiteEngine implements BrainEngine {
     return rows[0] as unknown as PageVersion;
   }
 
-  async getVersions(slug: string): Promise<PageVersion[]> {
+  async getVersions(slug: string, sourceId?: string): Promise<PageVersion[]> {
+    const params: unknown[] = [slug];
+    const brainSourceId = sourceId || process.env.GBRAIN_SOURCE;
+    const pageIdExpr = brainSourceId
+      ? `COALESCE(
+          (SELECT id FROM pages WHERE slug = $1 AND source_id = $2 LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1)
+        )`
+      : `COALESCE(
+          (SELECT id FROM pages WHERE slug = $1 LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = $1 LIMIT 1)
+        )`;
+    if (brainSourceId) params.push(this.activeSourceId(brainSourceId));
     const { rows } = await this.db.query(
       `SELECT pv.* FROM page_versions pv
-       JOIN pages p ON p.id = pv.page_id
-       WHERE p.slug = $1
+       WHERE pv.page_id = ${pageIdExpr}
        ORDER BY pv.snapshot_at DESC`,
-      [slug]
+      params,
     );
     return rows as unknown as PageVersion[];
   }
@@ -2019,6 +2129,120 @@ export class PGLiteEngine implements BrainEngine {
     // Stub: links use integer page_id FKs, already correct after updateSlug.
   }
 
+  async renamePage(oldSlug: string, newSlug: string, opts: RenamePageOpts = {}): Promise<RenamePageResult> {
+    oldSlug = validateSlug(oldSlug);
+    newSlug = validateSlug(newSlug);
+    const sourceId = this.activeSourceId(opts.sourceId);
+    const createAlias = opts.createAlias !== false;
+    const rewriteReferences = opts.rewriteReferences !== false;
+
+    return this.db.transaction(async (tx) => {
+      const existing = await tx.query(
+        `SELECT id FROM pages WHERE slug = $1 AND source_id = $2 AND deleted_at IS NULL`,
+        [oldSlug, sourceId],
+      );
+      if (existing.rows.length === 0) {
+        throw new Error(`renamePage failed: page "${oldSlug}" not found in source "${sourceId}"`);
+      }
+      const pageId = Number((existing.rows[0] as { id: number }).id);
+
+      if (oldSlug === newSlug) {
+        return {
+          status: 'noop' as const,
+          old_slug: oldSlug,
+          new_slug: newSlug,
+          source_id: sourceId,
+          page_id: pageId,
+          alias_created: false,
+          references_rewritten: { pages: 0, chunks: 0 },
+        };
+      }
+
+      const targetPage = await tx.query(
+        `SELECT id FROM pages WHERE slug = $1 AND source_id = $2 LIMIT 1`,
+        [newSlug, sourceId],
+      );
+      if (targetPage.rows.length > 0) {
+        throw new Error(`renamePage failed: target slug "${newSlug}" already exists in source "${sourceId}"`);
+      }
+      const targetAlias = await tx.query(
+        `SELECT page_id FROM page_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1`,
+        [newSlug, sourceId],
+      );
+      if (targetAlias.rows.length > 0) {
+        throw new Error(`renamePage failed: target slug "${newSlug}" already exists as an alias in source "${sourceId}"`);
+      }
+
+      let aliasCreated = false;
+      if (createAlias) {
+        const aliasConflict = await tx.query(
+          `SELECT page_id FROM page_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1`,
+          [oldSlug, sourceId],
+        );
+        if (aliasConflict.rows.length > 0) {
+          const existingAliasPageId = Number((aliasConflict.rows[0] as { page_id: number }).page_id);
+          if (existingAliasPageId !== pageId) {
+            throw new Error(`renamePage failed: old slug "${oldSlug}" is already an alias for another page in source "${sourceId}"`);
+          }
+        } else {
+          await tx.query(
+            `INSERT INTO page_aliases (source_id, page_id, alias_slug, updated_at)
+             VALUES ($1, $2, $3, now())`,
+            [sourceId, pageId, oldSlug],
+          );
+          aliasCreated = true;
+        }
+      }
+
+      await tx.query(
+        `UPDATE pages SET slug = $1, updated_at = now() WHERE id = $2 AND source_id = $3`,
+        [newSlug, pageId, sourceId],
+      );
+
+      let pageRefs = 0;
+      let chunkRefs = 0;
+      if (rewriteReferences) {
+        const pageRefResult = await tx.query(
+          `UPDATE pages
+           SET compiled_truth = replace(compiled_truth, $1, $2),
+               timeline = replace(timeline, $1, $2),
+               content_hash = NULL,
+               updated_at = now()
+           WHERE source_id = $3
+             AND deleted_at IS NULL
+             AND (compiled_truth LIKE $4 OR timeline LIKE $4)
+           RETURNING id`,
+          [oldSlug, newSlug, sourceId, `%${oldSlug}%`],
+        );
+        pageRefs = pageRefResult.rows.length;
+
+        const chunkRefResult = await tx.query(
+          `UPDATE content_chunks cc
+           SET chunk_text = replace(chunk_text, $1, $2),
+               embedding = NULL,
+               embedded_at = NULL
+           FROM pages p
+           WHERE p.id = cc.page_id
+             AND p.source_id = $3
+             AND cc.chunk_text LIKE $4
+           RETURNING cc.id`,
+          [oldSlug, newSlug, sourceId, `%${oldSlug}%`],
+        );
+        chunkRefs = chunkRefResult.rows.length;
+      }
+
+      return {
+        status: 'renamed' as const,
+        old_slug: oldSlug,
+        new_slug: newSlug,
+        source_id: sourceId,
+        page_id: pageId,
+        alias_created: aliasCreated,
+        references_rewritten: { pages: pageRefs, chunks: chunkRefs },
+      };
+    });
+  }
+
   // Config
   async getConfig(key: string): Promise<string | null> {
     const { rows } = await this.db.query('SELECT value FROM config WHERE key = $1', [key]);
@@ -2038,13 +2262,25 @@ export class PGLiteEngine implements BrainEngine {
     await this.db.exec(sql);
   }
 
-  async getChunksWithEmbeddings(slug: string): Promise<Chunk[]> {
+  async getChunksWithEmbeddings(slug: string, sourceId?: string): Promise<Chunk[]> {
+    const params: unknown[] = [slug];
+    const brainSourceId = sourceId || process.env.GBRAIN_SOURCE;
+    const pageIdExpr = brainSourceId
+      ? `COALESCE(
+          (SELECT id FROM pages WHERE slug = $1 AND source_id = $2 LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1)
+        )`
+      : `COALESCE(
+          (SELECT id FROM pages WHERE slug = $1 LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = $1 LIMIT 1)
+        )`;
+    if (brainSourceId) params.push(this.activeSourceId(brainSourceId));
     const { rows } = await this.db.query(
       `SELECT cc.* FROM content_chunks cc
        JOIN pages p ON p.id = cc.page_id
-       WHERE p.slug = $1
+       WHERE p.id = ${pageIdExpr}
        ORDER BY cc.chunk_index`,
-      [slug]
+      params,
     );
     return (rows as Record<string, unknown>[]).map(r => rowToChunk(r, true));
   }

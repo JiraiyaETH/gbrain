@@ -7,7 +7,11 @@ triggers:
   - "what's new about"
   - "current state of"
   - "web research"
+  - "web research pass"
+  - "what changed"
   - "what changed about"
+  - "what changed since I last looked"
+  - "funding-round update"
 mutating: true
 writes_pages: true
 writes_to:

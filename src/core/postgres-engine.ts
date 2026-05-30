@@ -6,6 +6,7 @@ import type {
   DreamVerdict, DreamVerdictInput,
   TakeBatchInput, Take, TakesListOpts, TakeHit, StaleTakeRow,
   TakeResolution, SynthesisEvidenceInput,
+  RenamePageOpts, RenamePageResult,
 } from './engine.ts';
 import { MAX_SEARCH_LIMIT, clampSearchLimit } from './engine.ts';
 import { runMigrations } from './migrate.ts';
@@ -415,13 +416,26 @@ export class PostgresEngine implements BrainEngine {
     const sourceCondition = sourceId ? sql`AND source_id = ${this.activeSourceId(sourceId)}` : sql``;
     const deletedCondition = includeDeleted ? sql`` : sql`AND deleted_at IS NULL`;
     const rows = await sql`
-      SELECT id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at, deleted_at
+      SELECT id, source_id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at, deleted_at
       FROM pages
       WHERE slug = ${slug} ${sourceCondition} ${deletedCondition}
       LIMIT 1
     `;
-    if (rows.length === 0) return null;
-    return rowToPage(rows[0]);
+    if (rows.length > 0) return rowToPage(rows[0]);
+
+    const aliasSourceCondition = sourceId ? sql`AND a.source_id = ${this.activeSourceId(sourceId)}` : sql``;
+    const aliasDeletedCondition = includeDeleted ? sql`` : sql`AND p.deleted_at IS NULL`;
+    const aliasRows = await sql`
+      SELECT p.id, p.source_id, p.slug, p.type, p.title, p.compiled_truth, p.timeline,
+             p.frontmatter, p.content_hash, p.created_at, p.updated_at, p.deleted_at
+      FROM page_aliases a
+      JOIN pages p ON p.id = a.page_id
+      WHERE a.alias_slug = ${slug} ${aliasSourceCondition} ${aliasDeletedCondition}
+      ORDER BY a.updated_at DESC
+      LIMIT 1
+    `;
+    if (aliasRows.length === 0) return null;
+    return rowToPage(aliasRows[0]);
   }
 
   async putPage(slug: string, page: PageInput): Promise<Page> {
@@ -547,19 +561,54 @@ export class PostgresEngine implements BrainEngine {
     return new Set(rows.map((r) => r.slug as string));
   }
 
-  async resolveSlugs(partial: string): Promise<string[]> {
+  async resolveSlugs(partial: string, opts?: { sourceId?: string }): Promise<string[]> {
     const sql = this.sql;
+    const sourceId = opts?.sourceId || process.env.GBRAIN_SOURCE;
+    const pageSourceCondition = sourceId ? sql`AND source_id = ${this.activeSourceId(sourceId)}` : sql``;
 
-    // Try exact match first
-    const exact = await sql`SELECT slug FROM pages WHERE slug = ${partial}`;
-    if (exact.length > 0) return [exact[0].slug];
+    // Try exact canonical match first.
+    const exact = await sql`
+      SELECT slug FROM pages
+      WHERE slug = ${partial} ${pageSourceCondition} AND deleted_at IS NULL
+      LIMIT 1
+    `;
+    if (exact.length > 0) return [exact[0].slug as string];
 
-    // Fuzzy match via pg_trgm
+    // Then exact alias match, returning canonical slugs.
+    const aliasSourceCondition = sourceId ? sql`AND a.source_id = ${this.activeSourceId(sourceId)}` : sql``;
+    const alias = await sql`
+      SELECT DISTINCT p.slug
+      FROM page_aliases a
+      JOIN pages p ON p.id = a.page_id
+      WHERE a.alias_slug = ${partial} ${aliasSourceCondition}
+        AND p.deleted_at IS NULL
+      ORDER BY p.slug
+      LIMIT 5
+    `;
+    if (alias.length > 0) return alias.map((r) => r.slug as string);
+
+    // Fuzzy match via pg_trgm across canonical and alias slugs.
+    const fuzzyPageSourceCondition = sourceId ? sql`AND p.source_id = ${this.activeSourceId(sourceId)}` : sql``;
+    const fuzzyAliasSourceCondition = sourceId ? sql`AND a.source_id = ${this.activeSourceId(sourceId)}` : sql``;
     const fuzzy = await sql`
-      SELECT slug, similarity(title, ${partial}) AS sim
-      FROM pages
-      WHERE title % ${partial} OR slug ILIKE ${'%' + partial + '%'}
-      ORDER BY sim DESC
+      WITH candidates AS (
+        SELECT p.slug, similarity(p.title, ${partial}) AS sim
+        FROM pages p
+        WHERE p.deleted_at IS NULL
+          AND (p.title % ${partial} OR p.slug ILIKE ${'%' + partial + '%'})
+          ${fuzzyPageSourceCondition}
+        UNION
+        SELECT p.slug, similarity(a.alias_slug, ${partial}) AS sim
+        FROM page_aliases a
+        JOIN pages p ON p.id = a.page_id
+        WHERE p.deleted_at IS NULL
+          AND (a.alias_slug % ${partial} OR a.alias_slug ILIKE ${'%' + partial + '%'})
+          ${fuzzyAliasSourceCondition}
+      )
+      SELECT slug, max(sim) AS sim
+      FROM candidates
+      GROUP BY slug
+      ORDER BY sim DESC, slug ASC
       LIMIT 5
     `;
     return fuzzy.map((r) => r.slug as string);
@@ -1001,7 +1050,10 @@ export class PostgresEngine implements BrainEngine {
     const rows = await sql`
       SELECT cc.* FROM content_chunks cc
       JOIN pages p ON p.id = cc.page_id
-      WHERE p.slug = ${slug} AND p.source_id = ${src}
+      WHERE p.id = COALESCE(
+        (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${src} LIMIT 1),
+        (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} AND source_id = ${src} LIMIT 1)
+      )
       ORDER BY cc.chunk_index
     `;
     return rows.map((r) => rowToChunk(r as Record<string, unknown>));
@@ -1150,7 +1202,15 @@ export class PostgresEngine implements BrainEngine {
   async getLinks(slug: string, sourceId?: string): Promise<Link[]> {
     const sql = this.sql;
     const src = sourceId || process.env.GBRAIN_SOURCE;
-    const sourceCondition = src ? sql`AND f.source_id = ${this.activeSourceId(src)}` : sql``;
+    const pageIdExpr = src
+      ? sql`COALESCE(
+          (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${this.activeSourceId(src)} LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} AND source_id = ${this.activeSourceId(src)} LIMIT 1)
+        )`
+      : sql`COALESCE(
+          (SELECT id FROM pages WHERE slug = ${slug} LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} LIMIT 1)
+        )`;
     const rows = await sql`
       SELECT f.slug as from_slug, t.slug as to_slug,
              l.link_type, l.context, l.link_source,
@@ -1159,7 +1219,7 @@ export class PostgresEngine implements BrainEngine {
       JOIN pages f ON f.id = l.from_page_id
       JOIN pages t ON t.id = l.to_page_id
       LEFT JOIN pages o ON o.id = l.origin_page_id
-      WHERE f.slug = ${slug} ${sourceCondition}
+      WHERE f.id = ${pageIdExpr}
     `;
     return rows as unknown as Link[];
   }
@@ -1167,7 +1227,15 @@ export class PostgresEngine implements BrainEngine {
   async getBacklinks(slug: string, sourceId?: string): Promise<Link[]> {
     const sql = this.sql;
     const src = sourceId || process.env.GBRAIN_SOURCE;
-    const sourceCondition = src ? sql`AND t.source_id = ${this.activeSourceId(src)}` : sql``;
+    const pageIdExpr = src
+      ? sql`COALESCE(
+          (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${this.activeSourceId(src)} LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} AND source_id = ${this.activeSourceId(src)} LIMIT 1)
+        )`
+      : sql`COALESCE(
+          (SELECT id FROM pages WHERE slug = ${slug} LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} LIMIT 1)
+        )`;
     const rows = await sql`
       SELECT f.slug as from_slug, t.slug as to_slug,
              l.link_type, l.context, l.link_source,
@@ -1176,7 +1244,7 @@ export class PostgresEngine implements BrainEngine {
       JOIN pages f ON f.id = l.from_page_id
       JOIN pages t ON t.id = l.to_page_id
       LEFT JOIN pages o ON o.id = l.origin_page_id
-      WHERE t.slug = ${slug} ${sourceCondition}
+      WHERE t.id = ${pageIdExpr}
     `;
     return rows as unknown as Link[];
   }
@@ -1425,7 +1493,10 @@ export class PostgresEngine implements BrainEngine {
     const src = this.activeSourceId(sourceId);
     const rows = await sql`
       SELECT tag FROM tags
-      WHERE page_id = (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${src})
+      WHERE page_id = COALESCE(
+        (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${src} LIMIT 1),
+        (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} AND source_id = ${src} LIMIT 1)
+      )
       ORDER BY tag
     `;
     return rows.map((r) => r.tag as string);
@@ -1479,30 +1550,25 @@ export class PostgresEngine implements BrainEngine {
   async getTimeline(slug: string, opts?: TimelineOpts): Promise<TimelineEntry[]> {
     const sql = this.sql;
     const limit = opts?.limit || 100;
+    const sourceId = opts?.sourceId || process.env.GBRAIN_SOURCE;
+    const sourceFilter = sourceId ? this.activeSourceId(sourceId) : null;
+    const pageIdExpr = sourceFilter
+      ? sql`COALESCE(
+          (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${sourceFilter} LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} AND source_id = ${sourceFilter} LIMIT 1)
+        )`
+      : sql`COALESCE(
+          (SELECT id FROM pages WHERE slug = ${slug} LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} LIMIT 1)
+        )`;
+    const afterFilter = opts?.after ? sql`AND te.date >= ${opts.after}::date` : sql``;
+    const beforeFilter = opts?.before ? sql`AND te.date <= ${opts.before}::date` : sql``;
 
-    let rows;
-    if (opts?.after && opts?.before) {
-      rows = await sql`
-        SELECT te.* FROM timeline_entries te
-        JOIN pages p ON p.id = te.page_id
-        WHERE p.slug = ${slug} AND te.date >= ${opts.after}::date AND te.date <= ${opts.before}::date
-        ORDER BY te.date DESC LIMIT ${limit}
-      `;
-    } else if (opts?.after) {
-      rows = await sql`
-        SELECT te.* FROM timeline_entries te
-        JOIN pages p ON p.id = te.page_id
-        WHERE p.slug = ${slug} AND te.date >= ${opts.after}::date
-        ORDER BY te.date DESC LIMIT ${limit}
-      `;
-    } else {
-      rows = await sql`
-        SELECT te.* FROM timeline_entries te
-        JOIN pages p ON p.id = te.page_id
-        WHERE p.slug = ${slug}
-        ORDER BY te.date DESC LIMIT ${limit}
-      `;
-    }
+    const rows = await sql`
+      SELECT te.* FROM timeline_entries te
+      WHERE te.page_id = ${pageIdExpr} ${afterFilter} ${beforeFilter}
+      ORDER BY te.date DESC LIMIT ${limit}
+    `;
 
     return rows as unknown as TimelineEntry[];
   }
@@ -1522,22 +1588,24 @@ export class PostgresEngine implements BrainEngine {
     if (result.length === 0) throw new Error(`putRawData failed: page "${slug}" not found`);
   }
 
-  async getRawData(slug: string, source?: string): Promise<RawData[]> {
+  async getRawData(slug: string, source?: string, sourceId?: string): Promise<RawData[]> {
     const sql = this.sql;
-    let rows;
-    if (source) {
-      rows = await sql`
-        SELECT rd.source, rd.data, rd.fetched_at FROM raw_data rd
-        JOIN pages p ON p.id = rd.page_id
-        WHERE p.slug = ${slug} AND rd.source = ${source}
-      `;
-    } else {
-      rows = await sql`
-        SELECT rd.source, rd.data, rd.fetched_at FROM raw_data rd
-        JOIN pages p ON p.id = rd.page_id
-        WHERE p.slug = ${slug}
-      `;
-    }
+    const brainSourceId = sourceId || process.env.GBRAIN_SOURCE;
+    const sourceFilter = brainSourceId ? this.activeSourceId(brainSourceId) : null;
+    const pageIdExpr = sourceFilter
+      ? sql`COALESCE(
+          (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${sourceFilter} LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} AND source_id = ${sourceFilter} LIMIT 1)
+        )`
+      : sql`COALESCE(
+          (SELECT id FROM pages WHERE slug = ${slug} LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} LIMIT 1)
+        )`;
+    const rawSourceFilter = source ? sql`AND rd.source = ${source}` : sql``;
+    const rows = await sql`
+      SELECT rd.source, rd.data, rd.fetched_at FROM raw_data rd
+      WHERE rd.page_id = ${pageIdExpr} ${rawSourceFilter}
+    `;
     return rows as unknown as RawData[];
   }
 
@@ -1851,12 +1919,22 @@ export class PostgresEngine implements BrainEngine {
     return rows[0] as unknown as PageVersion;
   }
 
-  async getVersions(slug: string): Promise<PageVersion[]> {
+  async getVersions(slug: string, sourceId?: string): Promise<PageVersion[]> {
     const sql = this.sql;
+    const brainSourceId = sourceId || process.env.GBRAIN_SOURCE;
+    const sourceFilter = brainSourceId ? this.activeSourceId(brainSourceId) : null;
+    const pageIdExpr = sourceFilter
+      ? sql`COALESCE(
+          (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${sourceFilter} LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} AND source_id = ${sourceFilter} LIMIT 1)
+        )`
+      : sql`COALESCE(
+          (SELECT id FROM pages WHERE slug = ${slug} LIMIT 1),
+          (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} LIMIT 1)
+        )`;
     const rows = await sql`
       SELECT pv.* FROM page_versions pv
-      JOIN pages p ON p.id = pv.page_id
-      WHERE p.slug = ${slug}
+      WHERE pv.page_id = ${pageIdExpr}
       ORDER BY pv.snapshot_at DESC
     `;
     return rows as unknown as PageVersion[];
@@ -2047,6 +2125,116 @@ export class PostgresEngine implements BrainEngine {
     // The maintain skill's dead link detector surfaces stale references.
   }
 
+  async renamePage(oldSlug: string, newSlug: string, opts: RenamePageOpts = {}): Promise<RenamePageResult> {
+    oldSlug = validateSlug(oldSlug);
+    newSlug = validateSlug(newSlug);
+    const conn = this.sql;
+    const sourceId = this.activeSourceId(opts.sourceId);
+    const createAlias = opts.createAlias !== false;
+    const rewriteReferences = opts.rewriteReferences !== false;
+
+    return await conn.begin(async (tx) => {
+      const existing = await tx`
+        SELECT id FROM pages
+        WHERE slug = ${oldSlug} AND source_id = ${sourceId} AND deleted_at IS NULL
+        LIMIT 1
+      `;
+      if (existing.length === 0) {
+        throw new Error(`renamePage failed: page "${oldSlug}" not found in source "${sourceId}"`);
+      }
+      const pageId = Number(existing[0].id);
+
+      if (oldSlug === newSlug) {
+        return {
+          status: 'noop' as const,
+          old_slug: oldSlug,
+          new_slug: newSlug,
+          source_id: sourceId,
+          page_id: pageId,
+          alias_created: false,
+          references_rewritten: { pages: 0, chunks: 0 },
+        };
+      }
+
+      const targetPage = await tx`
+        SELECT id FROM pages WHERE slug = ${newSlug} AND source_id = ${sourceId} LIMIT 1
+      `;
+      if (targetPage.length > 0) {
+        throw new Error(`renamePage failed: target slug "${newSlug}" already exists in source "${sourceId}"`);
+      }
+      const targetAlias = await tx`
+        SELECT page_id FROM page_aliases WHERE alias_slug = ${newSlug} AND source_id = ${sourceId} LIMIT 1
+      `;
+      if (targetAlias.length > 0) {
+        throw new Error(`renamePage failed: target slug "${newSlug}" already exists as an alias in source "${sourceId}"`);
+      }
+
+      let aliasCreated = false;
+      if (createAlias) {
+        const aliasConflict = await tx`
+          SELECT page_id FROM page_aliases WHERE alias_slug = ${oldSlug} AND source_id = ${sourceId} LIMIT 1
+        `;
+        if (aliasConflict.length > 0) {
+          const existingAliasPageId = Number(aliasConflict[0].page_id);
+          if (existingAliasPageId !== pageId) {
+            throw new Error(`renamePage failed: old slug "${oldSlug}" is already an alias for another page in source "${sourceId}"`);
+          }
+        } else {
+          await tx`
+            INSERT INTO page_aliases (source_id, page_id, alias_slug, updated_at)
+            VALUES (${sourceId}, ${pageId}, ${oldSlug}, now())
+          `;
+          aliasCreated = true;
+        }
+      }
+
+      await tx`
+        UPDATE pages SET slug = ${newSlug}, updated_at = now()
+        WHERE id = ${pageId} AND source_id = ${sourceId}
+      `;
+
+      let pageRefs = 0;
+      let chunkRefs = 0;
+      if (rewriteReferences) {
+        const pageRefRows = await tx`
+          UPDATE pages
+          SET compiled_truth = replace(compiled_truth, ${oldSlug}, ${newSlug}),
+              timeline = replace(timeline, ${oldSlug}, ${newSlug}),
+              content_hash = NULL,
+              updated_at = now()
+          WHERE source_id = ${sourceId}
+            AND deleted_at IS NULL
+            AND (compiled_truth LIKE ${'%' + oldSlug + '%'} OR timeline LIKE ${'%' + oldSlug + '%'})
+          RETURNING id
+        `;
+        pageRefs = pageRefRows.length;
+
+        const chunkRefRows = await tx`
+          UPDATE content_chunks cc
+          SET chunk_text = replace(chunk_text, ${oldSlug}, ${newSlug}),
+              embedding = NULL,
+              embedded_at = NULL
+          FROM pages p
+          WHERE p.id = cc.page_id
+            AND p.source_id = ${sourceId}
+            AND cc.chunk_text LIKE ${'%' + oldSlug + '%'}
+          RETURNING cc.id
+        `;
+        chunkRefs = chunkRefRows.length;
+      }
+
+      return {
+        status: 'renamed' as const,
+        old_slug: oldSlug,
+        new_slug: newSlug,
+        source_id: sourceId,
+        page_id: pageId,
+        alias_created: aliasCreated,
+        references_rewritten: { pages: pageRefs, chunks: chunkRefs },
+      };
+    });
+  }
+
   // Config
   async getConfig(key: string): Promise<string | null> {
     const sql = this.sql;
@@ -2074,7 +2262,10 @@ export class PostgresEngine implements BrainEngine {
     const rows = await conn`
       SELECT cc.* FROM content_chunks cc
       JOIN pages p ON p.id = cc.page_id
-      WHERE p.slug = ${slug} AND p.source_id = ${src}
+      WHERE p.id = COALESCE(
+        (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${src} LIMIT 1),
+        (SELECT page_id FROM page_aliases WHERE alias_slug = ${slug} AND source_id = ${src} LIMIT 1)
+      )
       ORDER BY cc.chunk_index
     `;
     return rows.map((r) => rowToChunk(r as Record<string, unknown>, true));

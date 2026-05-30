@@ -1689,6 +1689,58 @@ export const MIGRATIONS: Migration[] = [
         ON subagent_messages (job_id, provider_id);
     `,
   },
+  {
+    version: 39,
+    name: 'page_aliases_atomic_rename',
+    // v0.29: durable old-slug aliases for atomic page renames. `pages.slug`
+    // stays canonical; page_aliases lets old addresses resolve to the same
+    // page_id after the canonical row is moved. Source-scoped uniqueness avoids
+    // cross-source hijacks when the same slug exists in multiple sources.
+    sql: `
+      CREATE TABLE IF NOT EXISTS page_aliases (
+        id          BIGSERIAL PRIMARY KEY,
+        source_id   TEXT    NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+        page_id     INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+        alias_slug  TEXT    NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT page_aliases_source_alias_key UNIQUE (source_id, alias_slug)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_page_aliases_page
+        ON page_aliases(page_id);
+      CREATE INDEX IF NOT EXISTS idx_page_aliases_source_page
+        ON page_aliases(source_id, page_id);
+
+      DO $$
+      DECLARE
+        has_bypass BOOLEAN;
+      BEGIN
+        SELECT rolbypassrls INTO has_bypass FROM pg_roles WHERE rolname = current_user;
+        IF has_bypass THEN
+          ALTER TABLE page_aliases ENABLE ROW LEVEL SECURITY;
+        END IF;
+      END $$;
+    `,
+    sqlFor: {
+      pglite: `
+        CREATE TABLE IF NOT EXISTS page_aliases (
+          id          BIGSERIAL PRIMARY KEY,
+          source_id   TEXT    NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+          page_id     INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+          alias_slug  TEXT    NOT NULL,
+          created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+          CONSTRAINT page_aliases_source_alias_key UNIQUE (source_id, alias_slug)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_page_aliases_page
+          ON page_aliases(page_id);
+        CREATE INDEX IF NOT EXISTS idx_page_aliases_source_page
+          ON page_aliases(source_id, page_id);
+      `,
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0
