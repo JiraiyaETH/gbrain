@@ -40,7 +40,7 @@ interface ReindexOpts {
   dryRun?: boolean;
   /** Emit JSON envelope on stdout. */
   json?: boolean;
-  /** Brain repo path (for reading source files). Falls back to sync.repo_path config or process.cwd(). */
+  /** Brain repo path (for reading source files). Falls back to default source local_path for unscoped runs. */
   repoPath?: string;
   /**
    * Skip the embedding call during re-chunk. New chunks land with NULL

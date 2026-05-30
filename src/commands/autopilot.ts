@@ -24,6 +24,7 @@ import type { BrainEngine } from '../core/engine.ts';
 import { loadPreferences } from '../core/preferences.ts';
 import { loadConfig, gbrainPath as gbrainHomePath } from '../core/config.ts';
 import { ChildWorkerSupervisor } from '../core/minions/child-worker-supervisor.ts';
+import { getDefaultSourcePath } from '../core/source-resolver.ts';
 
 /**
  * v0.37.7.0 #1162 — classify autopilot reconnect-loop errors.
@@ -162,14 +163,14 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
     return;
   }
 
-  const repoPath = parseArg(args, '--repo') || await engine.getConfig('sync.repo_path');
+  const repoPath = parseArg(args, '--repo') || await getDefaultSourcePath(engine);
   const baseInterval = parseInt(parseArg(args, '--interval') || '300', 10);
   const jsonMode = args.includes('--json');
   const forceInline = args.includes('--inline');
   const noWorker = !shouldSpawnAutopilotWorker(args);
 
   if (!repoPath) {
-    console.error('No repo path. Use --repo or run gbrain sync --repo first.');
+    console.error('No repo path. Use --repo or attach a local_path to the default source with `gbrain sources add/default`.');
     process.exit(1);
   }
 
@@ -831,9 +832,9 @@ exec '${safeGbrainPath}' autopilot --repo '${safeRepoPath}'
 }
 
 async function installDaemon(engine: BrainEngine, args: string[]) {
-  const repoPath = parseArg(args, '--repo') || await engine.getConfig('sync.repo_path');
+  const repoPath = parseArg(args, '--repo') || await getDefaultSourcePath(engine);
   if (!repoPath) {
-    console.error('No repo path. Use --repo or run gbrain sync --repo first.');
+    console.error('No repo path. Use --repo or attach a local_path to the default source with `gbrain sources add/default`.');
     process.exit(1);
   }
 

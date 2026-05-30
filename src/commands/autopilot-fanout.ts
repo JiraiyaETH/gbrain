@@ -15,8 +15,7 @@
  *   - P1-3: PGLite engines default `fanoutMax=1` (PGLite is single-writer;
  *     parallel fan-out would queue uselessly behind the file lock).
  *   - P1-4: enumeration filters `local_path IS NOT NULL` so pure-DB
- *     sources don't get dispatched (handler would fall back to global
- *     sync.repo_path, which is wrong for them).
+ *     sources don't get dispatched without an authoritative filesystem root.
  *   - P1-5: archive recheck happens in the handler (jobs.ts:1146), not
  *     here, so a source archived between fan-out and worker claim still
  *     skips cleanly.
@@ -205,7 +204,7 @@ export async function dispatchPerSource(
       const job = await queue.add(
         'autopilot-cycle',
         {
-          repoPath: opts.repoPath,
+          repoPath: src.local_path,
           source_id: src.id,
           pull: !!remoteUrl,
         },

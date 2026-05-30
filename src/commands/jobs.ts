@@ -10,6 +10,8 @@ import { WORKER_EXIT_RSS_WATCHDOG } from '../core/minions/worker-exit-codes.ts';
 import type { MinionJob, MinionJobStatus } from '../core/minions/types.ts';
 import { loadConfig, isThinClient } from '../core/config.ts';
 import { callRemoteTool, unpackToolResult } from '../core/mcp-client.ts';
+import { getSourceLocalPath, resolveBrainRepoPath } from '../core/source-resolver.ts';
+import { resolve as resolvePath } from 'path';
 
 function parseFlag(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
@@ -18,6 +20,63 @@ function parseFlag(args: string[], flag: string): string | undefined {
 
 function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
+}
+
+type JobPathData = Record<string, unknown>;
+
+function jobSourceId(data: JobPathData): string | undefined {
+  if (typeof data.source_id === 'string') return data.source_id;
+  if (typeof data.sourceId === 'string') return data.sourceId;
+  return undefined;
+}
+
+function jobExplicitPath(data: JobPathData): string | undefined {
+  if (typeof data.repoPath === 'string') return data.repoPath;
+  if (typeof data.dir === 'string') return data.dir;
+  return undefined;
+}
+
+export async function resolveJobBrainDir(
+  engine: BrainEngine,
+  data: JobPathData,
+  purpose: string,
+  opts?: { requireSourcePathMatch?: boolean; allowMissing?: false },
+): Promise<string>;
+export async function resolveJobBrainDir(
+  engine: BrainEngine,
+  data: JobPathData,
+  purpose: string,
+  opts: { requireSourcePathMatch?: boolean; allowMissing: true },
+): Promise<string | null>;
+export async function resolveJobBrainDir(
+  engine: BrainEngine,
+  data: JobPathData,
+  purpose: string,
+  opts: { requireSourcePathMatch?: boolean; allowMissing?: boolean } = {},
+): Promise<string | null> {
+  const explicitPath = jobExplicitPath(data);
+  const sourceId = jobSourceId(data);
+
+  if (explicitPath && sourceId && opts.requireSourcePathMatch) {
+    const sourcePath = await getSourceLocalPath(engine, sourceId);
+    if (!sourcePath) {
+      throw new Error(`${purpose}: source ${sourceId} has no local_path; pass a repoPath only for legacy unscoped jobs or attach the source path first.`);
+    }
+    if (resolvePath(explicitPath) !== resolvePath(sourcePath)) {
+      throw new Error(`${purpose}: repoPath ${explicitPath} does not match source ${sourceId} local_path ${sourcePath}.`);
+    }
+  }
+
+  const resolved = await resolveBrainRepoPath(engine, { explicitPath, sourceId });
+  if (!resolved) {
+    if (opts.allowMissing) return null;
+    throw new Error(
+      `${purpose}: no brain repo path configured. ` +
+      `Pass job.data.repoPath/job.data.dir, provide source_id/sourceId for a source with local_path, ` +
+      `or configure a default source local_path with \`gbrain sources add/default\`.`,
+    );
+  }
+  return resolved;
 }
 
 /** Parse `--max-waiting N` from CLI args. Returns undefined if absent.
@@ -1355,18 +1414,14 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     const mode = (typeof job.data.mode === 'string' && ['links', 'timeline', 'all'].includes(job.data.mode))
       ? (job.data.mode as 'links' | 'timeline' | 'all')
       : 'all';
-    const dir = typeof job.data.dir === 'string'
-      ? job.data.dir
-      : (await engine.getConfig('sync.repo_path')) ?? '.';
+    const dir = await resolveJobBrainDir(engine, job.data as JobPathData, 'extract');
     return await runExtractCore(engine, { mode, dir, dryRun: !!job.data.dryRun });
   });
 
   worker.register('backlinks', async (job) => {
     const { runBacklinksCore } = await import('./backlinks.ts');
     const action: 'check' | 'fix' = job.data.action === 'check' ? 'check' : 'fix';
-    const dir = typeof job.data.dir === 'string'
-      ? job.data.dir
-      : (await engine.getConfig('sync.repo_path')) ?? '.';
+    const dir = await resolveJobBrainDir(engine, job.data as JobPathData, 'backlinks');
     return await runBacklinksCore({ action, dir, dryRun: !!job.data.dryRun });
   });
 
@@ -1398,14 +1453,6 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
   // throw on partial: a flaky phase must not block every future cycle.
   worker.register('autopilot-cycle', async (job) => {
     const { runCycle } = await import('../core/cycle.ts');
-    // v0.41.30 (T2): fall back to null (NOT cwd '.') when no repo is configured.
-    // The queued cycle is the same primitive `gbrain dream` uses; a checkout-less
-    // postgres brain should skip filesystem phases (no_brain_dir) and run the
-    // DB-only phases (resolve_symbol_edges, embed, ...) — not silently lint/sync
-    // against whatever directory the worker happens to be running in.
-    const repoPath: string | null = typeof job.data.repoPath === 'string'
-      ? job.data.repoPath
-      : (await engine.getConfig('sync.repo_path')) ?? null;
 
     // v0.38 (codex r1 P1-2 + P1-5): per-source dispatch threading.
     //   - source_id: when set, runCycle uses the per-source lock ID and
@@ -1464,6 +1511,12 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
 
     // Pull default: legacy `true` for back-compat; explicit boolean wins.
     const pull = typeof job.data.pull === 'boolean' ? job.data.pull : true;
+    const repoPath = await resolveJobBrainDir(
+      engine,
+      job.data as JobPathData,
+      'autopilot-cycle',
+      { requireSourcePathMatch: !!sourceId, allowMissing: true },
+    );
 
     const report = await runCycle(engine, {
       brainDir: repoPath,
@@ -1594,18 +1647,13 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
   // the single source of truth for phase semantics.
   const makePhaseHandler = (phase: string) => async (job: any) => {
     const { runCycle } = await import('../core/cycle.ts');
-    // v0.41.38 (codex P2 review): fall back to null (NOT cwd '.') when no repo
-    // is configured, matching the autopilot-cycle handler + `gbrain dream`. On a
-    // checkout-less postgres brain a filesystem phase (synthesize/patterns/...)
-    // skips with reason 'no_brain_dir' instead of running against the worker cwd;
-    // DB-only phases (resolve_symbol_edges/embed/...) ignore brainDir either way.
-    const repoPath: string | null = typeof job.data.repoPath === 'string'
-      ? job.data.repoPath
-      : ((await engine.getConfig('sync.repo_path')) ?? null);
+    const repoPath = await resolveJobBrainDir(engine, job.data as JobPathData, phase, { allowMissing: true });
+    const sourceId = jobSourceId(job.data as JobPathData);
     const report = await runCycle(engine, {
       brainDir: repoPath,
       phases: [phase as any],
       signal: job.signal,
+      ...(sourceId ? { sourceId } : {}),
     });
     return { phase, status: report.status, report };
   };

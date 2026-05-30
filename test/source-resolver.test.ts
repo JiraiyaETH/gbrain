@@ -14,7 +14,13 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { resolveSourceId, getDefaultSourcePath, __testing } from '../src/core/source-resolver.ts';
+import {
+  resolveSourceId,
+  getDefaultSourcePath,
+  getSourceLocalPath,
+  resolveBrainRepoPath,
+  __testing,
+} from '../src/core/source-resolver.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 
 // ── Stub engine ────────────────────────────────────────────
@@ -268,6 +274,87 @@ describe('getDefaultSourcePath', () => {
     );
     const path = await getDefaultSourcePath(engine, '/custom/path/sub');
     expect(path).toBe('/custom/path');
+  });
+});
+
+// ── source-local path helpers ───────────────────────────────
+
+describe('source-local repo path helpers', () => {
+  function makeSourcePathStub(
+    registeredSources: string[],
+    sourcePaths: Record<string, string | null>,
+    defaultKey: string | null = null,
+    legacyPath: string | null = null,
+  ): BrainEngine {
+    return {
+      kind: 'pglite',
+      executeRaw: async <T>(sql: string, params?: unknown[]): Promise<T[]> => {
+        if (sql.includes('SELECT id FROM sources WHERE id = $1')) {
+          const target = params?.[0];
+          return (registeredSources.includes(target as string)
+            ? [{ id: target } as unknown as T]
+            : []);
+        }
+        if (sql.includes('SELECT local_path FROM sources WHERE id = $1')) {
+          const target = params?.[0] as string;
+          if (target in sourcePaths) return [{ local_path: sourcePaths[target] } as unknown as T];
+          return [];
+        }
+        if (sql.includes('SELECT id, local_path FROM sources')) {
+          return Object.entries(sourcePaths)
+            .filter(([_, p]) => p !== null)
+            .map(([id, local_path]) => ({ id, local_path }) as unknown as T);
+        }
+        return [];
+      },
+      getConfig: async (key: string) => {
+        if (key === 'sources.default') return defaultKey;
+        if (key === 'sync.repo_path') return legacyPath;
+        return null;
+      },
+    } as unknown as BrainEngine;
+  }
+
+  test('getSourceLocalPath returns a named source local_path without touching global sync.repo_path', async () => {
+    const engine = makeSourcePathStub(
+      ['default', 'code'],
+      { default: '/brain/default', code: '/brain/code' },
+      'default',
+      '/stale/global',
+    );
+    await expect(getSourceLocalPath(engine, 'code')).resolves.toBe('/brain/code');
+  });
+
+  test('getSourceLocalPath returns null for a registered source with no local_path', async () => {
+    const engine = makeSourcePathStub(['default', 'dbonly'], { default: '/brain/default', dbonly: null });
+    await expect(getSourceLocalPath(engine, 'dbonly')).resolves.toBeNull();
+  });
+
+  test('getSourceLocalPath throws for missing or malformed source ids', async () => {
+    const engine = makeSourcePathStub(['default'], { default: '/brain/default' });
+    await expect(getSourceLocalPath(engine, 'ghost')).rejects.toThrow(/Source "ghost" not found/);
+    await expect(getSourceLocalPath(engine, 'BAD_ID')).rejects.toThrow(/Invalid source id/);
+  });
+
+  test('resolveBrainRepoPath uses explicit path first, then source local_path, then default source path', async () => {
+    const engine = makeSourcePathStub(
+      ['default', 'code'],
+      { default: '/brain/default', code: '/brain/code' },
+      'default',
+      '/stale/global',
+    );
+
+    await expect(resolveBrainRepoPath(engine, { explicitPath: '/explicit', sourceId: 'code' }))
+      .resolves.toBe('/explicit');
+    await expect(resolveBrainRepoPath(engine, { sourceId: 'code' }))
+      .resolves.toBe('/brain/code');
+    await expect(resolveBrainRepoPath(engine, { cwd: '/nowhere' }))
+      .resolves.toBe('/brain/default');
+  });
+
+  test('resolveBrainRepoPath does not use legacy sync.repo_path for named sources', async () => {
+    const engine = makeSourcePathStub(['default', 'dbonly'], { default: '/brain/default', dbonly: null }, 'default', '/legacy/global');
+    await expect(resolveBrainRepoPath(engine, { sourceId: 'dbonly' })).resolves.toBeNull();
   });
 });
 

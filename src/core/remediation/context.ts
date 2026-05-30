@@ -8,6 +8,7 @@
 
 import type { BrainEngine } from '../engine.ts';
 import type { RecommendationContext } from '../brain-score-recommendations.ts';
+import { getDefaultSourcePath } from '../source-resolver.ts';
 
 // Re-export so consumers can `import { RecommendationContext } from '../remediation'`
 // — the canonical RecommendationContext type still lives in
@@ -31,7 +32,7 @@ export async function loadRecommendationContext(
   // Also extended the API-key check to recognize the ZE key alongside
   // OpenAI (was OpenAI-only). After Lane C.3, zeroentropy_api_key lives
   // in GBrainConfig + propagates to the gateway env dict.
-  const repoPath = await engine.getConfig('sync.repo_path');
+  const repoPath = await getDefaultSourcePath(engine);
   let embeddingModel: string | undefined;
   let embeddingDimensions: number | undefined;
   try {

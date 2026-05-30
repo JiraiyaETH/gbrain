@@ -50,6 +50,7 @@ export interface WriteThroughResult {
     | 'repo_not_found'
     | 'page_not_found_after_write'
     | 'source_archived'
+    | 'source_local_path_missing'
     | 'path_escape';
   /** Set when the render/write/rename itself threw (EACCES, ENOTDIR, disk full). */
   error?: string;
@@ -88,12 +89,18 @@ async function resolveWriteThroughTarget(
     return { repoPath: sourceLocalPath, layoutSourceId: 'default' };
   }
 
+  if (sourceId !== 'default') {
+    return { skipped: 'source_local_path_missing' };
+  }
+
   const legacyRepoPath = await engine.getConfig('sync.repo_path');
   if (!legacyRepoPath) {
     return { skipped: 'no_repo_configured' };
   }
 
-  // Legacy shared-root layout for sources that predate per-source local_path.
+  // Legacy single-default installs predate per-source local_path. Keep this
+  // fallback only for the literal default source; named sources must provide
+  // their own local_path or stay DB-only to avoid cross-source write-through.
   return { repoPath: legacyRepoPath, layoutSourceId: sourceId };
 }
 

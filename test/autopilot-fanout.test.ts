@@ -217,9 +217,17 @@ describe('dispatchPerSource — integration with stubbed engine + queue', () => 
       'autopilot-cycle:alpha:2026-05-22T12:00:00.000Z',
       'autopilot-cycle:beta:2026-05-22T12:00:00.000Z',
     ]);
-    // source_id threaded through job data
+    // source_id and source-local repoPath threaded through job data — never the orchestrator root.
     const sourceIds = added.map(j => (j.data as Record<string, unknown>).source_id).sort();
     expect(sourceIds).toEqual(['alpha', 'beta']);
+    const repoPathsBySource = new Map(
+      added.map(j => [
+        (j.data as Record<string, unknown>).source_id,
+        (j.data as Record<string, unknown>).repoPath,
+      ]),
+    );
+    expect(repoPathsBySource.get('alpha')).toBe('/tmp/alpha');
+    expect(repoPathsBySource.get('beta')).toBe('/tmp/beta');
   });
 
   test('pull: true only when source.config.remote_url is set', async () => {

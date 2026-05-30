@@ -1,8 +1,8 @@
 /**
  * put_page write-through tests (v0.38).
  *
- * Verifies that put_page writes the markdown file to disk alongside the
- * DB row when sync.repo_path is configured. Trust gating: subagent
+ * Verifies that put_page writes the markdown file to the source-owned
+ * filesystem root alongside the DB row. Legacy sync.repo_path is retained
  * sandbox writes stay DB-only; dry-run stays DB-only; missing-repo
  * stays DB-only.
  */
@@ -49,7 +49,8 @@ beforeEach(async () => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gbrain-wt-'));
   brainDir = path.join(tmpRoot, 'brain');
   fs.mkdirSync(brainDir, { recursive: true });
-  // Wire sync.repo_path so write-through can find the repo.
+  // Legacy setup: default-source write-through may still fall back here
+  // when sources.local_path is absent.
   await engine.setConfig('sync.repo_path', brainDir);
 });
 
@@ -246,9 +247,7 @@ describe('put_page write-through — multi-source filing', () => {
     expect(fs.existsSync(wrongPath)).toBe(false);
   });
 
-  test('non-default source without local_path keeps legacy .sources layout', async () => {
-    // Create a non-default source row first. Schema fields: id (PK),
-    // name (UNIQUE), plus the v0.26.5 archive columns with defaults.
+  test('non-default source without local_path skips write-through instead of borrowing global repo path', async () => {
     await engine.executeRaw(
       "INSERT INTO sources (id, name) VALUES ('team-x', 'team-x')",
     );
@@ -256,10 +255,10 @@ describe('put_page write-through — multi-source filing', () => {
     const result = (await putPage.handler(ctx, {
       slug: 'shared/page',
       content: '---\ntitle: X\n---\n\nbody',
-    })) as { write_through?: { written: boolean; path?: string } };
-    expect(result.write_through?.written).toBe(true);
-    expect(result.write_through?.path).toBe(path.join(brainDir, '.sources/team-x/shared/page.md'));
-    expect(fs.existsSync(result.write_through!.path!)).toBe(true);
+    })) as { write_through?: { written: boolean; skipped?: string; path?: string } };
+    expect(result.write_through?.written).toBe(false);
+    expect(result.write_through?.skipped).toBe('source_local_path_missing');
+    expect(fs.existsSync(path.join(brainDir, '.sources/team-x/shared/page.md'))).toBe(false);
   });
 });
 

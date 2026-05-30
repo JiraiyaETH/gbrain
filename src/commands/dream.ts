@@ -31,7 +31,7 @@ import {
   type CyclePhase,
   type CycleReport,
 } from '../core/cycle.ts';
-import { resolveSourceId } from '../core/source-resolver.ts';
+import { getDefaultSourcePath, getSourceLocalPath, resolveSourceId } from '../core/source-resolver.ts';
 import { fetchSource } from '../core/sources-load.ts';
 import { existsSync } from 'fs';
 import { resolve } from 'node:path';
@@ -236,20 +236,17 @@ function parseArgs(args: string[]): DreamArgs {
 /**
  * Resolve the brain directory without the `findRepoRoot` footgun.
  *
- * Resolution order (v0.41.30 — postgres support):
- *   1. An explicit --dir argument (exits 1 if it doesn't exist — a real mistake).
- *   2. T1: when --source resolved to a source that has an on-disk `local_path`,
- *      use it (matches `gbrain sync`, lets that source's filesystem phases run).
- *   3. The legacy `sync.repo_path` config key (pre-v0.18 default-source brains).
- *   4. `null` — no local checkout. The cycle then SKIPS filesystem phases
- *      (lint/backlinks/sync/synthesize/extract/patterns) with reason
- *      `no_brain_dir` and runs the DB-only phases (resolve_symbol_edges, embed,
- *      orphans, ...). This is what makes `gbrain dream` work on a postgres /
- *      Supabase brain with no checkout. `runDream` owns the only hard error:
- *      no checkout AND no engine = truly nothing to run.
+ * Resolution order (v0.41.30+ source-local postgres support):
+ *   1. Explicit --dir argument (exits 1 if it doesn't exist — a real mistake).
+ *   2. Named --source local_path only. Named sources never borrow global
+ *      sync.repo_path; if the source has no checkout, filesystem phases skip.
+ *   3. Default/no-source path via getDefaultSourcePath(), including the legacy
+ *      sync.repo_path fallback for pre-source default installs.
+ *   4. null — no local checkout. runCycle skips filesystem phases with
+ *      reason `no_brain_dir` and still runs DB-only phases.
  *
- * Still never walks cwd for a `.git` — only the explicit / source / config
- * signals are trusted.
+ * Still never walks cwd for a `.git` — only explicit / source / config signals
+ * are trusted.
  */
 async function resolveBrainDir(
   engine: BrainEngine | null,
@@ -266,24 +263,10 @@ async function resolveBrainDir(
     return resolve(explicit);
   }
 
-  // T1: the user scoped to a specific source via --source/--source-id; if that
-  // source has a checkout on disk, use it so its filesystem phases can run.
-  if (engine && resolvedSourceId) {
-    const src = await fetchSource(engine, resolvedSourceId);
-    if (src?.local_path && existsSync(src.local_path)) {
-      return resolve(src.local_path);
-    }
-    // Explicit --source whose checkout isn't on disk → DB-only (skip FS phases).
-    // Do NOT fall through to the global sync.repo_path below: that path belongs
-    // to the default/unscoped brain, and running FS phases (sync/lint/extract)
-    // against it while the DB phases AND the last_full_cycle_at stamp target
-    // <resolvedSourceId> would mix scopes — syncing one source's checkout while
-    // marking a different source fresh. (codex P1 review finding.)
-    return null;
-  }
-
   if (engine) {
-    const configured = await engine.getConfig('sync.repo_path');
+    const configured = resolvedSourceId
+      ? await getSourceLocalPath(engine, resolvedSourceId)
+      : await getDefaultSourcePath(engine);
     if (configured && existsSync(configured)) {
       return resolve(configured);
     }

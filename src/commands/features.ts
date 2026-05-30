@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import type { BrainEngine } from '../core/engine.ts';
+import { getDefaultSourcePath } from '../core/source-resolver.ts';
 import { VERSION } from '../version.ts';
 
 // --- Types ---
@@ -161,13 +162,13 @@ async function scanFeatures(engine: BrainEngine): Promise<FeatureScanResult> {
 
     // No sync configured
     try {
-      const syncRepo = await engine.getConfig('sync.repo_path');
+      const syncRepo = await getDefaultSourcePath(engine);
       if (!syncRepo) {
         recommendations.push({
           id: 'no-sync', priority: 2,
           title: 'Configure Sync',
-          pitch: `Brain not syncing from git. Changes in your repo don't reach your brain.`,
-          command: 'gbrain sync --repo <path>',
+          pitch: `Default source has no local_path, so repo-backed maintenance cannot run.`,
+          command: 'gbrain sources add default --path <path>',
           auto_fixable: false,
         });
       }
