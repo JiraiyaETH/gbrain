@@ -36,7 +36,7 @@ import {
 } from './embedding-context.ts';
 import { loadSearchModeConfig, resolveSearchMode } from './search/mode.ts';
 import { normalizeAliasList } from './search/alias-normalize.ts';
-import { isUndefinedTableError, warnOncePerProcess } from './utils.ts';
+import { isUndefinedTableError, warnOncePerProcess, validateSlug } from './utils.ts';
 import { computeCorpusGeneration } from './contextual-retrieval-service.ts';
 import { runGuardrails } from './guardrails.ts';
 
@@ -284,6 +284,12 @@ export async function importFromContent(
     remote?: boolean;
   } = {},
 ): Promise<ImportResult> {
+  // Normalize once at the import boundary. Engine.putPage lowercases slugs via
+  // validateSlug(); every follow-on transactional read/write must use the same
+  // canonical slug or mixed-case CLI/MCP inputs create the page under the
+  // lowercase row and then fail chunk/tag reconciliation against the original.
+  slug = validateSlug(slug);
+
   // v0.18.0+ multi-source: when caller is syncing under a non-default source,
   // every per-page tx call must carry `sourceId` so writes target the right
   // (source_id, slug) row. Pre-fix, putPage relied on the schema DEFAULT and

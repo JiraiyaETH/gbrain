@@ -75,6 +75,32 @@ This is the compiled truth.
     expect(chunkCall).toBeTruthy();
   });
 
+  test('normalizes mixed-case slugs before all transactional writes', async () => {
+    const engine = mockEngine();
+    const result = await importFromContent(
+      engine,
+      'projects/gbrain/CLI-Put-Canary-20260530T014716Z',
+      `---
+type: project
+title: Mixed Case Slug
+---
+
+Body for a mixed-case CLI put canary.
+`,
+      { noEmbed: true, sourceId: 'default' },
+    );
+
+    expect(result.status).toBe('imported');
+    expect(result.slug).toBe('projects/gbrain/cli-put-canary-20260530t014716z');
+
+    const calls = (engine as any)._calls;
+    const putCall = calls.find((c: any) => c.method === 'putPage');
+    const chunkCall = calls.find((c: any) => c.method === 'upsertChunks');
+
+    expect(putCall?.args[0]).toBe('projects/gbrain/cli-put-canary-20260530t014716z');
+    expect(chunkCall?.args[0]).toBe('projects/gbrain/cli-put-canary-20260530t014716z');
+  });
+
   test('skips files larger than MAX_FILE_SIZE (5MB)', async () => {
     const filePath = join(TMP, 'big-file.md');
     const bigContent = '---\ntitle: Big\n---\n' + 'x'.repeat(5_100_000);
