@@ -467,11 +467,14 @@ export async function runPhaseSynthesize(
           ? `anthropic:${config.model}`
           : config.model;
       for (let i = 0; i < chunks.length; i++) {
+        const requiredSlugSuffix = isChunked ? `${hash6}-c${i}` : hash6;
         const childData: SubagentHandlerData = {
           prompt: buildSynthesisPrompt(t, chunks[i], i, chunks.length, priorContradictionsBlock, topology),
           model: subagentModel,
           max_turns: 30,
           allowed_slug_prefixes: allowedSlugPrefixes,
+          required_slug_suffix: requiredSlugSuffix,
+          prevent_existing_page_overwrite: true,
         };
         // Idempotency key parity:
         //   - single-chunk → legacy `dream:synth:<filePath>:<hash16>` (byte-

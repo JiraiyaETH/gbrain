@@ -151,16 +151,25 @@ function namespacedPutPageSchema(
   op: Operation,
   subagentId: number,
   allowedSlugPrefixes?: readonly string[],
+  requiredSlugSuffix?: string,
+  preventExistingPageOverwrite?: boolean,
 ): Record<string, unknown> {
   const base = paramsToInputSchema(op);
   const props = (base.properties as Record<string, Record<string, unknown>>) ?? {};
   if (props.slug) {
     if (allowedSlugPrefixes && allowedSlugPrefixes.length > 0) {
+      const suffixText = requiredSlugSuffix
+        ? ` Final slug segment MUST end with -${requiredSlugSuffix} (or equal ${requiredSlugSuffix}).`
+        : '';
+      const clobberText = preventExistingPageOverwrite
+        ? ' Must be a new page; existing slugs are rejected instead of overwritten.'
+        : '';
       props.slug = {
         ...props.slug,
         description:
           `Page slug. MUST match one of these prefix globs: ${allowedSlugPrefixes.join(', ')}. ` +
-          `Slugs use lowercase alphanumeric segments separated by '/'. No leading slash, no '.md' extension, no underscores.`,
+          `Slugs use lowercase alphanumeric segments separated by '/'. No leading slash, no '.md' extension, no underscores.` +
+          suffixText + clobberText,
       };
     } else {
       props.slug = {
@@ -203,6 +212,10 @@ export interface BuildBrainToolsOpts {
    * SubagentHandlerData.allowed_slug_prefixes via the handler.
    */
   allowedSlugPrefixes?: readonly string[];
+  /** Optional required suffix for the final put_page slug segment. */
+  requiredSlugSuffix?: string;
+  /** Reject put_page updates to existing pages. */
+  preventExistingPageOverwrite?: boolean;
 }
 
 interface OpContextDeps {
@@ -213,6 +226,8 @@ interface OpContextDeps {
   signal?: AbortSignal;
   brainId?: string;
   allowedSlugPrefixes?: readonly string[];
+  requiredSlugSuffix?: string;
+  preventExistingPageOverwrite?: boolean;
 }
 
 function buildOpContext(deps: OpContextDeps): OperationContext {
@@ -234,6 +249,8 @@ function buildOpContext(deps: OpContextDeps): OperationContext {
     allowedSlugPrefixes: deps.allowedSlugPrefixes
       ? [...deps.allowedSlugPrefixes]
       : undefined,
+    requiredSlugSuffix: deps.requiredSlugSuffix,
+    preventExistingPageOverwrite: deps.preventExistingPageOverwrite,
   };
 }
 
@@ -252,7 +269,13 @@ export function buildBrainTools(opts: BuildBrainToolsOpts): ToolDef[] {
 
   return picked.map<ToolDef>(op => {
     const schema = op.name === 'put_page'
-      ? namespacedPutPageSchema(op, opts.subagentId, opts.allowedSlugPrefixes)
+      ? namespacedPutPageSchema(
+          op,
+          opts.subagentId,
+          opts.allowedSlugPrefixes,
+          opts.requiredSlugSuffix,
+          opts.preventExistingPageOverwrite,
+        )
       : paramsToInputSchema(op);
 
     const toolName = sanitizeToolName(op.name);
@@ -279,6 +302,8 @@ export function buildBrainTools(opts: BuildBrainToolsOpts): ToolDef[] {
           signal: ctx.signal,
           brainId: opts.brainId,
           allowedSlugPrefixes: opts.allowedSlugPrefixes,
+          requiredSlugSuffix: opts.requiredSlugSuffix,
+          preventExistingPageOverwrite: opts.preventExistingPageOverwrite,
         });
         const params = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
         return op.handler(opCtx, params);

@@ -193,6 +193,13 @@ export function matchesSlugAllowList(slug: string, prefixes: readonly string[]):
   return false;
 }
 
+function slugLastSegmentHasRequiredSuffix(slug: string, suffix: string): boolean {
+  const cleanSuffix = suffix.trim();
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(cleanSuffix)) return false;
+  const lastSegment = slug.split('/').filter(Boolean).pop() ?? '';
+  return lastSegment === cleanSuffix || lastSegment.endsWith(`-${cleanSuffix}`);
+}
+
 /**
  * Allowlist validator for uploaded file basenames. Rejects control chars, backslashes,
  * RTL overrides (\u202E), leading dot (hidden files) and leading dash (CLI flag confusion).
@@ -328,6 +335,18 @@ export interface OperationContext {
    * v0.15 behavior; pure addition, no regression).
    */
   allowedSlugPrefixes?: string[];
+  /**
+   * Additional subagent put_page guard for Dream synthesize: the final slug
+   * segment must end with this transcript/content hash suffix. This makes the
+   * provenance contract deterministic even if the model ignores prompt text.
+   */
+  requiredSlugSuffix?: string;
+  /**
+   * Additional subagent put_page guard for Dream synthesize: reject updates to
+   * an existing page in the target source. Generic Dream synthesis creates new
+   * reflection/original pages; it should not overwrite richer existing pages.
+   */
+  preventExistingPageOverwrite?: boolean;
   /**
    * Resolved global CLI options (--quiet / --progress-json / --progress-interval).
    * CLI callers populate this from `getCliOptions()`. MCP / library callers
@@ -685,6 +704,27 @@ const put_page: Operation = {
         const prefix = `wiki/agents/${ctx.subagentId}/`;
         if (!slug.startsWith(prefix) || slug.length === prefix.length) {
           throw new OperationError('permission_denied', `put_page via subagent must write under '${prefix}...'`);
+        }
+      }
+
+      const requiredSuffix = typeof ctx.requiredSlugSuffix === 'string'
+        ? ctx.requiredSlugSuffix.trim()
+        : '';
+      if (requiredSuffix && !slugLastSegmentHasRequiredSuffix(slug, requiredSuffix)) {
+        throw new OperationError(
+          'permission_denied',
+          `put_page slug '${slug}' does not end with required slug suffix '${requiredSuffix}'`
+        );
+      }
+
+      if (ctx.preventExistingPageOverwrite === true) {
+        const sourceId = ctx.sourceId ?? 'default';
+        const existing = await ctx.engine.getPage(slug, { sourceId });
+        if (existing) {
+          throw new OperationError(
+            'permission_denied',
+            `put_page slug '${slug}' already exists in source '${sourceId}'; refusing to clobber existing page`
+          );
         }
       }
     }

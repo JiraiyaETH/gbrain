@@ -450,6 +450,18 @@ export interface SubagentHandlerData {
    */
   allowed_slug_prefixes?: string[];
   /**
+   * Dream synthesize provenance guard. When set, every subagent put_page slug
+   * must end its final path segment with this transcript/content hash suffix
+   * (for example `2d0863` or `2d0863-c1`). This is enforced by the tool
+   * dispatcher/op layer, not only by the prompt.
+   */
+  required_slug_suffix?: string;
+  /**
+   * Dream synthesize no-clobber guard. When true, subagent put_page rejects a
+   * slug that already exists in the target source instead of updating it.
+   */
+  prevent_existing_page_overwrite?: boolean;
+  /**
    * v0.41 Approach C: opt out of the auto-generated tool-usage preamble
    * that `buildSystemPrompt()` splices into `system`. Default behavior
    * (omitted or false) prepends a deterministic preamble listing each

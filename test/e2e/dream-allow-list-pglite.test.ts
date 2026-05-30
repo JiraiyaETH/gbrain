@@ -98,6 +98,71 @@ describe('E2E allow-list — trusted-workspace path', () => {
     );
     expect(await engine.getPage('ideas/2026-04-25-thousand-pound-armor')).not.toBeNull();
   });
+
+  test('Dream suffix guard rejects allowed-route writes with the wrong transcript hash suffix', async () => {
+    const tools = buildBrainTools({
+      subagentId: 999,
+      engine,
+      config,
+      allowedSlugPrefixes: ['ideas/*', 'reflections/*'],
+      requiredSlugSuffix: '2d0863',
+      preventExistingPageOverwrite: true,
+    });
+    const tool = findPutPageTool(tools);
+    let threw = false;
+    try {
+      await tool.execute(
+        { slug: 'ideas/2026-05-30-operator-dojo-naming-the-container-right-f8b661', content: SAMPLE_BODY },
+        { engine, jobId: 7782, remote: true },
+      );
+    } catch (e) {
+      threw = true;
+      const msg = e instanceof Error ? e.message : String(e);
+      expect(msg).toMatch(/required slug suffix/i);
+      expect(msg).toContain('2d0863');
+    }
+    expect(threw).toBe(true);
+    expect(await engine.getPage('ideas/2026-05-30-operator-dojo-naming-the-container-right-f8b661')).toBeNull();
+  });
+
+  test('Dream no-clobber guard rejects overwriting an existing page even when suffix is correct', async () => {
+    const slug = 'reflections/2026-05-30-existing-reflection-2d0863';
+    const tools = buildBrainTools({
+      subagentId: 999,
+      engine,
+      config,
+      allowedSlugPrefixes: ['reflections/*'],
+      requiredSlugSuffix: '2d0863',
+      preventExistingPageOverwrite: true,
+    });
+    const tool = findPutPageTool(tools);
+
+    await tool.execute(
+      { slug, content: SAMPLE_BODY },
+      { engine, jobId: 7783, remote: true },
+    );
+    const before = await engine.getPage(slug);
+    expect(before).not.toBeNull();
+    expect(before!.compiled_truth).toContain('body text');
+
+    let threw = false;
+    try {
+      await tool.execute(
+        { slug, content: '---\ntitle: Changed\ntype: default\n---\n\nclobbered\n' },
+        { engine, jobId: 7784, remote: true },
+      );
+    } catch (e) {
+      threw = true;
+      const msg = e instanceof Error ? e.message : String(e);
+      expect(msg).toMatch(/already exists|clobber/i);
+    }
+    expect(threw).toBe(true);
+
+    const after = await engine.getPage(slug);
+    expect(after).not.toBeNull();
+    expect(after!.compiled_truth).toContain('body text');
+    expect(after!.compiled_truth).not.toContain('clobbered');
+  });
 });
 
 describe('E2E allow-list — legacy namespace fallback', () => {
