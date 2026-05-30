@@ -5,8 +5,8 @@
  *
  *   gbrain notability-eval mine [--target-high N] [--target-medium N]
  *                                [--target-low N] [--out PATH]
- *      Walks meetings/, personal/, daily/ in the brain repo (resolved
- *      via `sync.repo_path` config), splits each markdown body into
+ *      Walks meetings/, personal/, daily/ in the resolved brain repo
+ *      (explicit --repo or default source local_path), splits each markdown body into
  *      paragraphs, cheap-Haiku pre-classifies each candidate paragraph,
  *      stratified-samples to target counts (default 20/20/10), writes
  *      candidates JSONL for hand-confirmation.
@@ -302,7 +302,7 @@ export function writeJsonlCases<T>(path: string, cases: T[]): void {
 }
 
 interface RunNotabilityEvalArgs {
-  /** Repo path to mine from (resolves via sync.repo_path config when undefined). */
+  /** Repo path to mine from (explicit --repo or default source local_path). */
   repoPath?: string;
   /** Subcommand: 'mine' | 'review' | 'help'. */
   cmd: string;
@@ -316,7 +316,7 @@ export async function runNotabilityEval(args: RunNotabilityEvalArgs): Promise<vo
   switch (args.cmd) {
     case 'mine': {
       if (!args.repoPath) {
-        throw new Error('mine requires a repoPath. Set sync.repo_path or pass --repo PATH.');
+        throw new Error('mine requires a repoPath. Attach local_path to the default source or pass --repo PATH.');
       }
       const out = (args.flags.out as string) || defaultMiningOutPath();
       const candidates = await mineNotabilityCandidates(resolve(args.repoPath), {

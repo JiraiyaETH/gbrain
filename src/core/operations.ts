@@ -23,6 +23,7 @@ import { isFactsBackstopEligible } from './facts/eligibility.ts';
 import { stripTakesFence } from './takes-fence.ts';
 import { stripFactsFence } from './facts-fence.ts';
 import { bumpLastRetrievedAt } from './last-retrieved.ts';
+import { fetchSource } from './sources-load.ts';
 import { CJK_SLUG_CHARS } from './cjk.ts';
 import * as db from './db.ts';
 import { VERSION } from '../version.ts';
@@ -187,6 +188,52 @@ export function matchesSlugAllowList(slug: string, prefixes: readonly string[]):
     }
   }
   return false;
+}
+
+type PutPageWriteThroughTarget =
+  | { repoPath: string; layoutSourceId: string }
+  | { skipped: string };
+
+async function resolvePutPageWriteThroughTarget(
+  engine: BrainEngine,
+  sourceId: string,
+): Promise<PutPageWriteThroughTarget> {
+  const source = await fetchSource(engine, sourceId);
+  if (source?.archived === true) return { skipped: 'source_archived' };
+
+  const sourceLocalPath = typeof source?.local_path === 'string'
+    ? source.local_path.trim()
+    : '';
+  if (sourceLocalPath) {
+    // The sources table is authoritative for multi-source brains. A source
+    // local_path is already that source's filesystem root, so write directly
+    // under it. Do not use the global sync.repo_path here: that mutable legacy
+    // config is often set by the latest sync/import and can point at a totally
+    // different source clone.
+    return { repoPath: sourceLocalPath, layoutSourceId: 'default' };
+  }
+
+  if (sourceId !== 'default') {
+    return { skipped: 'source_local_path_missing' };
+  }
+
+  const legacyRepoPath = await engine.getConfig('sync.repo_path');
+  if (!legacyRepoPath) return { skipped: 'no_repo_configured' };
+
+  // Legacy single-default installs predate per-source local_path. Keep this
+  // fallback only for the literal default source; named sources must provide
+  // their own local_path or stay DB-only to avoid cross-source write-through.
+  return { repoPath: legacyRepoPath, layoutSourceId: sourceId };
+}
+
+function isLexicallyInside(root: string, filePath: string): boolean {
+  const rootAbs = resolve(root);
+  const fileAbs = resolve(filePath);
+  const rel = relative(rootAbs, fileAbs);
+  return rel !== ''
+    && !rel.startsWith('..')
+    && !rel.startsWith(`..${sep}`)
+    && resolve(rootAbs, rel) === fileAbs;
 }
 
 /**
@@ -703,10 +750,11 @@ const put_page: Operation = {
     }
 
     // v0.38 put_page write-through (ingestion cathedral):
-    // After importFromContent succeeds, if `sync.repo_path` resolves to a
-    // real directory, persist the markdown file to disk alongside the DB
-    // row. Failures non-fatal — DB write is durable; subsequent sync
-    // reconciles drift.
+    // After importFromContent succeeds, persist the markdown file to the
+    // source-owned filesystem root alongside the DB row. Per-source
+    // `sources.local_path` wins; legacy `sync.repo_path` is only a fallback for
+    // literal default-source installs that predate per-source roots. Failures
+    // are non-fatal — DB write is durable; subsequent sync reconciles drift.
     //
     // Trust gating:
     //   - Subagent sandbox (viaSubagent without allowedSlugPrefixes) → DB-only.
@@ -716,13 +764,13 @@ const put_page: Operation = {
       && !(Array.isArray(ctx.allowedSlugPrefixes) && ctx.allowedSlugPrefixes.length > 0);
     if (!ctx.dryRun && result.status !== 'error' && !isSandboxSubagent) {
       try {
-        const repoPath = await ctx.engine.getConfig('sync.repo_path');
-        if (!repoPath) {
-          writeThrough = { written: false, skipped: 'no_repo_configured' };
-        } else if (!existsSync(repoPath) || !statSync(repoPath).isDirectory()) {
+        const sourceId = ctx.sourceId ?? 'default';
+        const target = await resolvePutPageWriteThroughTarget(ctx.engine, sourceId);
+        if ('skipped' in target) {
+          writeThrough = { written: false, skipped: target.skipped };
+        } else if (!existsSync(target.repoPath) || !statSync(target.repoPath).isDirectory()) {
           writeThrough = { written: false, skipped: 'repo_not_found' };
         } else {
-          const sourceId = ctx.sourceId ?? 'default';
           const writtenPage = await ctx.engine.getPage(result.slug, { sourceId });
           if (writtenPage) {
             const tags = await ctx.engine.getTags(result.slug, { sourceId });
@@ -734,10 +782,14 @@ const put_page: Operation = {
                 source_kind: provenanceVia,
               },
             });
-            const filePath = resolvePageFilePath(repoPath as string, result.slug, sourceId);
-            mkdirSync(dirname(filePath), { recursive: true });
-            writeFileSync(filePath, md, 'utf8');
-            writeThrough = { written: true, path: filePath };
+            const filePath = resolvePageFilePath(target.repoPath, result.slug, target.layoutSourceId);
+            if (!isLexicallyInside(target.repoPath, filePath)) {
+              writeThrough = { written: false, skipped: 'path_escape' };
+            } else {
+              mkdirSync(dirname(filePath), { recursive: true });
+              writeFileSync(filePath, md, 'utf8');
+              writeThrough = { written: true, path: filePath };
+            }
           } else {
             writeThrough = { written: false, skipped: 'page_not_found_after_write' };
           }

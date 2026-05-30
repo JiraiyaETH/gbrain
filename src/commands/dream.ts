@@ -30,7 +30,7 @@ import {
   type CyclePhase,
   type CycleReport,
 } from '../core/cycle.ts';
-import { resolveSourceId } from '../core/source-resolver.ts';
+import { getDefaultSourcePath, getSourceLocalPath, resolveSourceId } from '../core/source-resolver.ts';
 import { fetchSource } from '../core/sources-load.ts';
 import { existsSync } from 'fs';
 import { resolve } from 'node:path';
@@ -198,17 +198,14 @@ function parseArgs(args: string[]): DreamArgs {
 /**
  * Resolve the brain directory without the `findRepoRoot` footgun.
  *
- * Prior dream.ts walked up 10 levels of cwd looking for `.git` and would
- * happily run lint + sync against an unrelated git repo the user happened
- * to be cd'd into. This resolver only trusts two sources:
- *   1. An explicit --dir argument.
- *   2. The `sync.repo_path` config key set by `gbrain init` (engine-backed).
- *
- * If neither is available, we error out instead of guessing.
+ * Trust only explicit --dir or registered source local_path. Legacy
+ * sync.repo_path fallback is contained inside getDefaultSourcePath() for
+ * pre-source default installs; named sources never fall back globally.
  */
 async function resolveBrainDir(
   engine: BrainEngine | null,
   explicit: string | null,
+  sourceId?: string,
 ): Promise<string> {
   if (explicit) {
     if (!existsSync(explicit)) {
@@ -221,14 +218,18 @@ async function resolveBrainDir(
   }
 
   if (engine) {
-    const configured = await engine.getConfig('sync.repo_path');
+    const configured = sourceId
+      ? await getSourceLocalPath(engine, sourceId)
+      : await getDefaultSourcePath(engine);
     if (configured && existsSync(configured)) {
       return resolve(configured);
     }
   }
 
   console.error(
-    'No brain directory found. Pass --dir <path> or configure one via `gbrain init`.',
+    sourceId
+      ? `Source ${sourceId} has no usable local_path. Attach one with \`gbrain sources add ${sourceId} --path <path>\` or pass --dir <path>.`
+      : 'No brain directory found. Pass --dir <path> or configure a default source local_path with `gbrain sources add/default`.',
   );
   process.exit(1);
 }
@@ -420,7 +421,7 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     }
   }
 
-  const brainDir = await resolveBrainDir(engine, opts.dir);
+  const brainDir = await resolveBrainDir(engine, opts.dir, resolvedSourceId);
   const phases: CyclePhase[] | undefined = opts.phase ? [opts.phase] : undefined;
 
   const report = await runCycle(engine, {

@@ -239,6 +239,50 @@ export async function getDefaultSourcePath(
   return legacyPath ?? null;
 }
 
+/** Return a registered source's local_path without consulting legacy globals. */
+export async function getSourceLocalPath(
+  engine: BrainEngine,
+  sourceId: string,
+): Promise<string | null> {
+  if (!isValidSourceId(sourceId)) {
+    throw new Error(`Invalid source id "${sourceId}". Must match [a-z0-9-]{1,32}.`);
+  }
+  const rows = await engine.executeRaw<{ local_path: string | null }>(
+    `SELECT local_path FROM sources WHERE id = $1`,
+    [sourceId],
+  );
+  if (rows.length === 0) {
+    throw new Error(
+      `Source "${sourceId}" not found. Available sources: ` +
+      `run \`gbrain sources list\` to see registered sources, ` +
+      `or \`gbrain sources add ${sourceId}\` to create it.`,
+    );
+  }
+  return rows[0]?.local_path ?? null;
+}
+
+/**
+ * Resolve a filesystem brain repo path for command/job surfaces.
+ *
+ * Source-scoped calls intentionally do NOT fall back to global
+ * `sync.repo_path`: a named source with no `local_path` is DB-only or
+ * misconfigured, and using a stale global path would cross source
+ * boundaries. Legacy global fallback remains only in getDefaultSourcePath()
+ * for pre-source single-default installs.
+ */
+export async function resolveBrainRepoPath(
+  engine: BrainEngine,
+  opts: {
+    explicitPath?: string | null;
+    sourceId?: string | null;
+    cwd?: string;
+  } = {},
+): Promise<string | null> {
+  if (opts.explicitPath) return opts.explicitPath;
+  if (opts.sourceId) return await getSourceLocalPath(engine, opts.sourceId);
+  return await getDefaultSourcePath(engine, opts.cwd ?? process.cwd());
+}
+
 /**
  * v0.37.7.0 — tier labels for `resolveSourceWithTier()`. Exported so
  * `gbrain sources current --json` and downstream consumers share a

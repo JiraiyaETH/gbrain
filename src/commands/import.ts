@@ -446,17 +446,36 @@ export async function runImport(
       const { recordSyncFailures } = await import('../core/sync.ts');
       recordSyncFailures(failures, gitHead);
     }
-    if (failures.length === 0) {
-      await engine.setConfig('sync.last_commit', gitHead);
-    } else {
-      console.error(
-        `\nImport completed with ${failures.length} failure(s). ` +
-        `sync.last_commit NOT advanced — re-run 'gbrain sync' to retry, or ` +
-        `'gbrain sync --skip-failed' to acknowledge and move past them.`,
+    if (sourceId) {
+      if (failures.length === 0) {
+        await engine.executeRaw(
+          `UPDATE sources SET last_commit = $1, last_sync_at = now() WHERE id = $2`,
+          [gitHead, sourceId],
+        );
+      } else {
+        console.error(
+          `\nImport completed with ${failures.length} failure(s). ` +
+          `sources.last_commit NOT advanced for ${sourceId} — re-run 'gbrain sync --source ${sourceId}' to retry, or ` +
+          `'gbrain sync --source ${sourceId} --skip-failed' to acknowledge and move past them.`,
+        );
+      }
+      await engine.executeRaw(
+        `UPDATE sources SET local_path = $1 WHERE id = $2`,
+        [dir, sourceId],
       );
+    } else {
+      if (failures.length === 0) {
+        await engine.setConfig('sync.last_commit', gitHead);
+      } else {
+        console.error(
+          `\nImport completed with ${failures.length} failure(s). ` +
+          `sync.last_commit NOT advanced — re-run 'gbrain sync' to retry, or ` +
+          `'gbrain sync --skip-failed' to acknowledge and move past them.`,
+        );
+      }
+      await engine.setConfig('sync.last_run', new Date().toISOString());
+      await engine.setConfig('sync.repo_path', dir);
     }
-    await engine.setConfig('sync.last_run', new Date().toISOString());
-    await engine.setConfig('sync.repo_path', dir);
   }
 
   return { imported, skipped, errors, chunksCreated, failures };

@@ -331,7 +331,7 @@ function classifyOne(check: Check, ctx: RecommendationContext): CheckClassificat
     case 'brain_score':
     case 'sync_freshness':
       if (!ctx.repoPath) {
-        return { check: check.name, status: 'blocked', reason: 'no repo configured (set sync.repo_path)' };
+        return { check: check.name, status: 'blocked', reason: 'no source local_path configured' };
       }
       return { check: check.name, status: 'remediable' };
     case 'missing_embeddings':

@@ -24,6 +24,7 @@ import type { CliOptions } from './core/cli-options.ts';
 import { callRemoteTool, RemoteMcpError, unpackToolResult } from './core/mcp-client.ts';
 import { maybePromptForUpgrade } from './core/thin-client-upgrade-prompt.ts';
 import { VERSION } from './version.ts';
+import { getDefaultSourcePath } from './core/source-resolver.ts';
 
 // Build CLI name -> operation lookup
 const cliOps = new Map<string, Operation>();
@@ -1596,10 +1597,10 @@ async function handleCliOnly(command: string, args: string[]) {
             }
           }
         }
-        // sync.repo_path resolution (matches dream phase pattern).
+        // Source-local repo path resolution: explicit --repo, then default source local_path.
         let repoPath: string | undefined;
         try {
-          repoPath = (flags.repo as string) || (await engine.getConfig('sync.repo_path')) || undefined;
+          repoPath = (flags.repo as string) || (await getDefaultSourcePath(engine)) || undefined;
         } catch { /* engine may not be connected for help */ }
         await runNotabilityEval({ cmd: subcmd, flags, engine, repoPath });
         break;

@@ -28,6 +28,7 @@ import {
   type ParsedTake,
 } from '../core/takes-fence.ts';
 import { withPageLock } from '../core/page-lock.ts';
+import { getDefaultSourcePath } from '../core/source-resolver.ts';
 
 // --- Helpers ---
 
@@ -50,10 +51,10 @@ async function resolveBrainDir(engine: BrainEngine | null, explicitDir: string |
     return explicitDir;
   }
   if (engine) {
-    const configured = await engine.getConfig('sync.repo_path');
+    const configured = await getDefaultSourcePath(engine);
     if (configured && existsSync(configured)) return configured;
   }
-  console.error('No brain directory configured. Pass --dir <path> or run `gbrain init` first.');
+  console.error('No brain directory configured. Pass --dir <path> or configure a default source local_path with `gbrain sources add/default`.');
   process.exit(1);
 }
 
@@ -649,7 +650,7 @@ async function cmdExtract(engine: BrainEngine, rest: string[]): Promise<void> {
  * Inserts a `<!-- gbrain:revisit -->` cursor marker at the bottom of the
  * page body so the editor opens with intent visible.
  */
-async function cmdRevisit(_engine: BrainEngine, rest: string[]): Promise<void> {
+async function cmdRevisit(engine: BrainEngine, rest: string[]): Promise<void> {
   const slug = rest[0];
   if (!slug) {
     process.stderr.write('Usage: gbrain takes revisit <slug>\n');
@@ -657,14 +658,8 @@ async function cmdRevisit(_engine: BrainEngine, rest: string[]): Promise<void> {
   }
   const { existsSync, readFileSync, writeFileSync } = await import('node:fs');
   const { join } = await import('node:path');
-  const { execFileSync, spawnSync } = await import('node:child_process');
-  const { loadConfig } = await import('../core/config.ts');
-  const cfg = loadConfig();
-  const repoPath = (cfg as { sync?: { repo_path?: string } } | null)?.sync?.repo_path;
-  if (!repoPath) {
-    process.stderr.write('No brain repo configured. Run `gbrain config set sync.repo_path /path/to/brain`.\n');
-    process.exit(1);
-  }
+  const { spawnSync } = await import('node:child_process');
+  const repoPath = await resolveBrainDir(engine, null);
   const filePath = join(repoPath, `${slug}.md`);
   if (!existsSync(filePath)) {
     process.stderr.write(`Page not found: ${filePath}\n`);
@@ -683,5 +678,4 @@ async function cmdRevisit(_engine: BrainEngine, rest: string[]): Promise<void> {
   if (result.status !== 0) {
     process.stderr.write(`Editor exited with status ${result.status ?? 'unknown'}\n`);
   }
-  void execFileSync;
 }

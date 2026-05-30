@@ -14,7 +14,8 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
@@ -37,6 +38,9 @@ async function truncatePages(): Promise<void> {
     await (engine as any).db.exec(`DELETE FROM ${t}`);
   }
   await (engine as any).db.exec(`DELETE FROM sources WHERE id <> 'default'`);
+  await engine.unsetConfig?.('sync.repo_path').catch(() => {});
+  await engine.unsetConfig?.('sync.last_commit').catch(() => {});
+  await engine.unsetConfig?.('sync.last_run').catch(() => {});
 }
 
 describe('import --source-id (#1167)', () => {
@@ -78,6 +82,18 @@ describe('import --source-id (#1167)', () => {
     for (const r of rows) {
       expect(r.source_id).toBe('dept-x');
     }
+  });
+
+  test('git-backed import into a registered non-default source does not recreate global sync.repo_path', async () => {
+    execFileSync('git', ['init'], { cwd: scratchDir, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'gbrain-test@example.invalid'], { cwd: scratchDir });
+    execFileSync('git', ['config', 'user.name', 'GBrain Test'], { cwd: scratchDir });
+    execFileSync('git', ['add', '.'], { cwd: scratchDir });
+    execFileSync('git', ['commit', '-m', 'fixture'], { cwd: scratchDir, stdio: 'ignore' });
+
+    await runImport(engine, [scratchDir, '--source-id', 'dept-x', '--no-embed', '--json']);
+
+    await expect(engine.getConfig('sync.repo_path')).resolves.toBeNull();
   });
 
   test('--source-id value is NOT treated as a positional dir arg', async () => {

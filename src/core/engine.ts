@@ -844,9 +844,8 @@ export interface BrainEngine {
    * `sources-ops.listSources`.
    *
    * Defaults filter out archived sources. When `localPathOnly` is true,
-   * also filters `local_path IS NOT NULL` so the autopilot fan-out doesn't
-   * dispatch jobs for pure-DB sources whose handler would fall back to
-   * the global sync.repo_path (codex r1 P1-4).
+   * also filters `local_path IS NOT NULL` so autopilot fan-out dispatches
+   * only sources with an authoritative filesystem root.
    *
    * `config` is returned as `Record<string, unknown>` — both engines
    * already parse the JSONB at the boundary (Postgres-js returns
