@@ -13,11 +13,11 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
-import { runPhaseSynthesize, renderPageToMarkdown } from '../../src/core/cycle/synthesize.ts';
+import { runPhaseSynthesize, renderPageToMarkdown, __testing as synthTesting } from '../../src/core/cycle/synthesize.ts';
 
 interface TestRig {
   engine: PGLiteEngine;
@@ -114,6 +114,42 @@ describe('E2E synthesize — empty corpus', () => {
       expect(result.status).toBe('ok');
       expect((result.details as { transcripts_processed: number }).transcripts_processed).toBe(0);
       expect((result.details as { pages_written: number }).pages_written).toBe(0);
+    } finally {
+      await rig.cleanup();
+    }
+  }, 30_000);
+});
+
+describe('E2E synthesize — daily summary aggregation', () => {
+  test('summary writer appends a run instead of overwriting the same date page', async () => {
+    const rig = await setupRig();
+    try {
+      await (synthTesting as any).writeSummaryPage(
+        rig.engine,
+        rig.brainDir,
+        'dream-cycles/2026-05-30',
+        '2026-05-30',
+        ['reflections/old-page'],
+        [{ jobId: 1, status: 'completed' }],
+      );
+      await (synthTesting as any).writeSummaryPage(
+        rig.engine,
+        rig.brainDir,
+        'dream-cycles/2026-05-30',
+        '2026-05-30',
+        ['ideas/new-page'],
+        [{ jobId: 2, status: 'completed' }],
+      );
+
+      const page = await rig.engine.getPage('dream-cycles/2026-05-30');
+      expect(page).not.toBeNull();
+      expect(page!.compiled_truth).toContain('[[reflections/old-page]]');
+      expect(page!.compiled_truth).toContain('[[ideas/new-page]]');
+      expect(page!.compiled_truth.match(/^## Run /gm)?.length).toBe(2);
+
+      const md = readFileSync(join(rig.brainDir, 'dream-cycles/2026-05-30.md'), 'utf8');
+      expect(md).toContain('[[reflections/old-page]]');
+      expect(md).toContain('[[ideas/new-page]]');
     } finally {
       await rig.cleanup();
     }

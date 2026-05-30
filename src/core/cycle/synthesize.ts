@@ -950,6 +950,7 @@ OUTPUT POLICY (ALL of these are required)
 2. Cross-reference compulsively: every new page MUST contain at least one wikilink (e.g., \`[ref](people/jane-doe)\` or \`[[people/jane-doe]]\`) to existing brain content. Use the search tool to find existing pages first.
 3. Do NOT write to any path outside the allow-list shown in the put_page schema.
 4. Slug discipline: lowercase alphanumeric and hyphens only, slash-separated segments. NO underscores, NO file extensions.
+5. Do not reproduce raw local filesystem paths, migration source IDs, or deprecated route strings from the transcript. If they matter, describe them generically as retired migration paths and write only semantic canonical slugs.
 
 TASKS
 A. Reflections (self-knowledge, pattern recognition, emotional processing):
@@ -1127,47 +1128,34 @@ async function writeSummaryPage(
 ): Promise<void> {
   const completed = childOutcomes.filter(c => c.status === 'completed').length;
   const failed = childOutcomes.length - completed;
-
-  const lines: string[] = [];
-  lines.push(`# Dream cycle ${summaryDate}`);
-  lines.push('');
-  lines.push(`**Children:** ${completed} completed, ${failed} failed/timeout.`);
-  lines.push(`**Pages written:** ${writtenSlugs.length}.`);
-  lines.push('');
-  if (writtenSlugs.length > 0) {
-    lines.push('## Pages');
-    lines.push('');
-    for (const s of writtenSlugs) {
-      lines.push(`- [[${s}]]`);
-    }
-    lines.push('');
+  const existingPage = await engine.getPage(summarySlug, { sourceId: 'default' });
+  const existingBody = existingPage?.compiled_truth?.trimEnd() ?? '';
+  const body = buildSummaryBody(summaryDate, writtenSlugs, childOutcomes, existingBody, completed, failed);
+  const type = existingPage?.type ?? 'dream-cycle';
+  const title = existingPage?.title ?? `Dream cycle ${summaryDate}`;
+  const timeline = existingPage?.timeline ?? '';
+  const frontmatter = {
+    ...(existingPage?.frontmatter ?? {}),
+    dream_generated: true,
+    dream_cycle_date: summaryDate,
+  } as Record<string, unknown>;
+  let tags = ['dream-cycle'];
+  try {
+    const existingTags = await engine.getTags(summarySlug, { sourceId: 'default' });
+    tags = Array.from(new Set([...existingTags, 'dream-cycle']));
+  } catch {
+    // Best-effort: summary markdown still gets the canonical dream-cycle tag.
   }
 
-  const body = lines.join('\n');
-  // Stamp the dream-output identity marker into the summary's frontmatter.
-  // parseMarkdown below round-trips it into the DB-stored frontmatter, so the
-  // marker survives any later reverse-render of the summary page.
-  const fullMarkdown = serializeMarkdown(
-    { dream_generated: true, dream_cycle_date: summaryDate } as Record<string, unknown>,
-    body,
-    '',
-    { type: 'note' as string, title: `Dream cycle ${summaryDate}`, tags: ['dream-cycle'] },
-  );
-
-  // Direct engine.putPage — orchestrator write, no subagent context, no
-  // allow-list check (server-side viaSubagent=false). The summary slug is
-  // pre-validated against SUMMARY_SLUG_RE in the caller.
-  // Importing put_page via operations.ts would re-run namespace logic
-  // unnecessarily; we go straight to the engine.
-  const { parseMarkdown } = await import('../markdown.ts');
-  const parsed = parseMarkdown(fullMarkdown);
   await engine.putPage(summarySlug, {
-    type: parsed.type,
-    title: parsed.title,
-    compiled_truth: parsed.compiled_truth,
-    timeline: parsed.timeline,
-    frontmatter: parsed.frontmatter,
+    type,
+    title,
+    compiled_truth: body,
+    timeline,
+    frontmatter,
   });
+
+  const fullMarkdown = serializeMarkdown(frontmatter, body, timeline, { type, title, tags });
 
   // Also write to disk (orchestrator dual-write).
   try {
@@ -1178,6 +1166,75 @@ async function writeSummaryPage(
     const msg = e instanceof Error ? e.message : String(e);
     process.stderr.write(`[dream] summary file-write failed: ${msg}\n`);
   }
+}
+
+function buildSummaryBody(
+  summaryDate: string,
+  writtenSlugs: string[],
+  childOutcomes: Array<{ jobId: number; status: string }>,
+  existingBody: string,
+  completed: number,
+  failed: number,
+): string {
+  const trimmedExisting = existingBody.trimEnd();
+  if (writtenSlugs.length > 0 && writtenSlugs.every(slug => hasWikiRef(trimmedExisting, slug))) {
+    return trimmedExisting;
+  }
+
+  const runSection = renderSummaryRunSection(
+    nextSummaryRunNumber(trimmedExisting),
+    writtenSlugs,
+    childOutcomes,
+    completed,
+    failed,
+  );
+
+  if (!trimmedExisting) {
+    return [`# Dream cycle ${summaryDate}`, '', runSection].join('\n');
+  }
+  return `${trimmedExisting}\n\n${runSection}`;
+}
+
+function renderSummaryRunSection(
+  runNumber: number,
+  writtenSlugs: string[],
+  childOutcomes: Array<{ jobId: number; status: string }>,
+  completed: number,
+  failed: number,
+): string {
+  const lines: string[] = [];
+  lines.push(`## Run ${runNumber}`);
+  lines.push('');
+  lines.push(`**Children:** ${completed} completed, ${failed} failed/timeout.`);
+  lines.push(`**Pages written:** ${writtenSlugs.length}.`);
+  lines.push('');
+  if (childOutcomes.length > 0) {
+    lines.push('### Child jobs');
+    lines.push('');
+    for (const c of childOutcomes) {
+      lines.push(`- ${c.jobId}: ${c.status}`);
+    }
+    lines.push('');
+  }
+  if (writtenSlugs.length > 0) {
+    lines.push('### Pages');
+    lines.push('');
+    for (const s of writtenSlugs) {
+      lines.push(`- [[${s}]]`);
+    }
+    lines.push('');
+  }
+  return lines.join('\n').trimEnd();
+}
+
+function nextSummaryRunNumber(existingBody: string): number {
+  const matches = Array.from(existingBody.matchAll(/^## Run (\d+)$/gm));
+  if (matches.length === 0) return existingBody.trim().length > 0 ? 2 : 1;
+  return Math.max(...matches.map(m => parseInt(m[1], 10)).filter(Number.isFinite)) + 1;
+}
+
+function hasWikiRef(body: string, slug: string): boolean {
+  return body.includes(`[[${slug}]]`) || body.includes(`](${slug})`);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -1234,4 +1291,5 @@ export const __testing = {
   collectChildPutPageSlugs,
   buildSynthesisPrompt,
   buildSummarySlug,
+  writeSummaryPage,
 };
