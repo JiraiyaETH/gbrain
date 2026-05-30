@@ -1124,6 +1124,35 @@ async function runAutoLink(
   return { ...result, unresolved };
 }
 
+const rename_page: Operation = {
+  name: 'rename_page',
+  description: 'Atomically rename a page slug and optionally create an old-slug alias so existing links/search/discovery keep resolving to the canonical page.',
+  params: {
+    old_slug: { type: 'string', required: true, description: 'Current canonical page slug' },
+    new_slug: { type: 'string', required: true, description: 'New canonical page slug' },
+    source: { type: 'string', description: 'Write within one source id (or ctx.sourceId)' },
+    create_alias: { type: 'boolean', description: 'Create old_slug -> new_slug alias (default true)' },
+    rewrite_references: { type: 'boolean', description: 'Rewrite textual references from old_slug to new_slug (default true)' },
+    dry_run: { type: 'boolean', description: 'Preview without mutating' },
+  },
+  mutating: true,
+  scope: 'write',
+  handler: async (ctx, p) => {
+    const oldSlug = p.old_slug as string;
+    const newSlug = p.new_slug as string;
+    const sourceId = (p.source as string | undefined) ?? ctx.sourceId;
+    if (ctx.dryRun || p.dry_run === true) {
+      return { dry_run: true, action: 'rename_page', old_slug: oldSlug, new_slug: newSlug, source: sourceId };
+    }
+    return ctx.engine.renamePage(oldSlug, newSlug, {
+      sourceId,
+      createAlias: p.create_alias === undefined ? true : (p.create_alias as boolean),
+      rewriteReferences: p.rewrite_references === undefined ? true : (p.rewrite_references as boolean),
+    });
+  },
+  cliHints: { name: 'rename', positional: ['old_slug', 'new_slug'] },
+};
+
 const delete_page: Operation = {
   name: 'delete_page',
   description: 'Soft-delete a page. The row is hidden from search and from get_page/list_pages, but is recoverable via restore_page within 72h. The autopilot purge phase hard-deletes after the recovery window. Pass include_deleted: true to get_page to verify the soft-delete landed.',
@@ -4604,7 +4633,7 @@ const run_skillopt: Operation = {
 
 export const operations: Operation[] = [
   // Page CRUD
-  get_page, put_page, delete_page, list_pages,
+  get_page, put_page, rename_page, delete_page, list_pages,
   // v0.26.5 destructive-guard ops (page-level soft-delete + recovery + admin purge)
   restore_page, purge_deleted_pages,
   // Search

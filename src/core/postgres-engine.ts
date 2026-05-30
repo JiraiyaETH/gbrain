@@ -12,6 +12,7 @@ import type {
   FactRow, FactKind, FactVisibility, FactInsertStatus,
   NewFact, FactListOpts, FactsHealth,
   SourceRow,
+  RenamePageOpts, RenamePageResult,
 } from './engine.ts';
 import { withRetry, BULK_RETRY_OPTS, resolveBulkRetryOpts, computeNextDelay, type BatchAuditSite } from './retry.ts';
 import { logBatchRetry as auditLogBatchRetry, logBatchExhausted as auditLogBatchExhausted } from './audit/batch-retry-audit.ts';
@@ -885,8 +886,22 @@ export class PostgresEngine implements BrainEngine {
       WHERE slug = ${slug} ${sourceCondition} ${deletedCondition}
       LIMIT 1
     `;
-    if (rows.length === 0) return null;
-    return rowToPage(rows[0]);
+    if (rows.length > 0) return rowToPage(rows[0]);
+
+    const aliasSourceCondition = sourceId ? sql`AND a.source_id = ${sourceId}` : sql``;
+    const aliasDeletedCondition = includeDeleted ? sql`` : sql`AND p.deleted_at IS NULL`;
+    const aliasRows = await sql`
+      SELECT p.id, p.source_id, p.slug, p.type, p.title, p.compiled_truth, p.timeline,
+             p.frontmatter, p.content_hash, p.created_at, p.updated_at, p.deleted_at,
+             p.source_kind, p.source_uri, p.ingested_via, p.ingested_at
+      FROM slug_aliases a
+      JOIN pages p ON p.slug = a.canonical_slug AND p.source_id = a.source_id
+      WHERE a.alias_slug = ${slug} ${aliasSourceCondition} ${aliasDeletedCondition}
+      ORDER BY a.id
+      LIMIT 1
+    `;
+    if (aliasRows.length === 0) return null;
+    return rowToPage(aliasRows[0]);
   }
 
   /**
@@ -1429,10 +1444,8 @@ export class PostgresEngine implements BrainEngine {
     const sql = this.sql;
 
     // v0.41.13 #1436: source scope via postgres.js tagged-template
-    // fragments. When neither opt is set the resolver stays unscoped
-    // for back-compat with internal callers. The `deleted_at IS NULL`
-    // filter excludes soft-deleted rows (v0.26.5) from fuzzy candidates
-    // — they're not legitimate match targets for a remote `get_page`.
+    // fragments. Alias matches use the same source scope so one source cannot
+    // hijack another source's old slug.
     const sources = opts?.sourceIds ?? null;
     const scalar = opts?.sourceId ?? null;
     const scopeFragment = sources
@@ -1440,17 +1453,44 @@ export class PostgresEngine implements BrainEngine {
       : scalar
         ? sql` AND source_id = ${scalar}`
         : sql``;
+    const aliasScopeFragment = sources
+      ? sql` AND a.source_id = ANY(${sources}::text[])`
+      : scalar
+        ? sql` AND a.source_id = ${scalar}`
+        : sql``;
 
-    // Try exact match first
-    const exact = await sql`SELECT slug FROM pages WHERE slug = ${partial} AND deleted_at IS NULL${scopeFragment}`;
-    if (exact.length > 0) return [exact[0].slug];
+    // Try exact canonical match first.
+    const exact = await sql`SELECT slug FROM pages WHERE slug = ${partial} AND deleted_at IS NULL${scopeFragment} LIMIT 1`;
+    if (exact.length > 0) return [exact[0].slug as string];
 
-    // Fuzzy match via pg_trgm
+    // Exact alias match returns canonical slug(s).
+    const alias = await sql`
+      SELECT DISTINCT p.slug
+      FROM slug_aliases a
+      JOIN pages p ON p.slug = a.canonical_slug AND p.source_id = a.source_id
+      WHERE a.alias_slug = ${partial} AND p.deleted_at IS NULL${aliasScopeFragment}
+      ORDER BY p.slug
+      LIMIT 5
+    `;
+    if (alias.length > 0) return alias.map((r) => r.slug as string);
+
+    // Fuzzy match via pg_trgm, including aliases as compatibility hints.
     const fuzzy = await sql`
-      SELECT slug, similarity(title, ${partial}) AS sim
-      FROM pages
-      WHERE deleted_at IS NULL AND (title % ${partial} OR slug ILIKE ${'%' + partial + '%'})${scopeFragment}
-      ORDER BY sim DESC
+      WITH candidates AS (
+        SELECT slug, similarity(title, ${partial}) AS sim
+        FROM pages
+        WHERE deleted_at IS NULL AND (title % ${partial} OR slug ILIKE ${'%' + partial + '%'})${scopeFragment}
+        UNION
+        SELECT p.slug, similarity(a.alias_slug, ${partial}) AS sim
+        FROM slug_aliases a
+        JOIN pages p ON p.slug = a.canonical_slug AND p.source_id = a.source_id
+        WHERE p.deleted_at IS NULL
+          AND (a.alias_slug % ${partial} OR a.alias_slug ILIKE ${'%' + partial + '%'})${aliasScopeFragment}
+      )
+      SELECT slug, max(sim) AS sim
+      FROM candidates
+      GROUP BY slug
+      ORDER BY sim DESC, slug ASC
       LIMIT 5
     `;
     return fuzzy.map((r) => r.slug as string);
@@ -2146,10 +2186,11 @@ export class PostgresEngine implements BrainEngine {
   async getChunks(slug: string, opts?: { sourceId?: string }): Promise<Chunk[]> {
     const sql = this.sql;
     const sourceId = opts?.sourceId ?? 'default';
+    const canonicalSlug = await this.resolveSlugWithAlias(slug, sourceId);
     const rows = await sql`
       SELECT cc.* FROM content_chunks cc
       JOIN pages p ON p.id = cc.page_id
-      WHERE p.slug = ${slug} AND p.source_id = ${sourceId}
+      WHERE p.slug = ${canonicalSlug} AND p.source_id = ${sourceId}
       ORDER BY cc.chunk_index
     `;
     return rows.map((r) => rowToChunk(r as Record<string, unknown>));
@@ -2616,6 +2657,7 @@ export class PostgresEngine implements BrainEngine {
     const sql = this.sql;
     // v0.31.8 (D16): two-branch query, mirrors getLinks above.
     if (opts?.sourceId) {
+      const canonicalSlug = await this.resolveSlugWithAlias(slug, opts.sourceId);
       const rows = await sql`
         SELECT f.slug as from_slug, t.slug as to_slug,
                l.link_type, l.context, l.link_source,
@@ -2624,7 +2666,7 @@ export class PostgresEngine implements BrainEngine {
         JOIN pages f ON f.id = l.from_page_id
         JOIN pages t ON t.id = l.to_page_id
         LEFT JOIN pages o ON o.id = l.origin_page_id
-        WHERE t.slug = ${slug} AND t.source_id = ${opts.sourceId}
+        WHERE t.slug = ${canonicalSlug} AND t.source_id = ${opts.sourceId}
       `;
       return rows as unknown as Link[];
     }
@@ -3132,9 +3174,10 @@ export class PostgresEngine implements BrainEngine {
   async getTags(slug: string, opts?: { sourceId?: string }): Promise<string[]> {
     const sql = this.sql;
     const sourceId = opts?.sourceId ?? 'default';
+    const canonicalSlug = await this.resolveSlugWithAlias(slug, sourceId);
     const rows = await sql`
       SELECT tag FROM tags
-      WHERE page_id = (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ${sourceId})
+      WHERE page_id = (SELECT id FROM pages WHERE slug = ${canonicalSlug} AND source_id = ${sourceId})
       ORDER BY tag
     `;
     return rows.map((r) => r.tag as string);
@@ -3201,26 +3244,27 @@ export class PostgresEngine implements BrainEngine {
     // template-literal idiom (which doesn't compose fragment WHERE chains
     // cleanly).
     const sourceId = opts?.sourceId;
+    const lookupSlug = sourceId ? await this.resolveSlugWithAlias(slug, sourceId) : slug;
     let rows;
     if (sourceId) {
       if (opts?.after && opts?.before) {
         rows = await sql`SELECT te.* FROM timeline_entries te JOIN pages p ON p.id = te.page_id
-          WHERE p.slug = ${slug} AND p.source_id = ${sourceId}
+          WHERE p.slug = ${lookupSlug} AND p.source_id = ${sourceId}
             AND te.date >= ${opts.after}::date AND te.date <= ${opts.before}::date
           ORDER BY te.date DESC LIMIT ${limit}`;
       } else if (opts?.after) {
         rows = await sql`SELECT te.* FROM timeline_entries te JOIN pages p ON p.id = te.page_id
-          WHERE p.slug = ${slug} AND p.source_id = ${sourceId}
+          WHERE p.slug = ${lookupSlug} AND p.source_id = ${sourceId}
             AND te.date >= ${opts.after}::date
           ORDER BY te.date DESC LIMIT ${limit}`;
       } else if (opts?.before) {
         rows = await sql`SELECT te.* FROM timeline_entries te JOIN pages p ON p.id = te.page_id
-          WHERE p.slug = ${slug} AND p.source_id = ${sourceId}
+          WHERE p.slug = ${lookupSlug} AND p.source_id = ${sourceId}
             AND te.date <= ${opts.before}::date
           ORDER BY te.date DESC LIMIT ${limit}`;
       } else {
         rows = await sql`SELECT te.* FROM timeline_entries te JOIN pages p ON p.id = te.page_id
-          WHERE p.slug = ${slug} AND p.source_id = ${sourceId}
+          WHERE p.slug = ${lookupSlug} AND p.source_id = ${sourceId}
           ORDER BY te.date DESC LIMIT ${limit}`;
       }
     } else if (opts?.after && opts?.before) {
@@ -3291,11 +3335,12 @@ export class PostgresEngine implements BrainEngine {
     // Postgres.js template-literal style doesn't compose fragments cleanly so
     // we enumerate.
     const sourceId = opts?.sourceId;
+    const lookupSlug = sourceId ? await this.resolveSlugWithAlias(slug, sourceId) : slug;
     let rows;
     if (source && sourceId) {
       rows = await sql`SELECT rd.source, rd.data, rd.fetched_at FROM raw_data rd
         JOIN pages p ON p.id = rd.page_id
-        WHERE p.slug = ${slug} AND rd.source = ${source} AND p.source_id = ${sourceId}`;
+        WHERE p.slug = ${lookupSlug} AND rd.source = ${source} AND p.source_id = ${sourceId}`;
     } else if (source) {
       rows = await sql`SELECT rd.source, rd.data, rd.fetched_at FROM raw_data rd
         JOIN pages p ON p.id = rd.page_id
@@ -3303,7 +3348,7 @@ export class PostgresEngine implements BrainEngine {
     } else if (sourceId) {
       rows = await sql`SELECT rd.source, rd.data, rd.fetched_at FROM raw_data rd
         JOIN pages p ON p.id = rd.page_id
-        WHERE p.slug = ${slug} AND p.source_id = ${sourceId}`;
+        WHERE p.slug = ${lookupSlug} AND p.source_id = ${sourceId}`;
     } else {
       rows = await sql`SELECT rd.source, rd.data, rd.fetched_at FROM raw_data rd
         JOIN pages p ON p.id = rd.page_id
@@ -4416,10 +4461,11 @@ export class PostgresEngine implements BrainEngine {
     const sql = this.sql;
     // v0.31.8 (D16): two-branch.
     if (opts?.sourceId) {
+      const lookupSlug = await this.resolveSlugWithAlias(slug, opts.sourceId);
       const rows = await sql`
         SELECT pv.* FROM page_versions pv
         JOIN pages p ON p.id = pv.page_id
-        WHERE p.slug = ${slug} AND p.source_id = ${opts.sourceId}
+        WHERE p.slug = ${lookupSlug} AND p.source_id = ${opts.sourceId}
         ORDER BY pv.snapshot_at DESC
       `;
       return rows as unknown as PageVersion[];
@@ -4638,6 +4684,120 @@ export class PostgresEngine implements BrainEngine {
     // The maintain skill's dead link detector surfaces stale references.
   }
 
+  async renamePage(oldSlug: string, newSlug: string, opts: RenamePageOpts = {}): Promise<RenamePageResult> {
+    oldSlug = validateSlug(oldSlug);
+    newSlug = validateSlug(newSlug);
+    const conn = this.sql;
+    const sourceId = opts.sourceId ?? 'default';
+    const createAlias = opts.createAlias !== false;
+    const rewriteReferences = opts.rewriteReferences !== false;
+
+    return await conn.begin(async (tx) => {
+      const existing = await tx`
+        SELECT id FROM pages
+        WHERE slug = ${oldSlug} AND source_id = ${sourceId} AND deleted_at IS NULL
+        LIMIT 1
+      `;
+      if (existing.length === 0) {
+        throw new Error(`renamePage failed: page "${oldSlug}" not found in source "${sourceId}"`);
+      }
+      const pageId = Number(existing[0].id);
+
+      if (oldSlug === newSlug) {
+        return {
+          status: 'noop' as const,
+          old_slug: oldSlug,
+          new_slug: newSlug,
+          source_id: sourceId,
+          page_id: pageId,
+          alias_created: false,
+          references_rewritten: { pages: 0, chunks: 0 },
+        };
+      }
+
+      const targetPage = await tx`
+        SELECT id FROM pages WHERE slug = ${newSlug} AND source_id = ${sourceId} LIMIT 1
+      `;
+      if (targetPage.length > 0) {
+        throw new Error(`renamePage failed: target slug "${newSlug}" already exists in source "${sourceId}"`);
+      }
+      const targetAlias = await tx`
+        SELECT canonical_slug FROM slug_aliases WHERE alias_slug = ${newSlug} AND source_id = ${sourceId} LIMIT 1
+      `;
+      if (targetAlias.length > 0) {
+        throw new Error(`renamePage failed: target slug "${newSlug}" already exists as an alias in source "${sourceId}"`);
+      }
+
+      let aliasCreated = false;
+      if (createAlias) {
+        const aliasConflict = await tx`
+          SELECT canonical_slug FROM slug_aliases WHERE alias_slug = ${oldSlug} AND source_id = ${sourceId} LIMIT 1
+        `;
+        if (aliasConflict.length > 0) {
+          const existingCanonical = aliasConflict[0].canonical_slug as string;
+          if (existingCanonical !== newSlug) {
+            throw new Error(`renamePage failed: old slug "${oldSlug}" is already an alias for "${existingCanonical}" in source "${sourceId}"`);
+          }
+        } else {
+          await tx`
+            INSERT INTO slug_aliases (source_id, alias_slug, canonical_slug, notes)
+            VALUES (${sourceId}, ${oldSlug}, ${newSlug}, ${`created by renamePage from ${oldSlug} to ${newSlug}`})
+          `;
+          aliasCreated = true;
+        }
+      }
+
+      await tx`
+        UPDATE pages SET slug = ${newSlug}, updated_at = now()
+        WHERE id = ${pageId} AND source_id = ${sourceId}
+      `;
+      await tx`
+        UPDATE slug_aliases SET canonical_slug = ${newSlug}
+        WHERE canonical_slug = ${oldSlug} AND source_id = ${sourceId}
+      `;
+
+      let pageRefs = 0;
+      let chunkRefs = 0;
+      if (rewriteReferences) {
+        const pageRefRows = await tx`
+          UPDATE pages
+          SET compiled_truth = replace(compiled_truth, ${oldSlug}, ${newSlug}),
+              timeline = replace(timeline, ${oldSlug}, ${newSlug}),
+              content_hash = NULL,
+              updated_at = now()
+          WHERE source_id = ${sourceId}
+            AND deleted_at IS NULL
+            AND (compiled_truth LIKE ${'%' + oldSlug + '%'} OR timeline LIKE ${'%' + oldSlug + '%'})
+          RETURNING id
+        `;
+        pageRefs = pageRefRows.length;
+
+        const chunkRefRows = await tx`
+          UPDATE content_chunks cc
+          SET chunk_text = replace(chunk_text, ${oldSlug}, ${newSlug}),
+              embedding = NULL,
+              embedded_at = NULL
+          FROM pages p
+          WHERE p.id = cc.page_id
+            AND p.source_id = ${sourceId}
+            AND cc.chunk_text LIKE ${'%' + oldSlug + '%'}
+          RETURNING cc.id
+        `;
+        chunkRefs = chunkRefRows.length;
+      }
+
+      return {
+        status: 'renamed' as const,
+        old_slug: oldSlug,
+        new_slug: newSlug,
+        source_id: sourceId,
+        page_id: pageId,
+        alias_created: aliasCreated,
+        references_rewritten: { pages: pageRefs, chunks: chunkRefs },
+      };
+    });
+  }
+
   async resolveSlugWithAlias(
     slug: string,
     sourceOrSources: string | readonly string[],
@@ -4758,17 +4918,18 @@ export class PostgresEngine implements BrainEngine {
   async getChunksWithEmbeddings(slug: string, opts?: { sourceId?: string }): Promise<Chunk[]> {
     const conn = this.sql;
     const sourceId = opts?.sourceId;
+    const canonicalSlug = sourceId ? await this.resolveSlugWithAlias(slug, sourceId) : slug;
     const rows = sourceId
       ? await conn`
           SELECT cc.* FROM content_chunks cc
           JOIN pages p ON p.id = cc.page_id
-          WHERE p.slug = ${slug} AND p.source_id = ${sourceId}
+          WHERE p.slug = ${canonicalSlug} AND p.source_id = ${sourceId}
           ORDER BY cc.chunk_index
         `
       : await conn`
           SELECT cc.* FROM content_chunks cc
           JOIN pages p ON p.id = cc.page_id
-          WHERE p.slug = ${slug}
+          WHERE p.slug = ${canonicalSlug}
           ORDER BY cc.chunk_index
         `;
     return rows.map((r) => rowToChunk(r as Record<string, unknown>, true));

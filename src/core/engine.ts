@@ -58,6 +58,25 @@ export interface SourceRow {
   config: Record<string, unknown>;
 }
 
+export interface RenamePageOpts {
+  /** Source-scopes the rename. Defaults to the caller's active/default source. */
+  sourceId?: string;
+  /** Create an old-slug compatibility alias. Default: true. */
+  createAlias?: boolean;
+  /** Rewrite textual old-slug references in pages/chunks. Default: true. */
+  rewriteReferences?: boolean;
+}
+
+export interface RenamePageResult {
+  status: 'renamed' | 'noop';
+  old_slug: string;
+  new_slug: string;
+  source_id: string;
+  page_id: number;
+  alias_created: boolean;
+  references_rewritten: { pages: number; chunks: number };
+}
+
 export interface TraverseGraphOpts {
   sourceId?: string;
   sourceIds?: string[];
@@ -1749,6 +1768,14 @@ export interface BrainEngine {
    */
   updateSlug(oldSlug: string, newSlug: string, opts?: { sourceId?: string }): Promise<void>;
   rewriteLinks(oldSlug: string, newSlug: string): Promise<void>;
+
+  /**
+   * Atomic canonical slug rename with a source-scoped compatibility alias.
+   * Unlike `updateSlug`, this rejects collisions, keeps an old-slug alias via
+   * `slug_aliases`, optionally rewrites textual references, and returns a
+   * receipt for CLI/MCP callers.
+   */
+  renamePage(oldSlug: string, newSlug: string, opts?: RenamePageOpts): Promise<RenamePageResult>;
 
   /**
    * v0.42 type-unification (T2, plan D1+F10). Returns the canonical slug if

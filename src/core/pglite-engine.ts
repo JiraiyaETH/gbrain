@@ -15,6 +15,7 @@ import type {
   FactRow, FactKind, FactVisibility, FactInsertStatus,
   NewFact, FactListOpts, FactsHealth,
   SourceRow,
+  RenamePageOpts, RenamePageResult,
 } from './engine.ts';
 import { MAX_SEARCH_LIMIT, clampSearchLimit } from './engine.ts';
 import { withRetry, BULK_RETRY_OPTS, resolveBulkRetryOpts, computeNextDelay, type BatchAuditSite } from './retry.ts';
@@ -205,6 +206,22 @@ export class PGLiteEngine implements BrainEngine {
   get db(): PGLiteDB {
     if (!this._db) throw new Error('PGLite not connected. Call connect() first.');
     return this._db;
+  }
+
+  private aliasAwarePageIdExpr(slugParam: string, sourceParam?: string, includeDeleted = false): string {
+    const exactSource = sourceParam ? `AND source_id = ${sourceParam}` : '';
+    const aliasSource = sourceParam ? `AND a.source_id = ${sourceParam}` : '';
+    const exactDeleted = includeDeleted ? '' : 'AND deleted_at IS NULL';
+    const aliasDeleted = includeDeleted ? '' : 'AND p.deleted_at IS NULL';
+    return `COALESCE(
+      (SELECT id FROM pages WHERE slug = ${slugParam} ${exactSource} ${exactDeleted} LIMIT 1),
+      (SELECT p.id
+         FROM slug_aliases a
+         JOIN pages p ON p.slug = a.canonical_slug AND p.source_id = a.source_id
+        WHERE a.alias_slug = ${slugParam} ${aliasSource} ${aliasDeleted}
+        ORDER BY a.id
+        LIMIT 1)
+    )`;
   }
 
   // Lifecycle
@@ -847,8 +864,30 @@ export class PGLiteEngine implements BrainEngine {
        FROM pages WHERE ${where.join(' AND ')} LIMIT 1`,
       params
     );
-    if (rows.length === 0) return null;
-    return rowToPage(rows[0] as Record<string, unknown>);
+    if (rows.length > 0) return rowToPage(rows[0] as Record<string, unknown>);
+
+    const aliasWhere: string[] = ['a.alias_slug = $1'];
+    const aliasParams: unknown[] = [slug];
+    if (sourceId) {
+      aliasParams.push(sourceId);
+      aliasWhere.push(`a.source_id = $${aliasParams.length}`);
+    }
+    if (!includeDeleted) {
+      aliasWhere.push('p.deleted_at IS NULL');
+    }
+    const alias = await this.db.query(
+      `SELECT p.id, p.source_id, p.slug, p.type, p.title, p.compiled_truth, p.timeline,
+              p.frontmatter, p.content_hash, p.created_at, p.updated_at, p.deleted_at,
+              p.source_kind, p.source_uri, p.ingested_via, p.ingested_at
+         FROM slug_aliases a
+         JOIN pages p ON p.slug = a.canonical_slug AND p.source_id = a.source_id
+        WHERE ${aliasWhere.join(' AND ')}
+        ORDER BY a.id
+        LIMIT 1`,
+      aliasParams,
+    );
+    if (alias.rows.length === 0) return null;
+    return rowToPage(alias.rows[0] as Record<string, unknown>);
   }
 
   /**
@@ -1390,18 +1429,44 @@ export class PGLiteEngine implements BrainEngine {
       : scalar
         ? ` AND source_id = $${'__N__'}`
         : '';
+    const aliasScopeSql = sources
+      ? ` AND a.source_id = ANY($${'__N__'}::text[])`
+      : scalar
+        ? ` AND a.source_id = $${'__N__'}`
+        : '';
 
-    // Try exact match first
-    const exactSql = `SELECT slug FROM pages WHERE slug = $1 AND deleted_at IS NULL${scopeSql.replace('__N__', '2')}`;
+    // Try exact canonical match first.
+    const exactSql = `SELECT slug FROM pages WHERE slug = $1 AND deleted_at IS NULL${scopeSql.replace('__N__', '2')} LIMIT 1`;
     const exactParams: unknown[] = sources ? [partial, sources] : scalar ? [partial, scalar] : [partial];
     const exact = await this.db.query(exactSql, exactParams);
     if (exact.rows.length > 0) return [(exact.rows[0] as { slug: string }).slug];
 
-    // Fuzzy match via pg_trgm
-    const fuzzySql = `SELECT slug, similarity(title, $1) AS sim
-       FROM pages
-       WHERE deleted_at IS NULL AND (title % $1 OR slug ILIKE $2)${scopeSql.replace('__N__', '3')}
-       ORDER BY sim DESC
+    // Exact alias match returns canonical slugs.
+    const aliasSql = `SELECT DISTINCT p.slug
+       FROM slug_aliases a
+       JOIN pages p ON p.slug = a.canonical_slug AND p.source_id = a.source_id
+       WHERE a.alias_slug = $1 AND p.deleted_at IS NULL${aliasScopeSql.replace('__N__', '2')}
+       ORDER BY p.slug
+       LIMIT 5`;
+    const aliasParams: unknown[] = sources ? [partial, sources] : scalar ? [partial, scalar] : [partial];
+    const alias = await this.db.query(aliasSql, aliasParams);
+    if (alias.rows.length > 0) return (alias.rows as { slug: string }[]).map(r => r.slug);
+
+    // Fuzzy match via pg_trgm, including alias slugs as compatibility hints.
+    const fuzzySql = `WITH candidates AS (
+         SELECT slug, similarity(title, $1) AS sim
+         FROM pages
+         WHERE deleted_at IS NULL AND (title % $1 OR slug ILIKE $2)${scopeSql.replace('__N__', '3')}
+         UNION
+         SELECT p.slug, similarity(a.alias_slug, $1) AS sim
+         FROM slug_aliases a
+         JOIN pages p ON p.slug = a.canonical_slug AND p.source_id = a.source_id
+         WHERE p.deleted_at IS NULL AND (a.alias_slug % $1 OR a.alias_slug ILIKE $2)${aliasScopeSql.replace('__N__', '3')}
+       )
+       SELECT slug, max(sim) AS sim
+       FROM candidates
+       GROUP BY slug
+       ORDER BY sim DESC, slug ASC
        LIMIT 5`;
     const fuzzyParams: unknown[] = sources
       ? [partial, '%' + partial + '%', sources]
@@ -2093,10 +2158,10 @@ export class PGLiteEngine implements BrainEngine {
 
   async getChunks(slug: string, opts?: { sourceId?: string }): Promise<Chunk[]> {
     const sourceId = opts?.sourceId ?? 'default';
+    const pageIdExpr = this.aliasAwarePageIdExpr('$1', '$2');
     const { rows } = await this.db.query(
       `SELECT cc.* FROM content_chunks cc
-       JOIN pages p ON p.id = cc.page_id
-       WHERE p.slug = $1 AND p.source_id = $2
+       WHERE cc.page_id = ${pageIdExpr}
        ORDER BY cc.chunk_index`,
       [slug, sourceId]
     );
@@ -2550,20 +2615,15 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async getBacklinks(slug: string, opts?: { sourceId?: string }): Promise<Link[]> {
-    // v0.31.8 (D16): two-branch query. See getLinks() comment.
+    // Alias-aware target lookup preserves old-slug backlink reads after a
+    // canonical rename while keeping source-scoped reads source-safe.
+    const params: unknown[] = [slug];
+    let pageIdExpr: string;
     if (opts?.sourceId) {
-      const { rows } = await this.db.query(
-        `SELECT f.slug as from_slug, t.slug as to_slug,
-                l.link_type, l.context, l.link_source,
-                o.slug as origin_slug, l.origin_field
-         FROM links l
-         JOIN pages f ON f.id = l.from_page_id
-         JOIN pages t ON t.id = l.to_page_id
-         LEFT JOIN pages o ON o.id = l.origin_page_id
-         WHERE t.slug = $1 AND t.source_id = $2`,
-        [slug, opts.sourceId]
-      );
-      return rows as unknown as Link[];
+      params.push(opts.sourceId);
+      pageIdExpr = this.aliasAwarePageIdExpr('$1', '$2');
+    } else {
+      pageIdExpr = this.aliasAwarePageIdExpr('$1');
     }
     const { rows } = await this.db.query(
       `SELECT f.slug as from_slug, t.slug as to_slug,
@@ -2573,8 +2633,8 @@ export class PGLiteEngine implements BrainEngine {
        JOIN pages f ON f.id = l.from_page_id
        JOIN pages t ON t.id = l.to_page_id
        LEFT JOIN pages o ON o.id = l.origin_page_id
-       WHERE t.slug = $1`,
-      [slug]
+       WHERE t.id = ${pageIdExpr}`,
+      params
     );
     return rows as unknown as Link[];
   }
@@ -3055,10 +3115,10 @@ export class PGLiteEngine implements BrainEngine {
 
   async getTags(slug: string, opts?: { sourceId?: string }): Promise<string[]> {
     const sourceId = opts?.sourceId ?? 'default';
-    // Source-qualify the page-id subquery; slugs are only unique per source.
+    const pageIdExpr = this.aliasAwarePageIdExpr('$1', '$2');
     const { rows } = await this.db.query(
       `SELECT tag FROM tags
-       WHERE page_id = (SELECT id FROM pages WHERE slug = $1 AND source_id = $2)
+       WHERE page_id = ${pageIdExpr}
        ORDER BY tag`,
       [slug, sourceId]
     );
@@ -3120,12 +3180,18 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async getTimeline(slug: string, opts?: TimelineOpts): Promise<TimelineEntry[]> {
-    // v0.31.8 (D16): build WHERE clause dynamically so opts.sourceId composes
-    // cleanly with the existing after/before filters. Without sourceId, no
-    // source filter applies (preserves pre-v0.31.8 cross-source semantics).
+    // Alias-aware page-id lookup keeps old bookmarked slugs useful after
+    // canonical rename. Source-scoped callers stay pinned to their source.
     const limit = opts?.limit || 100;
-    const where: string[] = ['p.slug = $1'];
     const params: unknown[] = [slug];
+    let pageIdExpr: string;
+    if (opts?.sourceId) {
+      params.push(opts.sourceId);
+      pageIdExpr = this.aliasAwarePageIdExpr('$1', '$2');
+    } else {
+      pageIdExpr = this.aliasAwarePageIdExpr('$1');
+    }
+    const where: string[] = [`p.id = ${pageIdExpr}`];
     if (opts?.after) {
       params.push(opts.after);
       where.push(`te.date >= $${params.length}::date`);
@@ -3133,10 +3199,6 @@ export class PGLiteEngine implements BrainEngine {
     if (opts?.before) {
       params.push(opts.before);
       where.push(`te.date <= $${params.length}::date`);
-    }
-    if (opts?.sourceId) {
-      params.push(opts.sourceId);
-      where.push(`p.source_id = $${params.length}`);
     }
     params.push(limit);
     const result = await this.db.query(
@@ -3189,17 +3251,18 @@ export class PGLiteEngine implements BrainEngine {
     source?: string,
     opts?: { sourceId?: string },
   ): Promise<RawData[]> {
-    // v0.31.8 (D21): build WHERE clause dynamically. Without opts.sourceId,
-    // no source filter (preserves pre-v0.31.8 cross-source read).
-    const where: string[] = ['p.slug = $1'];
     const params: unknown[] = [slug];
+    let pageIdExpr: string;
+    if (opts?.sourceId) {
+      params.push(opts.sourceId);
+      pageIdExpr = this.aliasAwarePageIdExpr('$1', '$2');
+    } else {
+      pageIdExpr = this.aliasAwarePageIdExpr('$1');
+    }
+    const where: string[] = [`p.id = ${pageIdExpr}`];
     if (source) {
       params.push(source);
       where.push(`rd.source = $${params.length}`);
-    }
-    if (opts?.sourceId) {
-      params.push(opts.sourceId);
-      where.push(`p.source_id = $${params.length}`);
     }
     const result = await this.db.query(
       `SELECT rd.source, rd.data, rd.fetched_at FROM raw_data rd
@@ -4364,24 +4427,20 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async getVersions(slug: string, opts?: { sourceId?: string }): Promise<PageVersion[]> {
-    // v0.31.8 (D16): two-branch. Without opts.sourceId, joins return versions
-    // for every same-slug page (preserves pre-v0.31.8 cross-source view).
+    const params: unknown[] = [slug];
+    let pageIdExpr: string;
     if (opts?.sourceId) {
-      const { rows } = await this.db.query(
-        `SELECT pv.* FROM page_versions pv
-         JOIN pages p ON p.id = pv.page_id
-         WHERE p.slug = $1 AND p.source_id = $2
-         ORDER BY pv.snapshot_at DESC`,
-        [slug, opts.sourceId]
-      );
-      return rows as unknown as PageVersion[];
+      params.push(opts.sourceId);
+      pageIdExpr = this.aliasAwarePageIdExpr('$1', '$2', true);
+    } else {
+      pageIdExpr = this.aliasAwarePageIdExpr('$1', undefined, true);
     }
     const { rows } = await this.db.query(
       `SELECT pv.* FROM page_versions pv
        JOIN pages p ON p.id = pv.page_id
-       WHERE p.slug = $1
+       WHERE p.id = ${pageIdExpr}
        ORDER BY pv.snapshot_at DESC`,
-      [slug]
+      params
     );
     return rows as unknown as PageVersion[];
   }
@@ -4589,6 +4648,125 @@ export class PGLiteEngine implements BrainEngine {
     // Stub: links use integer page_id FKs, already correct after updateSlug.
   }
 
+  async renamePage(oldSlug: string, newSlug: string, opts: RenamePageOpts = {}): Promise<RenamePageResult> {
+    oldSlug = validateSlug(oldSlug);
+    newSlug = validateSlug(newSlug);
+    const sourceId = opts.sourceId ?? 'default';
+    const createAlias = opts.createAlias !== false;
+    const rewriteReferences = opts.rewriteReferences !== false;
+
+    return this.db.transaction(async (tx) => {
+      const existing = await tx.query(
+        `SELECT id FROM pages WHERE slug = $1 AND source_id = $2 AND deleted_at IS NULL LIMIT 1`,
+        [oldSlug, sourceId],
+      );
+      if (existing.rows.length === 0) {
+        throw new Error(`renamePage failed: page "${oldSlug}" not found in source "${sourceId}"`);
+      }
+      const pageId = Number((existing.rows[0] as { id: number }).id);
+
+      if (oldSlug === newSlug) {
+        return {
+          status: 'noop' as const,
+          old_slug: oldSlug,
+          new_slug: newSlug,
+          source_id: sourceId,
+          page_id: pageId,
+          alias_created: false,
+          references_rewritten: { pages: 0, chunks: 0 },
+        };
+      }
+
+      const targetPage = await tx.query(
+        `SELECT id FROM pages WHERE slug = $1 AND source_id = $2 LIMIT 1`,
+        [newSlug, sourceId],
+      );
+      if (targetPage.rows.length > 0) {
+        throw new Error(`renamePage failed: target slug "${newSlug}" already exists in source "${sourceId}"`);
+      }
+      const targetAlias = await tx.query(
+        `SELECT canonical_slug FROM slug_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1`,
+        [newSlug, sourceId],
+      );
+      if (targetAlias.rows.length > 0) {
+        throw new Error(`renamePage failed: target slug "${newSlug}" already exists as an alias in source "${sourceId}"`);
+      }
+
+      let aliasCreated = false;
+      if (createAlias) {
+        const aliasConflict = await tx.query(
+          `SELECT canonical_slug FROM slug_aliases WHERE alias_slug = $1 AND source_id = $2 LIMIT 1`,
+          [oldSlug, sourceId],
+        );
+        if (aliasConflict.rows.length > 0) {
+          const existingCanonical = (aliasConflict.rows[0] as { canonical_slug: string }).canonical_slug;
+          if (existingCanonical !== newSlug) {
+            throw new Error(`renamePage failed: old slug "${oldSlug}" is already an alias for "${existingCanonical}" in source "${sourceId}"`);
+          }
+        } else {
+          await tx.query(
+            `INSERT INTO slug_aliases (source_id, alias_slug, canonical_slug, notes)
+             VALUES ($1, $2, $3, $4)`,
+            [sourceId, oldSlug, newSlug, `created by renamePage from ${oldSlug} to ${newSlug}`],
+          );
+          aliasCreated = true;
+        }
+      }
+
+      await tx.query(
+        `UPDATE pages SET slug = $1, updated_at = now() WHERE id = $2 AND source_id = $3`,
+        [newSlug, pageId, sourceId],
+      );
+      await tx.query(
+        `UPDATE slug_aliases SET canonical_slug = $1
+         WHERE canonical_slug = $2 AND source_id = $3`,
+        [newSlug, oldSlug, sourceId],
+      );
+
+      let pageRefs = 0;
+      let chunkRefs = 0;
+      if (rewriteReferences) {
+        const pageRefResult = await tx.query(
+          `UPDATE pages
+           SET compiled_truth = replace(compiled_truth, $1, $2),
+               timeline = replace(timeline, $1, $2),
+               content_hash = NULL,
+               updated_at = now()
+           WHERE source_id = $3
+             AND deleted_at IS NULL
+             AND (compiled_truth LIKE $4 OR timeline LIKE $4)
+           RETURNING id`,
+          [oldSlug, newSlug, sourceId, `%${oldSlug}%`],
+        );
+        pageRefs = pageRefResult.rows.length;
+
+        const chunkRefResult = await tx.query(
+          `UPDATE content_chunks cc
+           SET chunk_text = replace(chunk_text, $1, $2),
+               embedding = NULL,
+               embedded_at = NULL
+           FROM pages p
+           WHERE p.id = cc.page_id
+             AND p.source_id = $3
+             AND cc.chunk_text LIKE $4
+           RETURNING cc.id`,
+          [oldSlug, newSlug, sourceId, `%${oldSlug}%`],
+        );
+        chunkRefs = chunkRefResult.rows.length;
+      }
+
+      return {
+        status: 'renamed' as const,
+        old_slug: oldSlug,
+        new_slug: newSlug,
+        source_id: sourceId,
+        page_id: pageId,
+        alias_created: aliasCreated,
+        references_rewritten: { pages: pageRefs, chunks: chunkRefs },
+      };
+    });
+  }
+
   async resolveSlugWithAlias(
     slug: string,
     sourceOrSources: string | readonly string[],
@@ -4710,22 +4888,21 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async getChunksWithEmbeddings(slug: string, opts?: { sourceId?: string }): Promise<Chunk[]> {
-    const sourceId = opts?.sourceId;
-    const { rows } = sourceId
-      ? await this.db.query(
-          `SELECT cc.* FROM content_chunks cc
-           JOIN pages p ON p.id = cc.page_id
-           WHERE p.slug = $1 AND p.source_id = $2
-           ORDER BY cc.chunk_index`,
-          [slug, sourceId]
-        )
-      : await this.db.query(
-          `SELECT cc.* FROM content_chunks cc
-           JOIN pages p ON p.id = cc.page_id
-           WHERE p.slug = $1
-           ORDER BY cc.chunk_index`,
-          [slug]
-        );
+    const params: unknown[] = [slug];
+    let pageIdExpr: string;
+    if (opts?.sourceId) {
+      params.push(opts.sourceId);
+      pageIdExpr = this.aliasAwarePageIdExpr('$1', '$2');
+    } else {
+      pageIdExpr = this.aliasAwarePageIdExpr('$1');
+    }
+    const { rows } = await this.db.query(
+      `SELECT cc.* FROM content_chunks cc
+       JOIN pages p ON p.id = cc.page_id
+       WHERE p.id = ${pageIdExpr}
+       ORDER BY cc.chunk_index`,
+      params,
+    );
     return (rows as Record<string, unknown>[]).map(r => rowToChunk(r, true));
   }
 
