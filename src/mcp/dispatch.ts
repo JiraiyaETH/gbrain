@@ -77,6 +77,14 @@ export interface DispatchOpts {
    * hard boundary so write access cannot become raw-dump/admin sprawl.
    */
   allowedSlugPrefixes?: string[];
+  /**
+   * Optional source-id allow-list for remote MCP profiles. When set, source-aware
+   * read tools cannot opt out with __all__/all_sources or pivot to another
+   * source, and discovery tools are filtered to active non-federated members.
+   */
+  allowedSourceIds?: string[];
+  /** Require explicit source_id on source-overridable read tools. */
+  requireExplicitSourceId?: boolean;
 }
 
 /**
@@ -218,6 +226,8 @@ export function buildOperationContext(
     sourceId: opts.sourceId ?? 'default',
     auth: opts.auth,
     allowedSlugPrefixes: opts.allowedSlugPrefixes,
+    allowedSourceIds: opts.allowedSourceIds,
+    requireExplicitSourceId: opts.requireExplicitSourceId,
   };
 }
 
@@ -294,6 +304,85 @@ function validateMcpSlugFence(op: Operation, params: Record<string, unknown>, op
   };
 }
 
+function sourceFenceError(body: Record<string, unknown>): ToolResult {
+  return {
+    content: [{ type: 'text', text: JSON.stringify(body, null, 2) }],
+    isError: true,
+  };
+}
+
+function normalizedAllowedSourceIds(opts: DispatchOpts): string[] {
+  return [...new Set((opts.allowedSourceIds ?? []).map(id => id.trim()).filter(Boolean))].sort();
+}
+
+function opAcceptsSourceOverride(op: Operation): boolean {
+  return Object.prototype.hasOwnProperty.call(op.params, 'source_id') ||
+    Object.prototype.hasOwnProperty.call(op.params, 'all_sources');
+}
+
+function requestedFenceSourceId(op: Operation, params: Record<string, unknown>, opts: DispatchOpts): string | null | 'all_sources' | 'missing' {
+  if (op.name === 'sources_list') return null;
+  if (op.name === 'sources_status') return typeof params.id === 'string' && params.id.trim() ? params.id.trim() : 'missing';
+  if (!opAcceptsSourceOverride(op)) return null;
+
+  const sourceIdParam = typeof params.source_id === 'string' && params.source_id.trim()
+    ? params.source_id.trim()
+    : undefined;
+  if (params.all_sources === true || sourceIdParam === '__all__') return 'all_sources';
+  if (sourceIdParam) return sourceIdParam;
+  if (opts.requireExplicitSourceId === true) return 'missing';
+  return opts.sourceId ?? 'missing';
+}
+
+async function validateMcpSourceFence(
+  engine: BrainEngine,
+  op: Operation,
+  params: Record<string, unknown>,
+  opts: DispatchOpts,
+): Promise<ToolResult | null> {
+  if (opts.remote === false) return null;
+  const allowed = normalizedAllowedSourceIds(opts);
+  if (allowed.length === 0) return null;
+
+  const requested = requestedFenceSourceId(op, params, opts);
+  if (requested === null) return null;
+  if (requested === 'missing') {
+    return sourceFenceError({
+      error: 'source_id_required',
+      message: `Tool ${op.name} is fenced and requires an explicit source_id`,
+      allowed_source_ids: allowed,
+    });
+  }
+  if (requested === 'all_sources') {
+    return sourceFenceError({
+      error: 'permission_denied',
+      message: `Tool ${op.name} cannot use all_sources or source_id='__all__' under the MCP source allow-list`,
+      allowed_source_ids: allowed,
+    });
+  }
+  if (!allowed.includes(requested)) {
+    return sourceFenceError({
+      error: 'permission_denied',
+      message: `Source "${requested}" is not allowed for this MCP profile`,
+      requested_source_id: requested,
+      allowed_source_ids: allowed,
+    });
+  }
+
+  const { fetchSource, isSourceFederated } = await import('../core/sources-load.ts');
+  const source = await fetchSource(engine, requested);
+  if (!source || source.archived === true || isSourceFederated(source.config)) {
+    return sourceFenceError({
+      error: 'permission_denied',
+      message: `Source "${requested}" is unavailable to this MCP profile`,
+      requested_source_id: requested,
+      allowed_source_ids: allowed,
+    });
+  }
+
+  return null;
+}
+
 /**
  * Resolve operation, validate params, build context, invoke handler, format result.
  *
@@ -327,6 +416,9 @@ export async function dispatchToolCall(
       isError: true,
     };
   }
+
+  const sourceFenceErrorResult = await validateMcpSourceFence(engine, op, safeParams, opts);
+  if (sourceFenceErrorResult) return sourceFenceErrorResult;
 
   const slugFenceError = validateMcpSlugFence(op, safeParams, opts);
   if (slugFenceError) return slugFenceError;

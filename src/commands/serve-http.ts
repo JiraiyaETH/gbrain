@@ -29,7 +29,12 @@ import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oa
 import type { SqlQuery } from '../core/oauth-provider.ts';
 import { hasScope, ALLOWED_SCOPES_LIST, normalizeScopesInput } from '../core/scope.ts';
 import { summarizeMcpParams, dispatchToolCall } from '../mcp/dispatch.ts';
-import { parseMcpAllowedSlugPrefixes } from '../mcp/read-only.ts';
+import {
+  filterMcpOperationsForEnv,
+  isMcpExplicitSourceRequired,
+  parseMcpAllowedSlugPrefixes,
+  parseMcpAllowedSourceIds,
+} from '../mcp/read-only.ts';
 import { paramDefToSchema } from '../mcp/tool-defs.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig } from '../core/config.ts';
@@ -408,6 +413,8 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   const bind = options.bind ?? '127.0.0.1';
   const config = loadConfig() || { engine: 'pglite' as const };
   const allowedSlugPrefixes = parseMcpAllowedSlugPrefixes(process.env) ?? undefined;
+  const allowedSourceIds = parseMcpAllowedSourceIds(process.env);
+  const requireExplicitSourceId = isMcpExplicitSourceRequired(process.env);
 
   if (logFullParams) {
     console.error(
@@ -1393,7 +1400,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // ---------------------------------------------------------------------------
   // MCP tool calls (bearer auth + scope enforcement)
   // ---------------------------------------------------------------------------
-  const mcpOperations = operations.filter(op => !op.localOnly);
+  const mcpOperations = filterMcpOperationsForEnv(operations.filter(op => !op.localOnly));
 
   // v0.36.x #1076: MCP Streamable HTTP spec — GET /mcp opens an optional SSE
   // backchannel for server-initiated messages. gbrain's transport is stateless
@@ -1583,6 +1590,8 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           // unknown_transport throw because ctx.auth was undefined.
           auth: authInfo,
           allowedSlugPrefixes,
+          allowedSourceIds: allowedSourceIds ? [...allowedSourceIds] : undefined,
+          requireExplicitSourceId,
           logger: {
             info: (msg: string) => console.error(`[INFO] ${msg}`),
             warn: (msg: string) => console.error(`[WARN] ${msg}`),

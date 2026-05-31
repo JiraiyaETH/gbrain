@@ -7,7 +7,13 @@ import { VERSION } from '../version.ts';
 import { buildToolDefs } from './tool-defs.ts';
 import { dispatchToolCall, validateParams, buildOperationContext } from './dispatch.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
-import { filterMcpOperationsForEnv, mcpToolNotExposedResult, parseMcpAllowedSlugPrefixes } from './read-only.ts';
+import {
+  filterMcpOperationsForEnv,
+  isMcpExplicitSourceRequired,
+  mcpToolNotExposedResult,
+  parseMcpAllowedSlugPrefixes,
+  parseMcpAllowedSourceIds,
+} from './read-only.ts';
 
 export async function startMcpServer(engine: BrainEngine) {
   const server = new Server(
@@ -18,6 +24,8 @@ export async function startMcpServer(engine: BrainEngine) {
   const mcpOperations = filterMcpOperationsForEnv(operations);
   const exposedOperationNames = new Set(mcpOperations.map(op => op.name));
   const allowedSlugPrefixes = parseMcpAllowedSlugPrefixes(process.env) ?? undefined;
+  const allowedSourceIds = parseMcpAllowedSourceIds(process.env);
+  const requireExplicitSourceId = isMcpExplicitSourceRequired(process.env);
 
   // Generate tool definitions from operations. Extracted to buildToolDefs so
   // the subagent tool registry (v0.15+) can call the same mapper against a
@@ -54,6 +62,8 @@ export async function startMcpServer(engine: BrainEngine) {
       // every tool-call response. Best-effort; absorbs errors.
       metaHook: getBrainHotMemoryMeta,
       allowedSlugPrefixes,
+      allowedSourceIds: allowedSourceIds ? [...allowedSourceIds] : undefined,
+      requireExplicitSourceId,
     });
   });
 

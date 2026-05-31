@@ -27,6 +27,21 @@ export function parseMcpAllowedSlugPrefixes(env: Record<string, string | undefin
   return prefixes.length > 0 ? prefixes : null;
 }
 
+export function parseMcpAllowedSourceIds(env: Record<string, string | undefined> = process.env): Set<string> | null {
+  const raw = env.GBRAIN_MCP_ALLOWED_SOURCE_IDS;
+  if (typeof raw !== 'string' || raw.trim() === '') return null;
+  const ids = raw
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean);
+  return ids.length > 0 ? new Set(ids) : null;
+}
+
+export function isMcpExplicitSourceRequired(env: Record<string, string | undefined> = process.env): boolean {
+  const value = env.GBRAIN_MCP_REQUIRE_EXPLICIT_SOURCE_ID;
+  return typeof value === 'string' && TRUE_VALUES.has(value.trim().toLowerCase());
+}
+
 const READ_ONLY_ADMIN_TOOLS = new Set([
   'get_stats',
   'get_health',
@@ -47,7 +62,8 @@ export function filterMcpOperationsForEnv(
   env: Record<string, string | undefined> = process.env,
 ): Operation[] {
   const allowedTools = parseMcpAllowedTools(env);
-  const scoped = isReadOnlyMcpEnabled(env) ? ops.filter(isReadOnlyOperation) : [...ops];
+  const nonLocal = ops.filter(op => op.localOnly !== true);
+  const scoped = isReadOnlyMcpEnabled(env) ? nonLocal.filter(isReadOnlyOperation) : nonLocal;
   if (!allowedTools) return scoped;
   return scoped.filter(op => allowedTools.has(op.name));
 }

@@ -336,6 +336,15 @@ export interface OperationContext {
    */
   allowedSlugPrefixes?: string[];
   /**
+   * Optional source-id allow-list for agent-facing MCP profiles. When set, read
+   * operations that accept source_id/all_sources are fenced before their handler
+   * runs, and source discovery ops only expose approved active non-federated
+   * sources. Used by narrow workers such as codebase-auditor-worker.
+   */
+  allowedSourceIds?: string[];
+  /** Require callers to name source_id on source-overridable read tools. */
+  requireExplicitSourceId?: boolean;
+  /**
    * Additional subagent put_page guard for Dream synthesize: the final slug
    * segment must end with this transcript/content hash suffix. This makes the
    * provenance contract deterministic even if the model ignores prompt text.
@@ -3465,10 +3474,18 @@ const sources_list: Operation = {
   scope: 'read',
   handler: async (ctx, p) => {
     const { listSources } = await import('./sources-ops.ts');
+    const allowed = ctx.allowedSourceIds?.filter(Boolean) ?? [];
+    const allow = new Set(allowed);
+    const sources = await listSources(ctx.engine, {
+      // A fenced MCP profile should never surface archived sources, even when a
+      // prompt tries include_archived=true. Source-fence validation separately
+      // rejects archived direct lookups.
+      includeArchived: allow.size > 0 ? false : (p.include_archived as boolean) === true,
+    });
     return {
-      sources: await listSources(ctx.engine, {
-        includeArchived: (p.include_archived as boolean) === true,
-      }),
+      sources: allow.size > 0
+        ? sources.filter(source => allow.has(source.id) && source.federated !== true)
+        : sources,
     };
   },
   cliHints: { name: 'sources_list', hidden: true },
