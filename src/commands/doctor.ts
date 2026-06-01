@@ -34,6 +34,7 @@ import { lagFromContentMs } from '../core/source-health.ts';
 import { CHUNKER_VERSION } from '../core/chunkers/code.ts';
 import { LINK_EXTRACTOR_VERSION_TS } from '../core/link-extraction.ts';
 import { isUndefinedColumnError } from '../core/utils.ts';
+import { isAnthropicProvider } from '../core/model-config.ts';
 
 export interface Check {
   name: string;
@@ -2260,19 +2261,26 @@ async function checkSubagentCapability(engine: BrainEngine): Promise<Check> {
       const issue = explain(modelsDefault, 'models.default');
       if (issue) return issue;
     }
+    const useGatewayLoopRaw = await engine.getConfig('agent.use_gateway_loop').catch(() => null);
+    const useGatewayLoop = typeof useGatewayLoopRaw === 'string' &&
+      (useGatewayLoopRaw === 'true' || useGatewayLoopRaw === '1');
+
     // v0.37 (T10 / D7) + v0.38 (D7 capability rename): warn when the configured
-    // chat_model is non-Anthropic AND ANTHROPIC_API_KEY isn't set. With
-    // agent.use_gateway_loop=false (the v0.38 default), subagent jobs still
-    // require Anthropic at runtime; without the key, gbrain dream / gbrain
-    // agent run / gbrain autopilot will all fail at job submission. Catches
-    // the post-init drift case the init-time caveat would have shown if init
-    // had been re-run.
+    // chat_model is non-Anthropic AND ANTHROPIC_API_KEY isn't set AND the
+    // gateway-native subagent loop is not enabled. The runtime handler uses
+    // the same `agent.use_gateway_loop` escape hatch before enforcing the
+    // legacy Anthropic-direct precondition; doctor must mirror that or it
+    // emits a stale false warning on healthy gateway-routed installs.
     try {
       const { loadConfig } = await import('../core/config.ts');
       const cfg = loadConfig();
       const chatModel = cfg?.chat_model;
-      const { isAnthropicProvider } = await import('../core/model-config.ts');
-      if (chatModel && !isAnthropicProvider(chatModel) && !process.env.ANTHROPIC_API_KEY) {
+      if (
+        chatModel &&
+        !isAnthropicProvider(chatModel) &&
+        !process.env.ANTHROPIC_API_KEY &&
+        !useGatewayLoop
+      ) {
         return {
           name: 'subagent_capability',
           status: 'warn',
@@ -2288,9 +2296,11 @@ async function checkSubagentCapability(engine: BrainEngine): Promise<Check> {
     return {
       name: 'subagent_capability',
       status: 'ok',
-      message: tierSubagent
-        ? `Subagent tier resolves to "${tierSubagent}" with full tool-loop capability`
-        : `Subagent tier resolves to default (claude-sonnet-4-6) — full tool-loop capability`,
+      message: useGatewayLoop
+        ? `Gateway-native loop enabled — subagent jobs route through provider recipes; configured tool-loop capability is acceptable`
+        : tierSubagent
+          ? `Subagent tier resolves to "${tierSubagent}" with full tool-loop capability`
+          : `Subagent tier resolves to default (claude-sonnet-4-6) — full tool-loop capability`,
     };
   } catch (e) {
     return {
