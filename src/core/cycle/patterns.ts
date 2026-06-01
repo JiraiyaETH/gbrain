@@ -26,7 +26,7 @@ import { MinionQueue } from '../minions/queue.ts';
 import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.ts';
 import type { MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
 import { serializeMarkdown } from '../markdown.ts';
-import type { Page, PageType } from '../types.ts';
+import type { Page } from '../types.ts';
 import { splitProviderModelId } from '../model-id.ts';
 import {
   loadAllowedSlugPrefixes,
