@@ -29,6 +29,7 @@ export const PROTECTED_JOB_NAMES: ReadonlySet<string> = new Set([
   // an OAuth-scoped MCP client can't burn the user's API budget by
   // submitting a synthesize job over HTTP.
   'synthesize',
+  'dream-canary',
   'patterns',
   'consolidate',
   // v0.40.3.0 — per-chunk Haiku contextual retrieval backfill. Each job

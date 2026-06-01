@@ -11,7 +11,7 @@ import type { MinionJob, MinionJobStatus } from '../core/minions/types.ts';
 import { loadConfig, isThinClient } from '../core/config.ts';
 import { callRemoteTool, unpackToolResult } from '../core/mcp-client.ts';
 import { getSourceLocalPath, resolveBrainRepoPath } from '../core/source-resolver.ts';
-import { resolve as resolvePath } from 'path';
+import { dirname, join, resolve as resolvePath } from 'path';
 
 function parseFlag(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
@@ -141,6 +141,47 @@ export function resolveWorkerConcurrency(args: string[], env: NodeJS.ProcessEnv 
   return parsed;
 }
 
+export function resolveInlineFollowWorkerOptions(
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): { concurrency: number; lockDuration: number } {
+  return {
+    concurrency: resolveWorkerConcurrency(args, env),
+    lockDuration: resolveWorkerLockDuration(args, env),
+  };
+}
+
+export const DEFAULT_WORKER_LOCK_DURATION_MS = 30_000;
+
+export function resolveSupervisorDetachLogPath(
+  pidFile: string,
+  env: NodeJS.ProcessEnv = process.env,
+  now: Date = new Date(),
+): string {
+  const auditDir = env.GBRAIN_AUDIT_DIR && env.GBRAIN_AUDIT_DIR.trim().length > 0
+    ? env.GBRAIN_AUDIT_DIR
+    : join(dirname(pidFile), 'audit');
+  const stamp = now.toISOString().replace(/[:.]/g, '-');
+  return join(auditDir, `supervisor-detached-${stamp}.log`);
+}
+
+export function resolveWorkerLockDuration(args: string[], env: NodeJS.ProcessEnv = process.env): number {
+  const raw = parseFlag(args, '--lock-duration-ms') ?? env.GBRAIN_WORKER_LOCK_DURATION_MS;
+  if (raw === undefined) return DEFAULT_WORKER_LOCK_DURATION_MS;
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1000) {
+    const source = parseFlag(args, '--lock-duration-ms') !== undefined
+      ? '--lock-duration-ms flag'
+      : 'GBRAIN_WORKER_LOCK_DURATION_MS env';
+    process.stderr.write(
+      `[gbrain jobs] invalid lock duration from ${source} (${JSON.stringify(raw)}); ` +
+      `falling back to ${DEFAULT_WORKER_LOCK_DURATION_MS}ms. Set a value >= 1000.\n`
+    );
+    return DEFAULT_WORKER_LOCK_DURATION_MS;
+  }
+  return parsed;
+}
+
 function formatJob(job: MinionJob): string {
   const dur = job.finished_at && job.started_at
     ? `${((job.finished_at.getTime() - job.started_at.getTime()) / 1000).toFixed(1)}s`
@@ -197,7 +238,7 @@ USAGE
   gbrain jobs stats
   gbrain jobs smoke
   gbrain jobs work [--queue Q] [--concurrency N] [--max-rss MB]
-                   [--health-interval MS]
+                   [--health-interval MS] [--lock-duration-ms MS]
   gbrain jobs supervisor [start] [--detach] [--json]
                          [--concurrency N] [--queue Q] [--pid-file PATH]
                          [--max-crashes N] [--health-interval N]
@@ -412,8 +453,12 @@ HANDLER TYPES (built in)
         // 'unhealthy' listener, a DB blip would trip emitUnhealthy's
         // no-listener fallback and call process.exit(1) from inside the
         // library, killing the user's CLI session.
+        const inlineWorkerOptions = resolveInlineFollowWorkerOptions(args);
         const worker = new MinionWorker(engine, {
-          queue: queueName, pollInterval: 100, healthCheckInterval: 0,
+          queue: queueName,
+          pollInterval: 100,
+          healthCheckInterval: 0,
+          ...inlineWorkerOptions,
         });
 
         // Register built-in handlers
@@ -838,6 +883,7 @@ HANDLER TYPES (built in)
 
       const queueName = parseFlag(args, '--queue') ?? 'default';
       const concurrency = resolveWorkerConcurrency(args);
+      const lockDuration = resolveWorkerLockDuration(args);
       // --max-rss: explicit value wins (including 0 to disable the watchdog).
       // Absent → cgroup-aware auto-size (issue #1678): the flat 2048MB default
       // killed legit embed work (~10GB) on every cycle and produced a silent
@@ -875,7 +921,7 @@ HANDLER TYPES (built in)
       catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); }
 
       const worker = new MinionWorker(engine, {
-        queue: queueName, concurrency, maxRssMb, healthCheckInterval,
+        queue: queueName, concurrency, maxRssMb, healthCheckInterval, lockDuration,
       });
       await registerBuiltinHandlers(worker, engine);
 
@@ -911,7 +957,10 @@ HANDLER TYPES (built in)
       const healthNote = !isSupervisedChild && healthCheckInterval > 0
         ? `, health-check: ${Math.round(healthCheckInterval / 1000)}s`
         : '';
-      console.log(`Minion worker started (queue: ${queueName}, concurrency: ${concurrency}${watchdogNote}${healthNote})`);
+      const leaseNote = lockDuration !== DEFAULT_WORKER_LOCK_DURATION_MS
+        ? `, lock: ${Math.round(lockDuration / 1000)}s`
+        : '';
+      console.log(`Minion worker started (queue: ${queueName}, concurrency: ${concurrency}${watchdogNote}${healthNote}${leaseNote})`);
       console.log(`Registered handlers: ${worker.registeredNames.join(', ')}`);
       try {
         await worker.start();
@@ -1120,17 +1169,27 @@ HANDLER TYPES (built in)
       // if they wanted to follow logs) but detaching stdin/stdout.
       if (detach) {
         const { spawn } = await import('child_process');
+        const { closeSync, mkdirSync, openSync } = await import('fs');
         const childArgs = process.argv.slice(2).filter(a => a !== '--detach');
+        const logPath = resolveSupervisorDetachLogPath(pidFile);
+        mkdirSync(dirname(logPath), { recursive: true });
+        const logFd = openSync(logPath, 'a');
         const child = spawn(process.execPath, [process.argv[1], ...childArgs], {
           detached: true,
-          stdio: ['ignore', 'ignore', 'inherit'],
+          // Do not inherit the parent stderr pipe. The caller may be a
+          // short-lived wrapper (Telegram/Hermes tool, Python secret-safe
+          // launcher, etc.); inheriting that closing pipe can SIGPIPE/EPIPE the
+          // detached supervisor and recreate the orphan/timeout failure mode.
+          stdio: ['ignore', logFd, logFd],
           env: process.env,
         });
+        try { closeSync(logFd); } catch { /* child inherited fd; parent can exit */ }
         child.unref();
         const payload = {
           event: 'started',
           supervisor_pid: child.pid,
           pid_file: pidFile,
+          log_path: logPath,
           detached: true,
         };
         console.log(JSON.stringify(payload));
@@ -1657,6 +1716,43 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     });
     return { phase, status: report.status, report };
   };
+
+  // PROTECTED — native bounded Dream canary. It calls the existing synthesize
+  // cycle path with control-plane caps/receipts; it must not be remotely
+  // submitted by untrusted MCP clients.
+  worker.register('dream-canary', async (job) => {
+    const { runDreamCanary } = await import('../core/cycle/dream-canary.ts');
+    const sourceId = jobSourceId(job.data as JobPathData);
+    const repoPath = await resolveJobBrainDir(
+      engine,
+      job.data as JobPathData,
+      'dream-canary',
+      { requireSourcePathMatch: !!sourceId },
+    );
+    const data = job.data as Record<string, unknown>;
+    const numberOpt = (snake: string, camel: string): number | undefined => {
+      const raw = data[snake] ?? data[camel];
+      return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+    };
+    const result = await runDreamCanary(engine, {
+      brainDir: repoPath,
+      ...(sourceId ? { sourceId } : {}),
+      signal: job.signal,
+      dryRunOnly: data.dry_run_only === true || data.dryRunOnly === true,
+      // Default false at the handler boundary: first enablement submits a
+      // single proof job. Remaining recurrence requires explicit reschedule=true.
+      reschedule: data.reschedule === true,
+      maxRuns: numberOpt('max_runs', 'maxRuns'),
+      maxTranscripts: numberOpt('max_transcripts', 'maxTranscripts'),
+      maxCostUsd: numberOpt('max_cost_usd', 'maxCostUsd'),
+      delayMs: numberOpt('delay_ms', 'delayMs'),
+    });
+    return {
+      partial: result.status === 'failed',
+      status: result.status,
+      result,
+    };
+  });
 
   // PROTECTED — internally spawn subagent children
   worker.register('synthesize', makePhaseHandler('synthesize'));

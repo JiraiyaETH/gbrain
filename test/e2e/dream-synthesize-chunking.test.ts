@@ -9,7 +9,8 @@
  *   - D5 cap-hit: chunks > maxChunks → log + skip with no minion_jobs row
  *     and no dream_verdicts cache write (closes the poison-pill class).
  *   - D8 legacy single-chunk migration: pre-seed a `completed` legacy job
- *     for the same content hash → next synthesize skips submission.
+ *     with a recorded `brain_put_page` write for the same content hash → next
+ *     synthesize skips submission; completed no-write jobs get a repair key.
  *   - Chunked path: fat transcript spawns N children with chunk-suffixed
  *     idempotency keys; single-chunk path keeps the legacy key shape.
  *
@@ -169,7 +170,7 @@ describe('E2E synthesize chunking — D5 cap hit', () => {
 });
 
 describe('E2E synthesize chunking — D8 legacy single-chunk migration', () => {
-  test('completed legacy idempotency key → skip submission entirely', async () => {
+  test('completed legacy idempotency key with put_page proof → skip submission entirely', async () => {
     const rig = await setupRig();
     try {
       await rig.engine.setConfig('dream.synthesize.enabled', 'true');
@@ -181,12 +182,21 @@ describe('E2E synthesize chunking — D8 legacy single-chunk migration', () => {
       writeFileSync(filePath, content);
       const contentHash = await seedVerdict(rig.engine, filePath, content);
 
-      // Pre-seed a completed `subagent` job at the legacy idempotency key.
+      // Pre-seed a completed `subagent` job at the legacy idempotency key,
+      // with real put_page provenance. Completion without a put_page tool call
+      // is not proof of synthesis and must not suppress a repair run.
       const legacyKey = `dream:synth:${filePath}:${contentHash.slice(0, 16)}`;
-      await rig.engine.executeRaw(
+      const seeded = await rig.engine.executeRaw<{ id: number }>(
         `INSERT INTO minion_jobs (name, queue, status, idempotency_key, finished_at)
-         VALUES ('subagent', 'default', 'completed', $1, now())`,
+         VALUES ('subagent', 'default', 'completed', $1, now())
+         RETURNING id`,
         [legacyKey],
+      );
+      await rig.engine.executeRaw(
+        `INSERT INTO subagent_tool_executions
+           (job_id, message_idx, tool_use_id, tool_name, input, status, schema_version)
+         VALUES ($1, 0, 'toolu_legacy_put', 'brain_put_page', $2::jsonb, 'complete', 1)`,
+        [seeded[0].id, JSON.stringify({ slug: 'reflections/legacy-proof' })],
       );
 
       await withoutAnthropicKey(async () => {
@@ -208,6 +218,48 @@ describe('E2E synthesize chunking — D8 legacy single-chunk migration', () => {
         `SELECT count(*) AS cnt FROM minion_jobs WHERE name = 'subagent'`,
       );
       expect(Number(jobs[0].cnt)).toBe(1);
+    } finally {
+      await rig.cleanup();
+    }
+  }, 30_000);
+
+  test('completed legacy idempotency key without put_page proof submits repair key', async () => {
+    const rig = await setupRig();
+    try {
+      await rig.engine.setConfig('dream.synthesize.enabled', 'true');
+      await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
+
+      const basename = '2026-04-25-empty-legacy.txt';
+      const filePath = corpusPath(rig.corpusDir, basename);
+      const content = 'meaningful empty legacy conversation lines\n'.repeat(200);
+      writeFileSync(filePath, content);
+      const contentHash = await seedVerdict(rig.engine, filePath, content);
+      const hash16 = contentHash.slice(0, 16);
+      const legacyKey = `dream:synth:${filePath}:${hash16}`;
+      await rig.engine.executeRaw(
+        `INSERT INTO minion_jobs (name, queue, status, idempotency_key, finished_at)
+         VALUES ('subagent', 'default', 'completed', $1, now())`,
+        [legacyKey],
+      );
+
+      await withoutAnthropicKey(async () => {
+        await withSubagentAutoCancel(rig.engine, async () => {
+          const result = await runPhaseSynthesize(rig.engine, {
+            brainDir: rig.brainDir,
+            dryRun: false,
+          });
+          const details = result.details as { children_submitted: number; skips: Array<{ reason: string }> };
+          expect(details.children_submitted).toBe(1);
+          expect(details.skips).toHaveLength(0);
+        });
+      });
+
+      const rows = await rig.engine.executeRaw<{ idempotency_key: string }>(
+        `SELECT idempotency_key FROM minion_jobs WHERE name = 'subagent' ORDER BY id`,
+      );
+      expect(rows).toHaveLength(2);
+      expect(rows[0].idempotency_key).toBe(legacyKey);
+      expect(rows[1].idempotency_key).toBe(`${legacyKey}:retry-after-empty-v1`);
     } finally {
       await rig.cleanup();
     }

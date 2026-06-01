@@ -1815,6 +1815,70 @@ describe('resolveWorkerConcurrency (v0.19.1 H3): clamp + validation', () => {
   });
 });
 
+describe('resolveInlineFollowWorkerOptions (Dream canary parent/child inline worker): CLI/env wiring', () => {
+  let resolveInlineFollowWorkerOptions: (args: string[], env?: NodeJS.ProcessEnv) => { concurrency: number; lockDuration: number };
+  beforeAll(async () => {
+    resolveInlineFollowWorkerOptions = (await import('../src/commands/jobs.ts')).resolveInlineFollowWorkerOptions;
+  });
+
+  test('--follow worker options include concurrency and lease flags', () => {
+    expect(resolveInlineFollowWorkerOptions(
+      ['--concurrency', '2', '--lock-duration-ms', '900000'],
+      { GBRAIN_WORKER_CONCURRENCY: '1', GBRAIN_WORKER_LOCK_DURATION_MS: '30000' } as NodeJS.ProcessEnv,
+    )).toEqual({ concurrency: 2, lockDuration: 900000 });
+  });
+});
+
+describe('resolveSupervisorDetachLogPath (durable supervisor detach)', () => {
+  let resolveSupervisorDetachLogPath: (pidFile: string, env?: NodeJS.ProcessEnv, now?: Date) => string;
+  beforeAll(async () => {
+    resolveSupervisorDetachLogPath = (await import('../src/commands/jobs.ts')).resolveSupervisorDetachLogPath;
+  });
+
+  test('uses GBRAIN_AUDIT_DIR when set and creates a stable timestamped log name', () => {
+    expect(resolveSupervisorDetachLogPath(
+      '/tmp/ignored/supervisor.pid',
+      { GBRAIN_AUDIT_DIR: '/tmp/gbrain-audit' } as NodeJS.ProcessEnv,
+      new Date('2026-06-01T01:23:45.678Z'),
+    )).toBe('/tmp/gbrain-audit/supervisor-detached-2026-06-01T01-23-45-678Z.log');
+  });
+
+  test('falls back near the pid file so detached supervisor never inherits a closing parent stderr pipe', () => {
+    expect(resolveSupervisorDetachLogPath(
+      '/tmp/gbrain-runtime-test/supervisor.pid',
+      {} as NodeJS.ProcessEnv,
+      new Date('2026-06-01T01:23:45.678Z'),
+    )).toBe('/tmp/gbrain-runtime-test/audit/supervisor-detached-2026-06-01T01-23-45-678Z.log');
+  });
+});
+
+describe('resolveWorkerLockDuration (Dream canary lease hardening): CLI/env wiring', () => {
+  let resolveWorkerLockDuration: (args: string[], env?: NodeJS.ProcessEnv) => number;
+  beforeAll(async () => {
+    resolveWorkerLockDuration = (await import('../src/commands/jobs.ts')).resolveWorkerLockDuration;
+  });
+
+  test('both unset → 30000 legacy default', () => {
+    expect(resolveWorkerLockDuration([], {} as NodeJS.ProcessEnv)).toBe(30000);
+  });
+
+  test('--lock-duration-ms wins over env and supports long canary leases', () => {
+    expect(resolveWorkerLockDuration(
+      ['--lock-duration-ms', '300000'],
+      { GBRAIN_WORKER_LOCK_DURATION_MS: '60000' } as NodeJS.ProcessEnv,
+    )).toBe(300000);
+  });
+
+  test('env controls bare worker lease when flag is absent', () => {
+    expect(resolveWorkerLockDuration([], { GBRAIN_WORKER_LOCK_DURATION_MS: '180000' } as NodeJS.ProcessEnv)).toBe(180000);
+  });
+
+  test('invalid env falls back to default instead of wedging startup', () => {
+    expect(resolveWorkerLockDuration([], { GBRAIN_WORKER_LOCK_DURATION_MS: 'abc' } as NodeJS.ProcessEnv)).toBe(30000);
+    expect(resolveWorkerLockDuration([], { GBRAIN_WORKER_LOCK_DURATION_MS: '999' } as NodeJS.ProcessEnv)).toBe(30000);
+  });
+});
+
 describe('parseMaxWaitingFlag (v0.19.1 H5): CLI flag wiring', () => {
   let parseMaxWaitingFlag: (args: string[]) => number | undefined;
   beforeAll(async () => {

@@ -288,6 +288,25 @@ describe('E2E synthesize — cooldown', () => {
     }
   }, 30_000);
 
+  test('cooldown_hours=0 disables cooldown even when last_completion_ts is fresh', async () => {
+    const rig = await setupRig();
+    try {
+      await rig.engine.setConfig('dream.synthesize.enabled', 'true');
+      await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
+      await rig.engine.setConfig('dream.synthesize.last_completion_ts', new Date().toISOString());
+      await rig.engine.setConfig('dream.synthesize.cooldown_hours', '0');
+      const result = await runPhaseSynthesize(rig.engine, {
+        brainDir: rig.brainDir,
+        dryRun: false,
+      });
+      expect(result.status).toBe('ok');
+      expect((result.details as { reason?: string }).reason).toBeUndefined();
+      expect((result.details as { transcripts_discovered?: number }).transcripts_discovered).toBe(0);
+    } finally {
+      await rig.cleanup();
+    }
+  }, 30_000);
+
   test('explicit --input bypasses cooldown', async () => {
     // Two engine setups + a synth run; default 5s is tight under full-suite pressure.
     const rig = await setupRig();

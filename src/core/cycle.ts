@@ -422,6 +422,10 @@ export interface CycleOpts {
   synthDate?: string;
   synthFrom?: string;
   synthTo?: string;
+  /** Canary/control-plane cap: limit discovered transcripts before verdict/synthesis fan-out. */
+  synthMaxTranscripts?: number;
+  /** Canary/control-plane override: restrict child put_page allow-list without changing global Dream topology. */
+  synthAllowedSlugPrefixes?: string[];
   /**
    * v0.23.2: explicit opt-in to disable the synthesize self-consumption guard.
    * Wired from `gbrain dream --unsafe-bypass-dream-guard`. Never auto-applied
@@ -1576,6 +1580,8 @@ export async function runCycle(
           date: opts.synthDate,
           from: opts.synthFrom,
           to: opts.synthTo,
+          maxTranscripts: opts.synthMaxTranscripts,
+          allowedSlugPrefixes: opts.synthAllowedSlugPrefixes,
           bypassDreamGuard: opts.synthBypassDreamGuard,
         }));
         result.duration_ms = duration_ms;

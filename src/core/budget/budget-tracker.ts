@@ -156,6 +156,15 @@ const FREE_LOCAL_EMBED_PROVIDERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Subscription-authenticated chat providers consume account quota rather than
+ * metered API dollars. They still record usage for receipts, but --max-cost
+ * must not TX2-fail them as unpriced models.
+ */
+const FREE_SUBSCRIPTION_CHAT_PROVIDERS: ReadonlySet<string> = new Set([
+  'claude-code',
+]);
+
+/**
  * Look up `modelId` in the chat or embedding pricing maps. Returns a
  * per-1M-token price tuple, or null when unknown.
  *
@@ -190,6 +199,9 @@ function lookupPricing(modelId: string, kind: BudgetKind): ModelPricing | null {
   const bare = ANTHROPIC_PRICING[modelId];
   if (bare) return bare;
   const { provider: providerId, model: modelTail } = splitProviderModelId(modelId);
+  if (kind === 'chat' && providerId && FREE_SUBSCRIPTION_CHAT_PROVIDERS.has(providerId)) {
+    return { input: 0, output: 0 };
+  }
   if (modelTail) {
     const tailHit = ANTHROPIC_PRICING[modelTail];
     if (tailHit) return tailHit;

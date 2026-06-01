@@ -52,6 +52,7 @@ import { dimsProviderOptions } from './dims.ts';
 import { hasAnthropicKey } from './anthropic-key.ts';
 import { AIConfigError, AITransientError, normalizeAIError } from './errors.ts';
 import { runGuardrails, hasGuardrails, type GuardrailHook } from '../guardrails.ts';
+import { runProcessChat } from './process-chat.ts';
 
 const MAX_CHARS = 8000;
 // v0.36.0.0 (D3 + D4): ZeroEntropy zembed-1 at 1280d via Matryoshka is the
@@ -1103,6 +1104,11 @@ function instantiateEmbedding(recipe: Recipe, modelId: string, cfg: AIGatewayCon
       throw new AIConfigError(
         `Anthropic has no embedding model. Use openai or google for embeddings.`,
       );
+    case 'process-chat':
+      throw new AIConfigError(
+        `${recipe.name} is chat-only and cannot serve embeddings.`,
+        recipe.setup_hint,
+      );
     case 'openai-compatible': {
       // D12=A: unified auth via Recipe.resolveAuth (or default).
       const auth = applyResolveAuth(recipe, cfg, 'embedding');
@@ -1994,6 +2000,11 @@ function instantiateExpansion(recipe: Recipe, modelId: string, cfg: AIGatewayCon
       if (!apiKey) throw new AIConfigError(`Anthropic expansion requires ANTHROPIC_API_KEY.`, recipe.setup_hint);
       return createAnthropic({ apiKey }).languageModel(modelId);
     }
+    case 'process-chat':
+      throw new AIConfigError(
+        `${recipe.name} is chat-only and cannot serve expansion.`,
+        recipe.setup_hint,
+      );
     case 'openai-compatible': {
       // D12=A: unified auth via Recipe.resolveAuth (or default).
       const auth = applyResolveAuth(recipe, cfg, 'expansion');
@@ -2351,6 +2362,11 @@ function instantiateChat(recipe: Recipe, modelId: string, cfg: AIGatewayConfig):
       if (!apiKey) throw new AIConfigError(`Anthropic chat requires ANTHROPIC_API_KEY.`, recipe.setup_hint);
       return createAnthropic({ apiKey }).languageModel(modelId);
     }
+    case 'process-chat':
+      // Process-backed providers are invoked directly by chat() so the gateway
+      // can pass ChatOpts + structured-output schema without going through the
+      // AI SDK's LanguageModel interface.
+      return null;
     case 'openai-compatible': {
       // D12=A: unified auth via Recipe.resolveAuth (or default).
       const auth = applyResolveAuth(recipe, cfg, 'chat');
@@ -2589,6 +2605,21 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       // BudgetExhausted (TX1) raised here; surface via next reserve()
     }
   };
+
+  if (recipe.implementation === 'process-chat') {
+    try {
+      const result = await runProcessChat({ recipe, modelId, cfg: requireConfig(), opts });
+      _recordBudget(result.model, result.usage.input_tokens, result.usage.output_tokens);
+      return result;
+    } catch (err) {
+      const fallback = _extractUsageFromError(err, {
+        inputTokens: estimatedInputTokens,
+        outputTokens: maxOutputTokens,
+      });
+      _recordBudget(`${recipe.id}:${modelId}`, fallback.inputTokens, fallback.outputTokens);
+      throw normalizeAIError(err, `chat(${recipe.id}:${modelId})`);
+    }
+  }
 
   try {
     const result = await generateText({

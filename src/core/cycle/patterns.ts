@@ -27,6 +27,7 @@ import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.
 import type { MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
 import { serializeMarkdown } from '../markdown.ts';
 import type { Page, PageType } from '../types.ts';
+import { splitProviderModelId } from '../model-id.ts';
 import {
   loadAllowedSlugPrefixes,
   loadDreamSlugTopology,
@@ -69,9 +70,16 @@ export async function runPhasePatterns(
       });
     }
 
-    // Submit one subagent for pattern detection.
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return skipped('no_api_key', 'ANTHROPIC_API_KEY unset; pattern detection skipped');
+    // Submit one subagent for pattern detection. Legacy Anthropic-direct
+    // routes need ANTHROPIC_API_KEY; native gateway/process-backed routes
+    // such as claude-code are quota/authenticated through their own recipe
+    // and must not be blocked by the Anthropic API-key sentinel.
+    const providerSkip = shouldSkipPatternsForMissingProviderKey({
+      model: config.model,
+      env: process.env,
+    });
+    if (providerSkip) {
+      return skipped(providerSkip.reason, providerSkip.summary);
     }
 
     const allowedSlugPrefixes = await loadAllowedSlugPrefixes();
@@ -141,6 +149,30 @@ interface PatternsConfig {
   lookbackDays: number;
   minEvidence: number;
   model: string;
+}
+
+interface ProviderKeySkipOpts {
+  model: string;
+  env: Record<string, string | undefined>;
+}
+
+function shouldSkipPatternsForMissingProviderKey(
+  opts: ProviderKeySkipOpts,
+): { reason: string; summary: string } | null {
+  const { provider, model } = splitProviderModelId(opts.model);
+  const providerId = provider?.trim().toLowerCase() ?? null;
+  const modelId = model.trim().toLowerCase();
+  const isAnthropicDirect = providerId === 'anthropic' || (
+    providerId === null && modelId.startsWith('claude-')
+  );
+
+  if (!isAnthropicDirect) return null;
+  if (opts.env.ANTHROPIC_API_KEY) return null;
+
+  return {
+    reason: 'no_api_key',
+    summary: `ANTHROPIC_API_KEY unset for ${opts.model}; pattern detection skipped`,
+  };
 }
 
 async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> {
@@ -344,4 +376,5 @@ function makeError(cls: string, code: string, message: string, hint?: string): P
 export const __testing = {
   buildPatternsPrompt,
   buildReflectionLikePattern,
+  shouldSkipPatternsForMissingProviderKey,
 };

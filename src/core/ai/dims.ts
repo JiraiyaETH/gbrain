@@ -144,6 +144,9 @@ export function dimsProviderOptions(
     case 'native-anthropic':
       // Anthropic has no embedding model.
       return undefined;
+    case 'process-chat':
+      // Process-backed subscription providers are chat-only.
+      return undefined;
     case 'openai-compatible':
       // ZE zembed-1 — flexible Matryoshka dims + asymmetric input_type.
       // Lives BEFORE the generic openai-compatible fall-through to avoid

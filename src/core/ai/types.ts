@@ -22,7 +22,8 @@ export type Implementation =
   | 'native-openai'
   | 'native-google'
   | 'native-anthropic'
-  | 'openai-compatible';
+  | 'openai-compatible'
+  | 'process-chat';
 
 export interface EmbeddingTouchpoint {
   models: string[];
@@ -228,6 +229,25 @@ export interface Recipe {
   tier: 'native' | 'openai-compat';
   /** Maps to the gateway's implementation switch. */
   implementation: Implementation;
+  /**
+   * For process-chat recipes: restricted subprocess transport used by the
+   * gateway chat seam. The subprocess returns provider-neutral ChatResult
+   * blocks; GBrain still owns tool execution and writes.
+   */
+  process_chat?: {
+    /** Default executable name/path, e.g. `claude`. */
+    command: string;
+    /** Optional env var that overrides `command` from the gateway env snapshot. */
+    command_env?: string;
+    /** Static args. Supports ${model}, ${schema}, and ${prompt} placeholders. */
+    args: string[];
+    /** Optional env var containing a JSON string[] that replaces `args` in tests/deployments. */
+    args_env?: string;
+    /** Per-provider env allowlist copied from the gateway env snapshot into the subprocess. */
+    env_allowlist?: string[];
+    /** Wall-clock cap for one subprocess invocation. Defaults in process-chat.ts. */
+    timeout_ms?: number;
+  };
   /** For openai-compatible tier: default base URL. May be overridden by env or wizard. */
   base_url_default?: string;
   /** Env var name(s) for auth; first is required, rest are optional. */

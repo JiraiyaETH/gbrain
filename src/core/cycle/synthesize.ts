@@ -54,6 +54,7 @@ import {
 // Slug regex from validatePageSlug — kept in sync.
 // Used for the orchestrator-written summary index slug.
 const SUMMARY_SLUG_RE = /^[a-z0-9][a-z0-9\-]*(\/[a-z0-9][a-z0-9\-]*)*$/;
+const LEGACY_EMPTY_RETRY_PREFIX = ':retry-after-empty-v';
 
 // ── Model context budget (D1, D5, D7, D9) ─────────────────────────────
 
@@ -242,6 +243,10 @@ export interface SynthesizePhaseOpts {
   date?: string;
   from?: string;
   to?: string;
+  /** Canary/control-plane cap: process at most N discovered transcripts. */
+  maxTranscripts?: number;
+  /** Canary/control-plane override for child put_page allow-list. */
+  allowedSlugPrefixes?: string[];
   /**
    * Disable the self-consumption guard. Wired from the
    * `--unsafe-bypass-dream-guard` CLI flag. NOT auto-applied for `--input`
@@ -310,7 +315,7 @@ export async function runPhaseSynthesize(
     const priorContradictionsBlock = await loadPriorContradictionsBlock(engine);
 
     // Discover.
-    const transcripts = opts.inputFile
+    let transcripts = opts.inputFile
       ? loadAdHocTranscript(opts.inputFile, config.minChars, config.excludePatterns, opts.bypassDreamGuard)
       : discoverTranscripts({
           corpusDir: config.corpusDir!,
@@ -323,8 +328,21 @@ export async function runPhaseSynthesize(
           bypassGuard: opts.bypassDreamGuard,
         });
 
+    const transcriptsDiscovered = transcripts.length;
+    const maxTranscripts = opts.maxTranscripts;
+    const transcriptCapApplied = typeof maxTranscripts === 'number' && Number.isFinite(maxTranscripts) && maxTranscripts >= 0;
+    if (transcriptCapApplied && transcripts.length > maxTranscripts) {
+      transcripts = transcripts.slice(0, maxTranscripts);
+    }
+
     if (transcripts.length === 0) {
-      return ok('no transcripts to process', { transcripts_processed: 0, pages_written: 0 });
+      return ok('no transcripts to process', {
+        transcripts_discovered: transcriptsDiscovered,
+        transcripts_considered: transcripts.length,
+        transcripts_cap: transcriptCapApplied ? maxTranscripts : null,
+        transcripts_processed: 0,
+        pages_written: 0,
+      });
     }
 
     // Significance verdicts (cached in dream_verdicts; Haiku on miss).
@@ -382,7 +400,9 @@ export async function runPhaseSynthesize(
     // "zero LLM calls"; it means "skip Sonnet."
     if (opts.dryRun) {
       return ok(`dry-run: ${worthProcessing.length} of ${transcripts.length} transcripts would synthesize`, {
-        transcripts_discovered: transcripts.length,
+        transcripts_discovered: transcriptsDiscovered,
+        transcripts_considered: transcripts.length,
+        transcripts_cap: transcriptCapApplied ? maxTranscripts : null,
         transcripts_processed: 0,
         pages_written: 0,
         verdicts,
@@ -395,7 +415,9 @@ export async function runPhaseSynthesize(
       // real successful run — not on "nothing worth processing." Lets a
       // re-run pick up if a new transcript lands later.
       return ok('all transcripts skipped by significance filter', {
-        transcripts_discovered: transcripts.length,
+        transcripts_discovered: transcriptsDiscovered,
+        transcripts_considered: transcripts.length,
+        transcripts_cap: transcriptCapApplied ? maxTranscripts : null,
         transcripts_processed: 0,
         pages_written: 0,
         verdicts,
@@ -405,7 +427,7 @@ export async function runPhaseSynthesize(
     // Fan-out: submit one subagent per worth-processing transcript (or one
     // per chunk for transcripts that exceed the model's per-prompt budget).
     const topology = await loadDreamSlugTopology();
-    const allowedSlugPrefixes = await loadAllowedSlugPrefixes();
+    const allowedSlugPrefixes = opts.allowedSlugPrefixes ?? await loadAllowedSlugPrefixes();
     if (allowedSlugPrefixes.length === 0) {
       return failed(makeError('InternalError', 'NO_ALLOWLIST',
         'skills/_brain-filing-rules.json missing dream_synthesize_paths.globs'));
@@ -429,7 +451,8 @@ export async function runPhaseSynthesize(
       // synthesized and skip. Prevents duplicate writes when a transcript
       // that was previously single-chunk now multi-chunks (because budget
       // shrank or model changed).
-      if (await hasLegacySingleChunkCompletion(engine, t.filePath, hash16)) {
+      const legacyState = await legacySingleChunkCompletionState(engine, t.filePath, hash16);
+      if (legacyState.kind === 'completed_with_writes') {
         skipReports.push({
           filePath: t.filePath,
           reason: 'already_synthesized_legacy_single_chunk',
@@ -484,7 +507,9 @@ export async function runPhaseSynthesize(
         //     runs because D9 splitTranscriptByBudget is hash-deterministic.
         const idempotency_key = isChunked
           ? `dream:synth:${t.filePath}:${hash16}:c${i}of${chunks.length}`
-          : `dream:synth:${t.filePath}:${hash16}`;
+          : legacyState.kind === 'completed_without_writes'
+            ? legacyState.retryKey
+            : `dream:synth:${t.filePath}:${hash16}`;
         const submitOpts: Partial<MinionJobInput> = {
           max_stalled: 3,
           on_child_fail: 'continue',
@@ -555,7 +580,9 @@ export async function runPhaseSynthesize(
     const ms = Date.now() - start;
     const submittedTranscripts = worthProcessing.length - skipReports.length;
     return ok(`${submittedTranscripts} transcript(s) synthesized in ${(ms / 1000).toFixed(1)}s`, {
-      transcripts_discovered: transcripts.length,
+      transcripts_discovered: transcriptsDiscovered,
+      transcripts_considered: transcripts.length,
+      transcripts_cap: transcriptCapApplied ? maxTranscripts : null,
       transcripts_processed: submittedTranscripts,
       pages_written: writtenSlugs.length,
       // v0.29: emit the slug list so the recompute_emotional_weight phase can
@@ -666,7 +693,7 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
     excludePatterns,
     model,
     verdictModel,
-    cooldownHours: cooldownHoursStr ? Math.max(0, parseInt(cooldownHoursStr, 10) || 12) : 12,
+    cooldownHours: cooldownHoursStr ? Math.max(0, Number.isFinite(parseInt(cooldownHoursStr, 10)) ? parseInt(cooldownHoursStr, 10) : 12) : 12,
     maxPromptTokens,
     maxChunksPerTranscript,
   };
@@ -951,27 +978,31 @@ CONTEXT
 OUTPUT POLICY (ALL of these are required)
 1. Quote the user verbatim. Do not paraphrase memorable phrasings.
 2. Cross-reference compulsively: every new page MUST contain at least one wikilink (e.g., \`[ref](people/jane-doe)\` or \`[[people/jane-doe]]\`) to existing brain content. Use the search tool to find existing pages first.
-3. Do NOT write to any path outside the allow-list shown in the put_page schema.
-4. Slug discipline: lowercase alphanumeric and hyphens only, slash-separated segments. NO underscores, NO file extensions.
-5. Do not reproduce raw local filesystem paths, migration source IDs, or deprecated route strings from the transcript. If they matter, describe them generically as retired migration paths and write only semantic canonical slugs.
+3. If the transcript meets the bar, you MUST call the \`brain_put_page\` tool for each page you create. A final text summary is not a write. Do NOT merely list pages that should be created.
+4. Do NOT write to any path outside the allow-list shown in the \`brain_put_page\` schema.
+5. Slug discipline: lowercase alphanumeric and hyphens only, slash-separated segments. NO underscores, NO file extensions.
+6. Do not reproduce raw local filesystem paths, migration source IDs, or deprecated route strings from the transcript. If they matter, describe them generically as retired migration paths and write only semantic canonical slugs.
 
 TASKS
 A. Reflections (self-knowledge, pattern recognition, emotional processing):
    slug: \`${topology.reflections}/${dateHint}-<topic-slug>-${hashSuffix}\`
 
-B. Originals (new ideas, frames, theses, mental models):
+B. Originals (new ideas, frames, theses, mental models, operator/system doctrine):
    slug: \`${topology.originalIdeas}/${dateHint}-<idea-slug>-${hashSuffix}\`
+   Operator/system doctrine is eligible for \`ideas/\` when the user names a reusable design rule, routing principle, safety boundary, or mental model. Do not dismiss those as mere implementation detail just because the conversation also contains a completed task receipt.
 
 C. People mentions: search first; if a page exists, do not put_page over it (the orchestrator handles people enrichment via timeline entries — your job is the reflection/original synthesis, NOT modifying existing person pages).
 
-D. If nothing in this transcript meets the bar (significance filter already passed but the content is still routine), return without writing anything.
+D. If nothing in this transcript meets the bar (significance filter already passed but the content is still routine), return without writing anything and say exactly why.
+
+If you write pages, use \`brain_put_page\` before your final answer. Final answer must briefly list the exact slugs written; it must not contain unwritten draft pages.
 
 TRANSCRIPT (${transcriptHeader})
 ---
 ${chunkText}
 ---
 
-When done, briefly list the slugs you wrote in your final message so the orchestrator can audit.`;
+When done, briefly list the slugs you actually wrote with \`brain_put_page\` so the orchestrator can audit.`;
 }
 
 function buildSummarySlug(date: string, topology: DreamSlugTopology): string {
@@ -1045,21 +1076,42 @@ async function collectChildPutPageSlugs(
  * Reuses the existing `minion_jobs.idempotency_key` index — no schema
  * additions. One indexed lookup per worth-processing transcript.
  */
-async function hasLegacySingleChunkCompletion(
+type LegacySingleChunkCompletionState =
+  | { kind: 'none' }
+  | { kind: 'completed_without_writes'; retryKey: string }
+  | { kind: 'completed_with_writes' };
+
+async function legacySingleChunkCompletionState(
   engine: BrainEngine,
   filePath: string,
   hash16: string,
-): Promise<boolean> {
+): Promise<LegacySingleChunkCompletionState> {
   const legacyKey = `dream:synth:${filePath}:${hash16}`;
-  const rows = await engine.executeRaw<{ status: string }>(
-    `SELECT status
-       FROM minion_jobs
-      WHERE idempotency_key = $1
-        AND status = 'completed'
-      LIMIT 1`,
-    [legacyKey],
+  const retryPrefix = `${legacyKey}${LEGACY_EMPTY_RETRY_PREFIX}`;
+  const rows = await engine.executeRaw<{ idempotency_key: string; has_writes: boolean | string }>(
+    `SELECT j.idempotency_key,
+            EXISTS (
+              SELECT 1
+                FROM subagent_tool_executions e
+               WHERE e.job_id = j.id
+                 AND e.tool_name = 'brain_put_page'
+                 AND e.status = 'complete'
+                 AND COALESCE(e.input->>'slug', (e.input #>> '{}')::jsonb->>'slug') IS NOT NULL
+            ) AS has_writes
+       FROM minion_jobs j
+      WHERE (j.idempotency_key = $1 OR left(j.idempotency_key, length($2)) = $2)
+        AND j.status IN ('completed', 'cancelled', 'failed', 'dead')`,
+    [legacyKey, retryPrefix],
   );
-  return rows.length > 0;
+  if (rows.some(row => String(row.has_writes) === 'true')) return { kind: 'completed_with_writes' };
+  if (rows.length === 0) return { kind: 'none' };
+  let maxRetry = 0;
+  for (const row of rows) {
+    const suffix = row.idempotency_key.slice(retryPrefix.length);
+    const retry = /^\d+$/.test(suffix) ? Number(suffix) : 0;
+    if (retry > maxRetry) maxRetry = retry;
+  }
+  return { kind: 'completed_without_writes', retryKey: `${retryPrefix}${maxRetry + 1}` };
 }
 
 // ── Reverse-write DB rows → markdown files ───────────────────────────

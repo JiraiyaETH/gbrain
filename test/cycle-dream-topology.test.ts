@@ -54,6 +54,7 @@ describe('Dream semantic topology', () => {
     expect(prompt).toContain('`reflections/2026-05-29-<topic-slug>-abcdef`');
     expect(prompt).toContain('`ideas/2026-05-29-<idea-slug>-abcdef`');
     expect(prompt).toContain('Do not reproduce raw local filesystem paths');
+    expect(prompt).toContain('Operator/system doctrine is eligible for `ideas/`');
     expect(prompt).not.toContain('wiki/personal');
     expect(prompt).not.toContain('wiki/originals');
     expect(prompt).not.toContain('personal/seksi');
