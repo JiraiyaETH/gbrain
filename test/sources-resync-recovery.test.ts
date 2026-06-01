@@ -48,7 +48,12 @@ if [ "$has_clone" = "1" ]; then
   exit 0
 fi
 if [ "$has_remote_get_url" = "1" ]; then
+  if [ "\${REMOTE_GET_URL_EXIT:-0}" = "1" ]; then exit 2; fi
   echo "$url_to_return"
+  exit 0
+fi
+if [ "\${1:-}" = "-C" ] && [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--is-inside-work-tree" ]; then
+  echo true
   exit 0
 fi
 exit 0
@@ -92,6 +97,19 @@ describe('validateRepoState — full state matrix (sync re-clone driver)', () =>
       });
       expect(validateRepoState(row.local_path!, 'https://github.com/example/repo'))
         .toBe('healthy');
+    });
+  });
+
+  test('healthy: path-only local repo does not require origin when no remote URL is configured', async () => {
+    await withEnv({ GBRAIN_HOME, PATH: fakePath(), REMOTE_GET_URL_EXIT: '1' }, async () => {
+      const row = await addSource(engine, {
+        id: 'state-path-only-local',
+        localPath: join(GBRAIN_HOME, 'local-brain'),
+      });
+      mkdirSync(join(row.local_path!, '.git'), { recursive: true });
+      expect(validateRepoState(row.local_path!)).toBe('healthy');
+      expect(validateRepoState(row.local_path!, null)).toBe('healthy');
+      expect(validateRepoState(row.local_path!, '')).toBe('healthy');
     });
   });
 

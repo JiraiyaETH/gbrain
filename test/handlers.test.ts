@@ -46,6 +46,52 @@ describe('registerBuiltinHandlers', () => {
   test('total handler count includes all 7 names', () => {
     expect(worker.registeredNames.length).toBeGreaterThanOrEqual(7);
   });
+
+  test('sync handler treats noEmbed as a deferred embed-backfill opt-out', async () => {
+    const fs = await import('fs');
+    const { execSync } = await import('child_process');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = fs.mkdtempSync(join(tmpdir(), 'gbrain-sync-handler-noembed-'));
+    try {
+      execSync('git init', { cwd: dir, stdio: 'pipe' });
+      execSync('git config user.email test@example.com', { cwd: dir, stdio: 'pipe' });
+      execSync('git config user.name Test', { cwd: dir, stdio: 'pipe' });
+      execSync('git commit --allow-empty -m base', { cwd: dir, stdio: 'pipe' });
+      const base = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim();
+      fs.mkdirSync(join(dir, 'notes'), { recursive: true });
+      fs.writeFileSync(
+        join(dir, 'notes', 'no-embed.md'),
+        '---\ntype: note\ntitle: No Embed Handler\n---\n\nbody',
+      );
+      execSync('git add notes/no-embed.md && git commit -m add-note', { cwd: dir, stdio: 'pipe' });
+
+      await engine.executeRaw(
+        `INSERT INTO sources (id, name, local_path, last_commit, config, created_at)
+         VALUES ($1, $1, $2, $3, '{}'::jsonb, NOW())
+         ON CONFLICT (id) DO UPDATE SET local_path = EXCLUDED.local_path, last_commit = EXCLUDED.last_commit`,
+        ['handler-no-embed', dir, base],
+      );
+
+      const handler = (worker as any).handlers.get('sync');
+      expect(handler).toBeDefined();
+      const result = await handler({
+        data: { sourceId: 'handler-no-embed', noPull: true, noEmbed: true },
+        signal: { aborted: false } as any,
+        job: { id: 20, name: 'sync' } as any,
+      });
+
+      expect(result.status).toBe('synced');
+      expect(result.embed_job_id).toBeNull();
+      expect(result.embed_skip_reason).toBe('no_embed');
+      const jobs = await engine.executeRaw<{ name: string }>(
+        `SELECT name FROM minion_jobs WHERE name = 'embed-backfill'`,
+      );
+      expect(jobs.length).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe('autopilot-cycle handler — partial failure does NOT throw', () => {

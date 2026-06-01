@@ -46,6 +46,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   resolveParallelism,
   buildSyncStatusReport,
+  shouldSubmitEmbedBackfillAfterSync,
 } from '../src/commands/sync.ts';
 import { SYNC_LOCK_ID, syncLockId } from '../src/core/db-lock.ts';
 import { withSourcePrefix, slog } from '../src/core/console-prefix.ts';
@@ -86,6 +87,34 @@ describe('resolveParallelism', () => {
 
   test('zero-source edge case returns 1 (no division by zero, no negative worker count)', () => {
     expect(resolveParallelism({ sourceCount: 0, engineKind: 'postgres' })).toBe(1);
+  });
+});
+
+// ── embed-backfill enqueue gate ─────────────────────────────────────
+
+describe('shouldSubmitEmbedBackfillAfterSync', () => {
+  const base = {
+    v2Enabled: true,
+    noAutoEmbed: false,
+    noEmbed: false,
+    dryRun: false,
+    status: 'synced' as const,
+  };
+
+  test('queues for a real sync when embeddings are allowed', () => {
+    expect(shouldSubmitEmbedBackfillAfterSync(base)).toBe(true);
+  });
+
+  test('explicit --no-embed suppresses deferred embed-backfill queueing', () => {
+    expect(shouldSubmitEmbedBackfillAfterSync({ ...base, noEmbed: true })).toBe(false);
+  });
+
+  test('does not queue for dry-run, up-to-date, blocked, partial, or no-auto-embed cases', () => {
+    expect(shouldSubmitEmbedBackfillAfterSync({ ...base, dryRun: true })).toBe(false);
+    expect(shouldSubmitEmbedBackfillAfterSync({ ...base, status: 'up_to_date' })).toBe(false);
+    expect(shouldSubmitEmbedBackfillAfterSync({ ...base, status: 'blocked_by_failures' })).toBe(false);
+    expect(shouldSubmitEmbedBackfillAfterSync({ ...base, status: 'partial' })).toBe(false);
+    expect(shouldSubmitEmbedBackfillAfterSync({ ...base, noAutoEmbed: true })).toBe(false);
   });
 });
 

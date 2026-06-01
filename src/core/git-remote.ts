@@ -233,8 +233,9 @@ export type RepoState =
  */
 export function validateRepoState(
   repoPath: string,
-  expectedRemoteUrl?: string,
+  expectedRemoteUrl?: string | null,
 ): RepoState {
+  const hasExpectedRemoteUrl = typeof expectedRemoteUrl === 'string' && expectedRemoteUrl.trim().length > 0;
   let stat;
   try {
     stat = lstatSync(repoPath);
@@ -254,10 +255,22 @@ export function validateRepoState(
     });
     remoteUrl = out.toString().trim();
   } catch {
+    if (!hasExpectedRemoteUrl) {
+      try {
+        const out = execFileSync('git', ['-C', repoPath, 'rev-parse', '--is-inside-work-tree'], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 10_000,
+          env: { ...process.env, ...GIT_ENV },
+        });
+        if (out.toString().trim() === 'true') return 'healthy';
+      } catch {
+        // Fall through to corrupted: .git exists but git cannot inspect it.
+      }
+    }
     return 'corrupted';
   }
 
-  if (expectedRemoteUrl !== undefined && remoteUrl !== expectedRemoteUrl) {
+  if (hasExpectedRemoteUrl && remoteUrl !== expectedRemoteUrl) {
     return 'url-drift';
   }
   return 'healthy';

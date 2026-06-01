@@ -527,6 +527,16 @@ async function writeSyncAnchor(
   await engine.setConfig(`sync.${which}`, value);
 }
 
+export async function markSyncFreshness(
+  engine: BrainEngine,
+  sourceId: string | undefined,
+  headCommit: string,
+  newestContentEpochMs?: number | null,
+): Promise<void> {
+  await writeSyncAnchor(engine, sourceId, 'last_commit', headCommit, newestContentEpochMs);
+  await engine.setConfig('sync.last_run', new Date().toISOString());
+}
+
 /**
  * v0.20.0 Cathedral II Layer 12 (SP-1 fix) — read/write the chunker version
  * last used to sync a given source. When it mismatches CURRENT_CHUNKER_VERSION,
@@ -1199,6 +1209,20 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       detachedWorkingTreeManifest.renamed.length > 0);
 
   if (lastCommit === headCommit && !versionMismatch && !versionNeverSet && !hasDetachedWorkingTreeChanges) {
+    if (opts.dryRun) {
+      slog(`Sync dry run: ${lastCommit.slice(0, 8)}..${headCommit.slice(0, 8)}`);
+      slog(`  No syncable changes.`);
+      return {
+        status: 'dry_run',
+        fromCommit: lastCommit,
+        toCommit: headCommit,
+        added: 0, modified: 0, deleted: 0, renamed: 0,
+        chunksCreated: 0,
+        embedded: 0,
+        pagesAffected: [],
+      };
+    }
+    await markSyncFreshness(engine, opts.sourceId, headCommit, newestCommitMs(repoPath));
     return {
       status: 'up_to_date',
       fromCommit: lastCommit,
@@ -1307,8 +1331,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
 
   if (totalChanges === 0) {
     // Update sync state even with no syncable changes (git advanced)
-    await writeSyncAnchor(engine, opts.sourceId, 'last_commit', headCommit, newestCommitMs(repoPath));
-    await engine.setConfig('sync.last_run', new Date().toISOString());
+    await markSyncFreshness(engine, opts.sourceId, headCommit, newestCommitMs(repoPath));
     await writeChunkerVersion(engine, opts.sourceId, String(CHUNKER_VERSION));
     return {
       status: 'up_to_date',
@@ -1816,8 +1839,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
 
   // Update sync state AFTER all changes succeed (source-scoped when
   // opts.sourceId is set, global config otherwise).
-  await writeSyncAnchor(engine, opts.sourceId, 'last_commit', headCommit, newestCommitMs(repoPath));
-  await engine.setConfig('sync.last_run', new Date().toISOString());
+  await markSyncFreshness(engine, opts.sourceId, headCommit, newestCommitMs(repoPath));
   await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
   // v0.20.0 Cathedral II Layer 12: persist the chunker version we just
   // finished with so the next sync's up_to_date gate respects it. Only
@@ -2047,8 +2069,7 @@ async function performFullSync(
   // Persist sync state so next sync is incremental (C1 fix: was missing).
   // v0.18.0 Step 5: routed through writeSyncAnchor so --source pins it
   // to the right sources row rather than the global config.
-  await writeSyncAnchor(engine, opts.sourceId, 'last_commit', headCommit, newestCommitMs(repoPath));
-  await engine.setConfig('sync.last_run', new Date().toISOString());
+  await markSyncFreshness(engine, opts.sourceId, headCommit, newestCommitMs(repoPath));
   await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
   // v0.20.0 Cathedral II Layer 12: persist chunker version for the gate.
   await writeChunkerVersion(engine, opts.sourceId, String(CHUNKER_VERSION));
@@ -2086,6 +2107,25 @@ async function performFullSync(
     embedded,
     pagesAffected: [],
   };
+}
+
+export function shouldSubmitEmbedBackfillAfterSync(opts: {
+  v2Enabled: boolean;
+  noAutoEmbed: boolean;
+  noEmbed: boolean;
+  dryRun: boolean;
+  status: SyncResult['status'];
+}): boolean {
+  return (
+    opts.v2Enabled &&
+    !opts.noAutoEmbed &&
+    !opts.noEmbed &&
+    !opts.dryRun &&
+    opts.status !== 'dry_run' &&
+    opts.status !== 'up_to_date' &&
+    opts.status !== 'blocked_by_failures' &&
+    opts.status !== 'partial'
+  );
 }
 
 export async function runSync(engine: BrainEngine, args: string[]) {
@@ -2633,14 +2673,15 @@ See also:
       // v0.41.13.0 (T7 / D-V3-5): partial excluded — the next clean sync
       // re-walks the diff and re-decides whether to enqueue embed for
       // pages whose content actually changed.
-      if (
-        v2Enabled &&
-        !noAutoEmbed &&
-        !dryRun &&
-        result.status !== 'dry_run' &&
-        result.status !== 'up_to_date' &&
-        result.status !== 'partial'
-      ) {
+      // v0.41.29.x: explicit --no-embed is also an auto-embed opt-out;
+      // it means no embedding work now AND no deferred embed-backfill job.
+      if (shouldSubmitEmbedBackfillAfterSync({
+        v2Enabled,
+        noAutoEmbed,
+        noEmbed,
+        dryRun,
+        status: result.status,
+      })) {
         try {
           const { submitEmbedBackfill } = await import('../core/embed-backfill-submit.ts');
           const sub = await submitEmbedBackfill(engine, src.id, { reason: 'sync_all' });

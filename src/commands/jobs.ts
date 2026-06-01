@@ -1299,7 +1299,7 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     const autoEmbed = job.data.auto_embed_backfill !== false;
     let embedJobId: number | null = null;
     let embedSkipReason: string | null = null;
-    if (autoEmbed && sourceId && result.status !== 'up_to_date' && result.status !== 'dry_run') {
+    if (autoEmbed && !noEmbed && sourceId && result.status !== 'up_to_date' && result.status !== 'dry_run') {
       try {
         const { isFederatedV2Enabled } = await import('../core/feature-flags.ts');
         if (await isFederatedV2Enabled(engine)) {
@@ -1323,6 +1323,8 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
       }
     } else if (!sourceId) {
       embedSkipReason = 'no_source_id';
+    } else if (noEmbed) {
+      embedSkipReason = 'no_embed';
     } else if (!autoEmbed) {
       embedSkipReason = 'auto_embed_disabled';
     }
