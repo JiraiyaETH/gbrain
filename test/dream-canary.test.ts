@@ -121,6 +121,7 @@ describe('Dream canary control plane', () => {
     expect(ledger.total_receipts).toBe(1);
     expect(ledger.dry_run_ok_runs).toBe(1);
     expect(ledger.successful_actual_runs).toBe(0);
+    expect(ledger.actual_attempts).toBe(0);
   });
 
   test('dry-run synthesize skip fails closed instead of approving an unconfigured canary', async () => {
@@ -149,6 +150,18 @@ describe('Dream canary control plane', () => {
     expect(cycleCalls).toHaveLength(0);
   });
 
+  test('same-day actual attempt gate skips closed before running Dream', async () => {
+    const engine = new FakeEngine();
+    engine.config.set('dream.canary.last_attempt_date', new Date().toISOString().slice(0, 10));
+
+    const result = await runDreamCanary(engine as any, { brainDir: '/tmp/brain' });
+
+    expect(result.status).toBe('skipped');
+    expect(result.reason).toBe('already_attempted_today');
+    expect(result.actual_attempted).toBe(false);
+    expect(cycleCalls).toHaveLength(0);
+  });
+
   test('successful actual run increments count and does not self-reschedule unless explicitly requested', async () => {
     cycleReports.push(
       cycleReport({ transcripts_discovered: 2, transcripts_considered: 2, transcripts_cap: 5, transcripts_processed: 0, pages_written: 0, dryRun: true, verdicts: [] }),
@@ -169,8 +182,11 @@ describe('Dream canary control plane', () => {
     const result = await runDreamCanary(engine as any, { brainDir: '/tmp/brain' });
 
     expect(result.status).toBe('ok');
+    expect(result.actual_attempted).toBe(true);
     expect(result.run_count_after).toBe(1);
     expect(engine.config.get('dream.canary.run_count')).toBe('1');
+    expect(engine.config.get('dream.canary.last_attempt_date')).toBe(new Date().toISOString().slice(0, 10));
+    expect(engine.config.get('dream.canary.last_attempt_ts')).toBeTruthy();
     expect(result.next_job_id).toBeUndefined();
     expect(cycleCalls).toHaveLength(2);
     expect(cycleCalls[0].dryRun).toBe(true);
@@ -197,7 +213,15 @@ describe('Dream canary control plane', () => {
 
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('actual_no_pages_written: processed=1');
+    expect(result.actual_attempted).toBe(true);
     expect(engine.config.get('dream.canary.run_count')).toBeUndefined();
+    expect(engine.config.get('dream.canary.last_attempt_date')).toBe(new Date().toISOString().slice(0, 10));
+
+    const retry = await runDreamCanary(engine as any, { brainDir: '/tmp/brain' });
+    expect(retry.status).toBe('skipped');
+    expect(retry.reason).toBe('already_attempted_today');
+    expect(retry.actual_attempted).toBe(false);
+    expect(cycleCalls).toHaveLength(2);
   });
 
   test('actual run that considers transcripts but processes none and writes no pages fails closed and does not count', async () => {
@@ -260,6 +284,9 @@ describe('Dream canary control plane', () => {
     expect(summary.successful_actual_runs).toBe(1);
     expect(summary.dry_run_ok_runs).toBe(1);
     expect(summary.failed_runs).toBe(2);
+    expect(summary.actual_attempts).toBe(3);
+    expect(summary.last_actual_attempt_run_id).toBe('d');
+    expect(summary.last_actual_attempt_date).toBe('2026-06-03');
     expect(summary.total_api_cost_usd).toBe(0.035);
     expect(summary.total_model_calls).toBe(7);
     expect(summary.last_run_id).toBe('d');

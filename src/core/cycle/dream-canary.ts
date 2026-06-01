@@ -41,11 +41,14 @@ export interface DreamCanaryLedgerSummary {
   dry_run_ok_runs: number;
   failed_runs: number;
   skipped_runs: number;
+  actual_attempts: number;
   total_api_cost_usd: number;
   total_model_calls: number;
   last_status?: DreamCanaryResult['status'];
   last_run_id?: string;
   last_run_date?: string;
+  last_actual_attempt_run_id?: string;
+  last_actual_attempt_date?: string;
 }
 
 export interface DreamCanaryResult {
@@ -59,6 +62,8 @@ export interface DreamCanaryResult {
   max_runs: number;
   max_transcripts: number;
   max_cost_usd: number;
+  /** True only after a real synthesis attempt passes dry-run and is durably recorded. */
+  actual_attempted: boolean;
   dry_run_report?: CycleReport;
   actual_report?: CycleReport;
   next_job_id?: number;
@@ -84,6 +89,7 @@ export async function runDreamCanary(engine: BrainEngine, opts: DreamCanaryOpts)
   const runId = `dream-canary:${runDate}:${Date.now()}`;
   const runCountBefore = parseInt((await engine.getConfig('dream.canary.run_count').catch(() => null)) ?? '0', 10) || 0;
   const lastRunDate = await engine.getConfig('dream.canary.last_run_date').catch(() => null);
+  const lastAttemptDate = await engine.getConfig('dream.canary.last_attempt_date').catch(() => null);
 
   const base: DreamCanaryResult = {
     schema_version: 1,
@@ -95,6 +101,7 @@ export async function runDreamCanary(engine: BrainEngine, opts: DreamCanaryOpts)
     max_runs: maxRuns,
     max_transcripts: maxTranscripts,
     max_cost_usd: maxCostUsd,
+    actual_attempted: false,
     budget: {},
   };
 
@@ -103,6 +110,9 @@ export async function runDreamCanary(engine: BrainEngine, opts: DreamCanaryOpts)
   }
   if (!opts.dryRunOnly && lastRunDate === runDate) {
     return writeCanaryReceipt(engine, { ...base, status: 'skipped', reason: 'already_ran_today' });
+  }
+  if (!opts.dryRunOnly && lastAttemptDate === runDate) {
+    return writeCanaryReceipt(engine, { ...base, status: 'skipped', reason: 'already_attempted_today' });
   }
 
   const configuredAllowedPrefixes = await loadAllowedSlugPrefixes();
@@ -163,6 +173,19 @@ export async function runDreamCanary(engine: BrainEngine, opts: DreamCanaryOpts)
     });
   }
 
+  const actualAttemptBase: DreamCanaryResult = { ...base, actual_attempted: true };
+  try {
+    await recordActualAttempt(engine, runDate);
+  } catch (err) {
+    return writeCanaryReceipt(engine, {
+      ...base,
+      status: 'failed',
+      reason: `actual_attempt_record_failed: ${err instanceof Error ? err.message : String(err)}`,
+      dry_run_report: dryRunReport,
+      budget: { dry_run: dryBudget.snapshot() },
+    });
+  }
+
   const actualBudget = new BudgetTracker({
     label: 'dream.canary.actual',
     maxCostUsd,
@@ -182,7 +205,7 @@ export async function runDreamCanary(engine: BrainEngine, opts: DreamCanaryOpts)
     }));
   } catch (err) {
     return writeCanaryReceipt(engine, {
-      ...base,
+      ...actualAttemptBase,
       status: 'failed',
       reason: `actual_exception: ${err instanceof Error ? err.message : String(err)}`,
       dry_run_report: dryRunReport,
@@ -194,7 +217,7 @@ export async function runDreamCanary(engine: BrainEngine, opts: DreamCanaryOpts)
   if (actualFailure) {
     await engine.setConfig('dream.canary.paused_reason', actualFailure).catch(() => {});
     return writeCanaryReceipt(engine, {
-      ...base,
+      ...actualAttemptBase,
       status: 'failed',
       reason: actualFailure,
       dry_run_report: dryRunReport,
@@ -235,7 +258,7 @@ export async function runDreamCanary(engine: BrainEngine, opts: DreamCanaryOpts)
   }
 
   return writeCanaryReceipt(engine, {
-    ...base,
+    ...actualAttemptBase,
     status: 'ok',
     run_count_after: runCountAfter,
     dry_run_report: dryRunReport,
@@ -243,6 +266,11 @@ export async function runDreamCanary(engine: BrainEngine, opts: DreamCanaryOpts)
     next_job_id: nextJobId,
     budget: { dry_run: dryBudget.snapshot(), actual: actualBudget.snapshot() },
   });
+}
+
+async function recordActualAttempt(engine: BrainEngine, runDate: string): Promise<void> {
+  await engine.setConfig('dream.canary.last_attempt_date', runDate);
+  await engine.setConfig('dream.canary.last_attempt_ts', new Date().toISOString());
 }
 
 function validateDryRun(report: CycleReport, maxTranscripts: number): string | null {
@@ -317,6 +345,7 @@ export function summarizeDreamCanaryLedger(receiptPath = gbrainPath('audit/dream
     dry_run_ok_runs: 0,
     failed_runs: 0,
     skipped_runs: 0,
+    actual_attempts: 0,
     total_api_cost_usd: 0,
     total_model_calls: 0,
   };
@@ -333,6 +362,12 @@ export function summarizeDreamCanaryLedger(receiptPath = gbrainPath('audit/dream
       else if (effectiveStatus === 'dry_run_ok') summary.dry_run_ok_runs++;
       else if (effectiveStatus === 'failed') summary.failed_runs++;
       else if (effectiveStatus === 'skipped') summary.skipped_runs++;
+      const actualAttempted = row.actual_attempted === true || Boolean(row.actual_report) || Boolean(row.budget?.actual);
+      if (actualAttempted) {
+        summary.actual_attempts++;
+        summary.last_actual_attempt_run_id = row.run_id;
+        summary.last_actual_attempt_date = row.run_date;
+      }
       for (const snapshot of [row.budget?.dry_run, row.budget?.actual]) {
         if (!snapshot) continue;
         summary.total_api_cost_usd += typeof snapshot.cumulativeCostUsd === 'number' ? snapshot.cumulativeCostUsd : 0;
