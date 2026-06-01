@@ -1116,6 +1116,79 @@ async function runAudit(engine: BrainEngine, args: string[]): Promise<void> {
   }
 }
 
+// ── Subcommand: code-intake ─────────────────────────────────
+
+/**
+ * Read-only repo/source gate for the codebase-auditor lane.
+ *
+ * It intentionally only inspects Git metadata + source table state and emits a
+ * machine-readable handoff. Actual worktree creation, source registration,
+ * sync, and profile allowlist changes remain explicit follow-up actions owned
+ * by Alex/operator lanes.
+ */
+async function runCodeIntake(engine: BrainEngine, args: string[]): Promise<void> {
+  const sourceId = args.find((a) => !a.startsWith('--'));
+  const json = args.includes('--json');
+  const repoPath = valueAfter(args, '--path') ?? valueAfter(args, '--repo') ?? process.cwd();
+  const displayName = valueAfter(args, '--name') ?? undefined;
+  const knownSymbol = valueAfter(args, '--known-symbol') ?? undefined;
+
+  if (!sourceId) {
+    console.error('Usage: gbrain sources code-intake <source-id> --path <repo-path> [--known-symbol <symbol>] [--name <display>] [--json]');
+    process.exit(2);
+  }
+
+  const { buildCodeIntakeReport } = await import('../core/code-intake.ts');
+  const report = await buildCodeIntakeReport(engine, {
+    sourceId,
+    repoPath,
+    displayName,
+    knownSymbol,
+  });
+
+  if (json) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+
+  console.log(`Code intake: ${report.source_id}`);
+  console.log(`  verdict:      ${report.verdict}`);
+  console.log(`  auditor_gate: ${report.auditor_gate}`);
+  console.log(`  repo:         ${report.repo.root ?? '(not a git repo)'}`);
+  if (report.repo.branch || report.repo.head) {
+    console.log(`  branch/head:  ${(report.repo.branch ?? '(unknown)')} @ ${(report.repo.head ?? '(unknown)')}`);
+  }
+  console.log(`  source:       ${report.source.exists ? 'registered' : 'not registered'}`);
+  if (report.source.exists) {
+    console.log(`  index_commit: ${report.source.last_commit ?? '(never synced)'}`);
+    console.log(`  pages:        ${report.source.page_count ?? 0}`);
+  }
+  if (report.stop_gates.length > 0) {
+    console.log(`  stop_gates:   ${report.stop_gates.join(', ')}`);
+  }
+  if (report.warnings.length > 0) {
+    console.log(`  warnings:     ${report.warnings.join(', ')}`);
+  }
+  if (report.recommended_steps.length > 0) {
+    console.log('\nRecommended explicit next steps:');
+    for (const [idx, step] of report.recommended_steps.entries()) {
+      console.log(`  ${idx + 1}. ${step.label} [${step.mutates}]`);
+      console.log(`     ${formatArgv(step.argv)}`);
+      console.log(`     ${step.note}`);
+    }
+  }
+}
+
+function valueAfter(args: string[], flag: string): string | null {
+  const idx = args.indexOf(flag);
+  if (idx === -1) return null;
+  return args[idx + 1] ?? null;
+}
+
+function formatArgv(argv: string[]): string {
+  return argv.map((part) => (/^[a-zA-Z0-9_./:=@-]+$/.test(part) ? part : JSON.stringify(part))).join(' ');
+}
+
 // ── Dispatcher ──────────────────────────────────────────────
 
 // v0.40.6.0: my duplicate `runStatus` (line ~895 pre-resolution) was
@@ -1158,6 +1231,7 @@ export async function runSources(engine: BrainEngine, args: string[]): Promise<v
     // v0.40.3.0 contextual retrieval (from master)
     case 'set-cr-mode': return runSetCrMode(engine, rest);
     case 'audit':      return runAudit(engine, rest);
+    case 'code-intake': return runCodeIntake(engine, rest);
     case undefined:
     case '--help':
     case '-h':
@@ -1209,6 +1283,11 @@ Subcommands:
                                     override (v0.40.3.0). Pass "unset" or
                                     "default" to clear (NULL falls through
                                     to the global search.mode bundle).
+  code-intake <id> --path <repo> [--known-symbol <symbol>] [--json]
+                                    Read-only repo/source gate for codebase
+                                    auditor intake. Emits freshness, source
+                                    policy, BLOCKED_* gate, and explicit
+                                    follow-up commands; performs no writes.
 
 Source id: [a-z0-9-]{1,32}. Immutable citation key.
 
