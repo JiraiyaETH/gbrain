@@ -47,6 +47,7 @@ interface RunOpts {
   slug?: string;
   type?: string;
   source?: string;
+  noEmbed?: boolean;
   quiet?: boolean;
   json?: boolean;
 }
@@ -60,6 +61,7 @@ function parseArgs(args: string[]): RunOpts | { help: true; positional: string |
     if (a === '--quiet' || a === '-q') { opts.quiet = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
     if (a === '--stdin') { opts.stdin = true; continue; }
+    if (a === '--no-embed') { opts.noEmbed = true; continue; }
     if (a === '--file') {
       const v = args[++i];
       if (v) opts.filePath = v;
@@ -108,6 +110,8 @@ Options:
                        brain_default > 'default'. NOT supported on
                        thin-client installs (server-side OAuth client
                        registration scopes the source).
+  --no-embed           Write/chunk the page without embedding now. Use when
+                       embedding spend or credentials are intentionally gated.
   --quiet, -q          Print just the slug on stdout (for shell pipelines)
   --json               JSON output for agents
   --help, -h           Show this help
@@ -456,7 +460,7 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
       raw = await callRemoteTool(
         cfg!,
         'put_page',
-        { slug, content: fullContent },
+        { slug, content: fullContent, ...(parsed.noEmbed ? { no_embed: true } : {}) },
         { timeoutMs: 30_000 },
       );
     } catch (e) {
@@ -543,6 +547,7 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
       source_kind: 'capture-cli',
       source_uri: sourceUri,
       ingested_via: 'capture-cli',
+      ...(parsed.noEmbed ? { no_embed: true } : {}),
     })) as {
       slug: string;
       status?: string;

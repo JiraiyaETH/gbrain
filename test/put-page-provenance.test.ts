@@ -113,6 +113,28 @@ async function readProvenance(slug: string): Promise<{
 }
 
 describe('put_page provenance — trusted local caller (ctx.remote === false)', () => {
+  test('no_embed skips embedding even when an embedding provider is configured', async () => {
+    __setEmbedTransportForTests(async () => {
+      throw new Error('embedding transport should not run when no_embed=true');
+    });
+    try {
+      const ctx = makeCtx({ remote: false });
+      const result = await putPageOp.handler(ctx, {
+        slug: 'wiki/p3a-no-embed',
+        content: '---\ntype: note\ntitle: No Embed\n---\n\nbody',
+        no_embed: true,
+      }) as { status?: string };
+      expect(result.status).toBe('created_or_updated');
+      const page = await engine.getPage('wiki/p3a-no-embed', { sourceId: 'default' });
+      expect(page?.slug).toBe('wiki/p3a-no-embed');
+    } finally {
+      __setEmbedTransportForTests(async ({ values }: any) => ({
+        embeddings: values.map(() => new Array(1536).fill(0)),
+        usage: { tokens: 0 },
+      }) as any);
+    }
+  });
+
   test('client params honored: source_kind / source_uri / ingested_via populate DB', async () => {
     const ctx = makeCtx({ remote: false });
     await putPageOp.handler(ctx, {

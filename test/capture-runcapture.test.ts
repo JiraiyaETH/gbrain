@@ -23,7 +23,20 @@ import { describe, test, expect } from 'bun:test';
 import { __testing as captureTesting } from '../src/commands/capture.ts';
 import { computeContentHash } from '../src/core/ingestion/types.ts';
 
-const { detectBinaryNullByte, normalizeForHash, maybeRewriteSourceFkError } = captureTesting;
+const { detectBinaryNullByte, normalizeForHash, maybeRewriteSourceFkError, parseArgs } = captureTesting;
+
+describe('capture CLI args', () => {
+  test('--no-embed is parsed as an explicit no-spend capture request', () => {
+    const parsed = parseArgs(['--file', 'notes/today.md', '--slug', 'projects/example', '--no-embed', '--json']);
+    expect('help' in parsed).toBe(false);
+    if ('help' in parsed) return;
+
+    expect(parsed.filePath).toBe('notes/today.md');
+    expect(parsed.slug).toBe('projects/example');
+    expect(parsed.noEmbed).toBe(true);
+    expect(parsed.json).toBe(true);
+  });
+});
 
 describe('CV10 — binary file guard (detectBinaryNullByte)', () => {
   test('returns -1 on plain ASCII', () => {
