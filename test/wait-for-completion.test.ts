@@ -105,6 +105,25 @@ describe('waitForCompletion terminal states', () => {
     expect(res.status).toBe('waiting');
   });
 
+  test('calls onPoll for each non-terminal observation while waiting', async () => {
+    const j = await queue.add('t', {});
+    const seen: string[] = [];
+    const p = waitForCompletion(queue, j.id, {
+      pollMs: 25,
+      timeoutMs: 5000,
+      onPoll: async (snapshot) => { seen.push(snapshot.status); },
+    });
+    setTimeout(async () => {
+      const claimed = await queue.claim('tok', 30000, 'default', ['t']);
+      await queue.completeJob(claimed!.id, 'tok', { ok: true });
+    }, 70);
+
+    const res = await p;
+    expect(res.status).toBe('completed');
+    expect(seen.length).toBeGreaterThanOrEqual(1);
+    expect(seen.every(status => status === 'waiting')).toBe(true);
+  });
+
   test('throws when job id does not exist', async () => {
     await expect(waitForCompletion(queue, 99_999, { pollMs: 10, timeoutMs: 100 }))
       .rejects.toThrow(/not found/);

@@ -183,6 +183,10 @@ describe('Dream canary control plane', () => {
 
     expect(result.status).toBe('ok');
     expect(result.actual_attempted).toBe(true);
+    expect(result.actual_report).toBeTruthy();
+    const actualSynth = result.actual_report!.phases.find((phase: any) => phase.phase === 'synthesize');
+    expect(actualSynth?.details.written_slugs).toEqual(['ideas/test-abc123', 'reflections/test-def456']);
+    expect(actualSynth?.details.child_outcomes).toEqual([{ jobId: 11, status: 'completed' }]);
     expect(result.run_count_after).toBe(1);
     expect(engine.config.get('dream.canary.run_count')).toBe('1');
     expect(engine.config.get('dream.canary.last_attempt_date')).toBe(new Date().toISOString().slice(0, 10));

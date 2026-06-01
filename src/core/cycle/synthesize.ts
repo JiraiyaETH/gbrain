@@ -235,6 +235,8 @@ export interface SynthesizePhaseOpts {
   dryRun: boolean;
   /** Generic in-cycle keepalive for cycle-lock TTL renewal during long waits. */
   yieldDuringPhase?: () => Promise<void>;
+  /** Parent job abort signal. Threaded into child waits so lock-loss/cancel/timeout exits cleanly. */
+  signal?: AbortSignal;
   /**
    * Override the corpus directory and other tunables. Primarily for the
    * `gbrain dream --input <file>` ad-hoc path; bypasses config reads.
@@ -529,14 +531,26 @@ export async function runPhaseSynthesize(
       }
     }
 
-    // Wait for every child to reach a terminal state. Tick yieldDuringPhase
-    // every 5 min so the cycle lock TTL refreshes.
+    // Wait for every child to reach a terminal state. While a child is still
+    // active, periodically tick yieldDuringPhase so the parent cycle lock stays
+    // alive and worker abort/cancel/timeout can unwind the wait instead of
+    // leaving the parent dream-canary job wedged in ACTIVE.
     const childOutcomes: Array<{ jobId: number; status: string }> = [];
+    let lastKeepaliveAt = 0;
+    const keepaliveDuringChildWait = async () => {
+      if (!opts.yieldDuringPhase) return;
+      const now = Date.now();
+      if (now - lastKeepaliveAt < 30_000) return;
+      lastKeepaliveAt = now;
+      try { await opts.yieldDuringPhase(); } catch { /* best-effort */ }
+    };
     for (const jobId of childIds) {
       try {
         const job = await waitForCompletion(queue, jobId, {
           timeoutMs: 35 * 60 * 1000,
           pollMs: 5 * 1000,
+          signal: opts.signal,
+          onPoll: keepaliveDuringChildWait,
         });
         childOutcomes.push({ jobId, status: job.status });
       } catch (e) {

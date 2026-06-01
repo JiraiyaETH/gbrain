@@ -36,6 +36,13 @@ export interface WaitOpts {
   pollMs?: number;
   /** Optional AbortSignal — on abort, the poll loop exits early (no TimeoutError). */
   signal?: AbortSignal;
+  /**
+   * Optional non-terminal poll hook. Long-running parent jobs use this to
+   * refresh their own cycle/job keepalive while waiting for a child job to
+   * finish. The hook is called after each non-terminal observation and before
+   * sleeping; terminal states return immediately without an extra hook call.
+   */
+  onPoll?: (job: MinionJob) => void | Promise<void>;
 }
 
 export async function waitForCompletion(
@@ -51,6 +58,7 @@ export async function waitForCompletion(
   let job = await queue.getJob(jobId);
   if (!job) throw new Error(`job ${jobId} not found`);
   if (TERMINAL_SET.has(job.status)) return job;
+  await opts.onPoll?.(job);
 
   while (true) {
     if (opts.signal?.aborted) {
@@ -70,6 +78,7 @@ export async function waitForCompletion(
     job = await queue.getJob(jobId);
     if (!job) throw new Error(`job ${jobId} disappeared mid-wait`);
     if (TERMINAL_SET.has(job.status)) return job;
+    await opts.onPoll?.(job);
   }
 }
 

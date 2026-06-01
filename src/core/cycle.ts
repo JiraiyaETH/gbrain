@@ -1575,7 +1575,12 @@ export async function runCycle(
         const { result, duration_ms } = await timePhase(() => runPhaseSynthesize(engine, {
           brainDir,
           dryRun,
-          yieldDuringPhase: opts.yieldDuringPhase,
+          // Long synthesize runs can block inside child waits for many minutes.
+          // Build the same in-phase keepalive wrapper used by the other long
+          // phases so Dream parents refresh the cycle lock and still fire any
+          // outer worker/job keepalive hook while waiting for children.
+          yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
+          signal: opts.signal,
           inputFile: opts.synthInputFile,
           date: opts.synthDate,
           from: opts.synthFrom,
