@@ -21,10 +21,11 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, uti
 import { join } from 'path';
 import { execSync } from 'child_process';
 import type { BrainEngine } from '../core/engine.ts';
+import type { RemediationStep } from '../core/remediation-step.ts';
 import { loadPreferences } from '../core/preferences.ts';
 import { loadConfig, gbrainPath as gbrainHomePath } from '../core/config.ts';
 import { ChildWorkerSupervisor } from '../core/minions/child-worker-supervisor.ts';
-import { getDefaultSourcePath } from '../core/source-resolver.ts';
+import { getDefaultSourcePath, resolveSourceId } from '../core/source-resolver.ts';
 
 /**
  * v0.37.7.0 #1162 — classify autopilot reconnect-loop errors.
@@ -135,6 +136,27 @@ export function shouldSpawnAutopilotWorker(args: string[]): boolean {
   return !args.includes('--no-worker');
 }
 
+export function selectDispatchableTargetedSteps(plan: RemediationStep[]): {
+  dispatch: RemediationStep[];
+  deferred: RemediationStep[];
+} {
+  const plannedIds = new Set(plan.map((step) => step.id));
+  const dispatch: RemediationStep[] = [];
+  const deferred: RemediationStep[] = [];
+
+  for (const step of plan) {
+    const deps = step.depends_on ?? [];
+    const hasDependencyInSameTick = deps.some((dep) => plannedIds.has(dep));
+    if (hasDependencyInSameTick) {
+      deferred.push(step);
+    } else {
+      dispatch.push(step);
+    }
+  }
+
+  return { dispatch, deferred };
+}
+
 export async function runAutopilot(engine: BrainEngine, args: string[]) {
   if (args.includes('--help') || args.includes('-h')) {
     console.log(
@@ -173,6 +195,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
     console.error('No repo path. Use --repo or attach a local_path to the default source with `gbrain sources add/default`.');
     process.exit(1);
   }
+  const sourceId = await resolveSourceId(engine, null, repoPath);
 
   // Lock file to prevent concurrent instances (#14).
   // v0.37.7.0 #1226: route through gbrainPath() so the lockfile lives
@@ -528,6 +551,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
         }
         const ctx = {
           repoPath,
+          sourceId,
           embeddingModel,
           embeddingProviderConfigured: embeddingProviderConfigured(embeddingModel, (envVar) => {
             const cfgField = HOSTED_EMBED_KEY_CONFIG[envVar];
@@ -612,8 +636,26 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
           // Small targeted plan — submit individual handlers per step.
           // D9 content-hash idempotency keys (from computeRecommendations).
           // maxWaiting:1 per submit per codex #17 (closes the backpressure
-          // gap the prior implementation had for targeted submits).
-          for (const step of plan) {
+          // gap the prior implementation had for targeted submits). A later
+          // step whose dependency is also in THIS tick's plan is deferred to
+          // the next tick so sync can complete before extract/embed claim
+          // source-scoped work.
+          const selectedPlan = selectDispatchableTargetedSteps(plan);
+          for (const step of selectedPlan.deferred) {
+            if (jsonMode) {
+              process.stderr.write(JSON.stringify({
+                event: 'deferred_dependency',
+                mode: 'targeted',
+                step: step.id,
+                depends_on: step.depends_on ?? [],
+                score,
+                plan_size: plan.length,
+              }) + '\n');
+            } else {
+              console.log(`[dispatch] deferred ${step.id}; waiting for ${((step.depends_on ?? []).filter((dep) => plan.some((p) => p.id === dep))).join(', ')}`);
+            }
+          }
+          for (const step of selectedPlan.dispatch) {
             try {
               const isProtected = !!step.protected;
               const submitOpts = {

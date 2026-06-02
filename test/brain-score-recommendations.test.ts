@@ -109,8 +109,9 @@ describe('computeRecommendations', () => {
     expect(ids).toContain('embed.stale');
     const embedRec = recs.find((r) => r.id === 'embed.stale')!;
     expect(embedRec.severity).toBe('critical');
-    expect(embedRec.job).toBe('embed');
-    expect(embedRec.params.stale).toBe(true);
+    expect(embedRec.job).toBe('embed-backfill');
+    expect(embedRec.params.sourceId).toBe('default');
+    expect(embedRec.params.reason).toBe('autopilot:embed.stale');
   });
 
   test('missing embeddings + API key absent: NOT emitted (blocked surfaces separately)', () => {
@@ -130,6 +131,24 @@ describe('computeRecommendations', () => {
     expect(ids).toContain('sync.repo');
     expect(ids).toContain('backlinks.fix');
     expect(ids).toContain('extract.all');
+    const sync = recs.find((r) => r.id === 'sync.repo')!;
+    expect(sync.params.sourceId).toBe('default');
+  });
+
+  test('extract remediation is a bounded source-scoped stale DB sweep, not a full-dir walk', () => {
+    const health = makeHealth({ stale_pages: 25, brain_score: 70 });
+    const recs = computeRecommendations(health, {
+      repoPath: '/brain',
+      sourceId: 'default',
+      embeddingProviderConfigured: true,
+    });
+    const extract = recs.find((r) => r.id === 'extract.all')!;
+    expect(extract.job).toBe('extract');
+    expect(extract.params).toEqual({
+      stale: true,
+      sourceId: 'default',
+      catchUp: false,
+    });
   });
 
   test('extract.all depends on sync.repo (D14: stable ids)', () => {
@@ -191,7 +210,7 @@ describe('computeRecommendations', () => {
     // No date in the key — content-hash only
     expect(embed.idempotency_key).not.toMatch(/\d{4}-\d{2}-\d{2}/);
     // Format: source:job:sha8
-    expect(embed.idempotency_key).toMatch(/^default:embed:[a-f0-9]{8}$/);
+    expect(embed.idempotency_key).toMatch(/^default:embed-backfill:[a-f0-9]{8}$/);
   });
 
   test('D9: different sources produce different idempotency keys', () => {

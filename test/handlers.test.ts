@@ -47,6 +47,33 @@ describe('registerBuiltinHandlers', () => {
     expect(worker.registeredNames.length).toBeGreaterThanOrEqual(7);
   });
 
+  test('extract handler supports source-scoped stale DB sweep without full-dir params', async () => {
+    const handler = (worker as any).handlers.get('extract');
+    expect(handler).toBeDefined();
+
+    const result = await handler({
+      data: { stale: true, sourceId: 'default', dryRun: true },
+      signal: { aborted: false } as any,
+      job: { id: 21, name: 'extract' } as any,
+    });
+
+    expect(result.stale).toBe(true);
+    expect(result.sourceId).toBe('default');
+    expect(result.pagesProcessed).toBe(0);
+    expect(result.staleRemaining).toBe(0);
+  });
+
+  test('extract stale handler requires sourceId', async () => {
+    const handler = (worker as any).handlers.get('extract');
+    expect(handler).toBeDefined();
+
+    await expect(handler({
+      data: { stale: true },
+      signal: { aborted: false } as any,
+      job: { id: 22, name: 'extract' } as any,
+    })).rejects.toThrow('extract stale Minion job requires data.sourceId');
+  });
+
   test('sync handler treats noEmbed as a deferred embed-backfill opt-out', async () => {
     const fs = await import('fs');
     const { execSync } = await import('child_process');

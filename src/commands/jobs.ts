@@ -1471,7 +1471,21 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
   });
 
   worker.register('extract', async (job) => {
-    const { runExtractCore } = await import('./extract.ts');
+    const { runExtractCore, extractStaleFromDB } = await import('./extract.ts');
+    if (job.data.stale) {
+      const sourceId = typeof job.data.sourceId === 'string' ? job.data.sourceId : undefined;
+      if (!sourceId) {
+        throw new Error('extract stale Minion job requires data.sourceId');
+      }
+      const result = await extractStaleFromDB(engine, {
+        dryRun: !!job.data.dryRun,
+        jsonMode: false,
+        includeFrontmatter: !!job.data.includeFrontmatter,
+        sourceIdFilter: sourceId,
+        catchUp: !!job.data.catchUp,
+      });
+      return { ...result, stale: true, sourceId };
+    }
     const mode = (typeof job.data.mode === 'string' && ['links', 'timeline', 'all'].includes(job.data.mode))
       ? (job.data.mode as 'links' | 'timeline' | 'all')
       : 'all';

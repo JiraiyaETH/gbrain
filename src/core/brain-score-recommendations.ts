@@ -195,7 +195,7 @@ export function computeRecommendations(
   // sync.repo — fires when sync hasn't run recently OR pages are stale
   // ---------------------------------------------------------------------
   if (ctx.repoPath && health.stale_pages > 0) {
-    const params = { repoPath: ctx.repoPath, sourceId: ctx.sourceId, noEmbed: true };
+    const params = { repoPath: ctx.repoPath, sourceId: source, noEmbed: true };
     out.push({
       id: 'sync.repo',
       job: 'sync',
@@ -214,7 +214,10 @@ export function computeRecommendations(
   // embed.stale — missing embeddings. Critical: invisible to vector search
   // ---------------------------------------------------------------------
   if (health.missing_embeddings > 0 && ctx.embeddingProviderConfigured !== false) {
-    const params = { stale: true, sourceId: ctx.sourceId };
+    const params = {
+      sourceId: source,
+      reason: 'autopilot:embed.stale',
+    };
     const embedModel = ctx.embeddingModel ?? 'openai:text-embedding-3-large';
     const embedDims = ctx.embeddingDimensions ?? 3072;
     // Rough char estimate per chunk ~ 1.5k chars (chunker target).
@@ -230,9 +233,9 @@ export function computeRecommendations(
     }
     out.push({
       id: 'embed.stale',
-      job: 'embed',
+      job: 'embed-backfill',
       params,
-      idempotency_key: idemKey(source, 'embed', { ...params, embedModel, embedDims }),
+      idempotency_key: idemKey(source, 'embed-backfill', { ...params, embedModel, embedDims }),
       severity: 'critical',
       est_seconds: Math.min(3600, 5 + health.missing_embeddings * 0.05),
       est_usd_cost,
@@ -268,7 +271,11 @@ export function computeRecommendations(
   // and noExtract:true after T5 lands → extract job is the materializer).
   // ---------------------------------------------------------------------
   if (ctx.repoPath && health.stale_pages > 0) {
-    const params = { mode: 'all', dir: ctx.repoPath };
+    const params = {
+      stale: true,
+      sourceId: source,
+      catchUp: false,
+    };
     out.push({
       id: 'extract.all',
       job: 'extract',
@@ -278,7 +285,7 @@ export function computeRecommendations(
       est_seconds: Math.min(600, 30 + health.page_count * 0.01),
       est_usd_cost: 0,
       depends_on: ['sync.repo'],
-      rationale: 'Materialize link + timeline edges from fresh pages',
+      rationale: 'Materialize stale link + timeline edges from fresh source-scoped DB pages',
       status: 'remediable',
     });
   }
