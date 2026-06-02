@@ -171,4 +171,25 @@ describe('findMisroutedPages — heuristic correctness', () => {
     expect(result.count).toBe(1);
     expect(result.sample[0].slug).toBe('topics/mdx-page');
   });
+
+  test('case 8: code-strategy sources do not false-positive on repo README slugs', async () => {
+    const root = makeTmpRoot('case8');
+    seedFile(root, 'README.md', '# Code repo readme\n');
+
+    await runSources(engine, ['add', 'src-case8', '--no-federated']);
+    await engine.executeRaw(
+      `UPDATE sources SET local_path = $1, config = $2 WHERE id = $3`,
+      [root, JSON.stringify({ strategy: 'code' }), 'src-case8'],
+    );
+    // The default Brain also has a legitimate root README page. For a code
+    // source, README.md is not part of the code-sync page set, so this is not
+    // evidence of a pre-v0.30.3 misroute.
+    await engine.putPage('readme', { type: 'reference', title: 'Default Brain README', compiled_truth: '.' });
+
+    const result = await findMisroutedPages(engine, [
+      { id: 'src-case8', local_path: root, strategy: 'code' } as never,
+    ]);
+    expect(result.count).toBe(0);
+    expect(result.sample).toEqual([]);
+  });
 });

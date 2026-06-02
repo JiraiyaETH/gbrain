@@ -39,6 +39,7 @@ import { pathToSlug } from './sync.ts';
 export interface SourceWithPath {
   id: string;
   local_path: string;
+  strategy?: 'markdown' | 'code' | 'auto';
 }
 
 export interface MisroutedSample {
@@ -188,6 +189,7 @@ export async function findMisroutedPages(
   for (const src of sources) {
     if (src.id === 'default') continue;
     if (!src.local_path) continue;
+    if (src.strategy === 'code') continue;
     if (Date.now() >= deadlineMs) {
       walkTruncated = true;
       break;
