@@ -25,9 +25,16 @@ import {
 } from '../src/core/doctor-categories.ts';
 
 const DOCTOR_TS_PATH = join(import.meta.dir, '..', 'src', 'commands', 'doctor.ts');
+const ONBOARD_CHECKS_TS_PATH = join(import.meta.dir, '..', 'src', 'core', 'onboard', 'checks.ts');
 
 function enumerateCheckNames(): Set<string> {
-  const source = readFileSync(DOCTOR_TS_PATH, 'utf-8');
+  const source = [
+    readFileSync(DOCTOR_TS_PATH, 'utf-8'),
+    // runDoctor injects runAllOnboardChecks() results dynamically; those
+    // Check.name literals are not present in doctor.ts but still ship in the
+    // doctor JSON envelope and must be categorized.
+    readFileSync(ONBOARD_CHECKS_TS_PATH, 'utf-8'),
+  ].join('\n');
   const names = new Set<string>();
   // 1) Inline object-literal form: `{ name: 'foo', ... }`.
   for (const m of source.matchAll(/name:\s*['"]([a-z][a-z0-9_]+)['"]/g)) {
@@ -133,6 +140,7 @@ describe('categorizeCheck', () => {
     expect(categorizeCheck('connection')).toBe('ops');
     expect(categorizeCheck('rls')).toBe('ops');
     expect(categorizeCheck('supervisor')).toBe('ops');
+    expect(categorizeCheck('onboard_checks_timeout')).toBe('ops');
   });
 
   test('returns the right category for a known meta name', () => {

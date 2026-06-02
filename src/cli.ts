@@ -18,6 +18,7 @@ import { operations, OperationError } from './core/operations.ts';
 import type { Operation, OperationContext } from './core/operations.ts';
 import { awaitPendingLastRetrievedWrites, type DrainOutcome } from './core/last-retrieved.ts';
 import { shouldForceExitAfterMain } from './core/cli-force-exit.ts';
+import { disconnectEngineWithHardDeadline } from './core/cli-disconnect.ts';
 import { serializeMarkdown } from './core/markdown.ts';
 import { parseGlobalFlags, setCliOptions, getCliOptions } from './core/cli-options.ts';
 import type { CliOptions } from './core/cli-options.ts';
@@ -1073,13 +1074,13 @@ async function handleCliOnly(command: string, args: string[]) {
     if (args.includes('--remediation-plan')) {
       const { runRemediationPlan } = await import('./commands/doctor.ts');
       const eng = await connectEngine();
-      try { await runRemediationPlan(eng, args); } finally { await eng.disconnect(); }
+      try { await runRemediationPlan(eng, args); } finally { await disconnectEngineWithHardDeadline(eng, { label: 'gbrain doctor --remediation-plan' }); }
       return;
     }
     if (args.includes('--remediate')) {
       const { runRemediate } = await import('./commands/doctor.ts');
       const eng = await connectEngine();
-      try { await runRemediate(eng, args); } finally { await eng.disconnect(); }
+      try { await runRemediate(eng, args); } finally { await disconnectEngineWithHardDeadline(eng, { label: 'gbrain doctor --remediate' }); }
       return;
     }
 
@@ -1095,7 +1096,7 @@ async function handleCliOnly(command: string, args: string[]) {
       try {
         const eng = await connectEngine();
         await runDoctor(eng, args);
-        await eng.disconnect();
+        await disconnectEngineWithHardDeadline(eng, { label: 'gbrain doctor' });
       } catch {
         // DB unavailable — still run filesystem checks
         await runDoctor(null, args, getDbUrlSource());
@@ -1112,7 +1113,7 @@ async function handleCliOnly(command: string, args: string[]) {
     try {
       await runZeSwitch(args, eng);
     } finally {
-      await eng.disconnect();
+      await disconnectEngineWithHardDeadline(eng, { label: 'gbrain ze-switch' });
     }
     return;
   }
@@ -1156,7 +1157,7 @@ async function handleCliOnly(command: string, args: string[]) {
     try {
       await runDream(eng, args);
     } finally {
-      if (eng) await eng.disconnect();
+      if (eng) await disconnectEngineWithHardDeadline(eng, { label: 'gbrain dream' });
     }
     return;
   }
@@ -1332,7 +1333,7 @@ async function handleCliOnly(command: string, args: string[]) {
       }
       throw e;
     } finally {
-      try { await engine.disconnect(); } catch { /* best-effort */ }
+      try { await disconnectEngineWithHardDeadline(engine, { label }); } catch { /* best-effort */ }
     }
     return;
   }
@@ -1773,7 +1774,7 @@ async function handleCliOnly(command: string, args: string[]) {
       }
     }
   } finally {
-    if (command !== 'serve') await engine.disconnect();
+    if (command !== 'serve') await disconnectEngineWithHardDeadline(engine, { label: `gbrain ${command}` });
   }
 }
 

@@ -4,7 +4,8 @@
 // (orphan_count, stale_count, link_coverage, takes_count) so adding
 // source_id WHERE clauses would change the semantic. Per A26.
 //
-// v0.41.18.0 (A16, T4). Four new doctor checks consumed by both:
+// v0.41.18.0 (A16, T4) + v0.42 type-unification checks. Doctor/onboard
+// consume these as fail-open operational checks:
 //   - src/commands/doctor.ts runDoctor      (local surface)
 //   - src/core/doctor-remote.ts             (thin-client surface)
 //   - src/core/onboard/plan-from-checks.ts  (onboard remediation aggregator)
@@ -29,10 +30,31 @@ export interface OnboardCheckResult {
   remediations: RemediationStep[];
 }
 
+export interface OnboardCheckRunOpts {
+  /**
+   * Wall-clock cap for the aggregate onboard check run. Defaults to 10s so
+   * doctor/onboard/autopilot never hang behind a stuck DB check. Set <=0 to
+   * disable the cap in a controlled caller.
+   */
+  timeoutMs?: number;
+}
+
+interface OnboardCheckOpts {
+  signal?: AbortSignal;
+}
+
+const DEFAULT_ONBOARD_CHECK_TIMEOUT_MS = 10_000;
+
 /** Internal sql helper. Returns first row or empty object on throw. */
-async function safeCount(engine: BrainEngine, sql: string, params: unknown[] = []): Promise<number> {
+async function safeCount(
+  engine: BrainEngine,
+  sql: string,
+  params: unknown[] = [],
+  opts: OnboardCheckOpts = {},
+): Promise<number> {
   try {
-    const result = await engine.executeRaw(sql, params);
+    const rawOpts = opts.signal ? { signal: opts.signal } : undefined;
+    const result = await engine.executeRaw(sql, params, rawOpts);
     const rows = (result as { rows?: Array<Record<string, unknown>> } | undefined)?.rows
       ?? (result as Array<Record<string, unknown>> | undefined)
       ?? [];
@@ -53,10 +75,13 @@ async function safeCount(engine: BrainEngine, sql: string, params: unknown[] = [
  */
 export async function checkEmbedStaleness(
   engine: BrainEngine,
+  opts: OnboardCheckOpts = {},
 ): Promise<OnboardCheckResult> {
   const staleCount = await safeCount(
     engine,
     `SELECT COUNT(*) AS count FROM content_chunks WHERE embedding IS NULL`,
+    [],
+    opts,
   );
   const remediations: RemediationStep[] = [];
   let status: 'ok' | 'warn' | 'fail' = 'ok';
@@ -114,6 +139,7 @@ export async function checkEmbedStaleness(
  */
 export async function checkEntityLinkCoverage(
   engine: BrainEngine,
+  opts: OnboardCheckOpts = {},
 ): Promise<OnboardCheckResult> {
   // Total entity pages
   const totalEntities = await safeCount(
@@ -121,6 +147,8 @@ export async function checkEntityLinkCoverage(
     `SELECT COUNT(*) AS count FROM pages
        WHERE type IN ('person', 'company', 'organization', 'entity')
          AND deleted_at IS NULL`,
+    [],
+    opts,
   );
 
   if (totalEntities === 0) {
@@ -146,6 +174,8 @@ export async function checkEntityLinkCoverage(
          AND p.deleted_at IS NULL
          AND EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = p.id)
      ) sub`,
+    [],
+    opts,
   );
   const sampleSize = useSample
     ? Math.max(1, Math.round(totalEntities * (samplePct / 100)))
@@ -210,12 +240,15 @@ export async function checkEntityLinkCoverage(
  */
 export async function checkTimelineCoverage(
   engine: BrainEngine,
+  opts: OnboardCheckOpts = {},
 ): Promise<OnboardCheckResult> {
   const totalEntities = await safeCount(
     engine,
     `SELECT COUNT(*) AS count FROM pages
        WHERE type IN ('person', 'company', 'organization', 'entity')
          AND deleted_at IS NULL`,
+    [],
+    opts,
   );
 
   if (totalEntities === 0) {
@@ -239,6 +272,8 @@ export async function checkTimelineCoverage(
          AND p.deleted_at IS NULL
          AND EXISTS (SELECT 1 FROM timeline_entries t WHERE t.page_id = p.id)
      ) sub`,
+    [],
+    opts,
   );
   const sampleSize = useSample
     ? Math.max(1, Math.round(totalEntities * (samplePct / 100)))
@@ -301,10 +336,13 @@ export async function checkTimelineCoverage(
  */
 export async function checkTakesCount(
   engine: BrainEngine,
+  opts: OnboardCheckOpts = {},
 ): Promise<OnboardCheckResult> {
   const takesCount = await safeCount(
     engine,
     `SELECT COUNT(*) AS count FROM takes`,
+    [],
+    opts,
   );
 
   let bootstrapEnabled = false;
@@ -349,26 +387,53 @@ export async function checkTakesCount(
 }
 
 /**
- * Run all four checks in parallel; aggregate into a single payload.
- * Consumed by onboard's plan generation + (later) doctor's runDoctor.
+ * Run all onboard checks in parallel; aggregate into a single payload.
+ * Consumed by onboard's plan generation + doctor's runDoctor.
  *
- * Per A20: callers can race this against an AbortSignal-bound timer for
- * partial-results fallthrough. Each individual safeCount() returns 0
- * on throw so a single check failure doesn't break the aggregate.
+ * Hard rule: this surface must fail open. A stuck DB/provider check should
+ * produce a warning row, not hang doctor/onboard/autopilot indefinitely.
  */
 export async function runAllOnboardChecks(
   engine: BrainEngine,
+  opts: OnboardCheckRunOpts = {},
 ): Promise<OnboardCheckResult[]> {
-  return Promise.all([
-    checkEmbedStaleness(engine),
-    checkEntityLinkCoverage(engine),
-    checkTimelineCoverage(engine),
-    checkTakesCount(engine),
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_ONBOARD_CHECK_TIMEOUT_MS;
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const checkOpts: OnboardCheckOpts = controller ? { signal: controller.signal } : {};
+
+  const checks = Promise.all([
+    checkEmbedStaleness(engine, checkOpts),
+    checkEntityLinkCoverage(engine, checkOpts),
+    checkTimelineCoverage(engine, checkOpts),
+    checkTakesCount(engine, checkOpts),
     // v0.42 type-unification (T13-T15): 3 new checks added to onboard.
     checkPackUpgradeAvailable(engine),
-    checkTypeProliferation(engine),
-    checkDanglingAliases(engine),
+    checkTypeProliferation(engine, checkOpts),
+    checkDanglingAliases(engine, checkOpts),
   ]);
+
+  if (!controller || timeoutMs <= 0) return checks;
+
+  const timeout = new Promise<OnboardCheckResult[]>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort(new Error(`onboard checks exceeded ${timeoutMs}ms`));
+      resolve([{
+        check: {
+          name: 'onboard_checks_timeout',
+          status: 'warn',
+          message: `Onboard checks exceeded ${timeoutMs}ms; skipped remaining checks`,
+        },
+        remediations: [],
+      }]);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([checks, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 // ===========================================================================
@@ -459,6 +524,7 @@ export async function checkPackUpgradeAvailable(
  */
 export async function checkTypeProliferation(
   engine: BrainEngine,
+  opts: OnboardCheckOpts = {},
 ): Promise<OnboardCheckResult> {
   let declared = 15;  // fallback to gbrain-base-v2 default if pack unavailable
   try {
@@ -476,6 +542,8 @@ export async function checkTypeProliferation(
   const n = await safeCount(
     engine,
     `SELECT COUNT(DISTINCT type) AS count FROM pages WHERE deleted_at IS NULL AND type IS NOT NULL`,
+    [],
+    opts,
   );
   const warn = declared + 5;
   const fail = declared * 2;
@@ -527,6 +595,7 @@ export async function checkTypeProliferation(
  */
 export async function checkDanglingAliases(
   engine: BrainEngine,
+  opts: OnboardCheckOpts = {},
 ): Promise<OnboardCheckResult> {
   const n = await safeCount(
     engine,
@@ -536,6 +605,8 @@ export async function checkDanglingAliases(
       AND p.source_id = sa.source_id
       AND p.deleted_at IS NULL
      WHERE p.id IS NULL`,
+    [],
+    opts,
   );
   if (n > 0) {
     return {

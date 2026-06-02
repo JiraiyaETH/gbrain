@@ -72,6 +72,29 @@ describe('onboard E2E — runAllOnboardChecks', () => {
     ]);
   });
 
+  test('bounded run aborts hung SQL and reports timeout instead of hanging doctor', async () => {
+    let sawSignal = false;
+    const hangingEngine = {
+      kind: 'postgres',
+      executeRaw: (_sql: string, _params?: unknown[], opts?: { signal?: AbortSignal }) => {
+        if (opts?.signal) sawSignal = true;
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => reject(new Error('aborted by test')), { once: true });
+        });
+      },
+      getConfig: async () => undefined,
+    } as any;
+
+    const started = Date.now();
+    const results = await runAllOnboardChecks(hangingEngine, { timeoutMs: 20 });
+    const elapsed = Date.now() - started;
+
+    expect(sawSignal).toBe(true);
+    expect(elapsed).toBeLessThan(1000);
+    expect(results.map((r) => r.check.name)).toContain('onboard_checks_timeout');
+    expect(results.find((r) => r.check.name === 'onboard_checks_timeout')?.check.status).toBe('warn');
+  });
+
   test('empty brain: stale/link/timeline ok, takes_count warns (0 takes)', async () => {
     const results = await runAllOnboardChecks(engine);
     const byName = Object.fromEntries(results.map((r) => [r.check.name, r.check.status]));
