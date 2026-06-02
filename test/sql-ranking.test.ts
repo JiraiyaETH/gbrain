@@ -229,6 +229,7 @@ describe('resolveHardExcludes', () => {
   test('returns defaults when nothing is overridden', () => {
     const r = resolveHardExcludes(undefined, undefined, undefined);
     for (const p of DEFAULT_HARD_EXCLUDES) expect(r).toContain(p);
+    expect(r).toContain('sources/');
   });
 
   test('caller exclude_slug_prefixes adds to the union', () => {

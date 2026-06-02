@@ -2,7 +2,7 @@
  * Hard-Exclude E2E
  *
  * Verifies the new exclude_slug_prefixes / include_slug_prefixes plumbing.
- * test/, archive/, attachments/, .raw/ are hard-excluded by default.
+ * test/, archive/, attachments/, .raw/, sources/ are hard-excluded by default.
  * include_slug_prefixes opts back in.
  */
 
@@ -70,6 +70,22 @@ beforeAll(async () => {
       token_count: 9,
     },
   ] satisfies ChunkInput[]);
+
+  await engine.putPage('sources/books/raw-widget-book', {
+    type: 'source',
+    title: 'Raw Widget Book',
+    compiled_truth: 'raw widget book packet should stay provenance only',
+    timeline: '',
+  });
+  await engine.upsertChunks('sources/books/raw-widget-book', [
+    {
+      chunk_index: 0,
+      chunk_text: 'raw widget book packet should stay provenance only',
+      chunk_source: 'compiled_truth',
+      embedding: basisEmbedding(14),
+      token_count: 8,
+    },
+  ] satisfies ChunkInput[]);
 }, 60_000);
 
 afterAll(async () => {
@@ -87,6 +103,12 @@ describe('searchKeyword default hard-excludes', () => {
     const results = await engine.searchKeyword('widget');
     const slugs = results.map(r => r.slug);
     expect(slugs).not.toContain('archive/old-stuff/widget-2020');
+  });
+
+  test('sources/ raw provenance packets are hidden by default', async () => {
+    const results = await engine.searchKeyword('raw widget book packet');
+    const slugs = results.map(r => r.slug);
+    expect(slugs).not.toContain('sources/books/raw-widget-book');
   });
 
   test('curated content is unaffected', async () => {
@@ -107,13 +129,21 @@ describe('searchKeyword include_slug_prefixes opt-back-in', () => {
     expect(slugs).not.toContain('archive/old-stuff/widget-2020');
   });
 
-  test('include_slug_prefixes lets caller opt back into both', async () => {
+  test('include_slug_prefixes lets caller opt back into test/archive bulk prefixes', async () => {
     const results = await engine.searchKeyword('widget', {
       include_slug_prefixes: ['test/', 'archive/'],
     });
     const slugs = results.map(r => r.slug);
     expect(slugs).toContain('test/fixtures/widget');
     expect(slugs).toContain('archive/old-stuff/widget-2020');
+  });
+
+  test('include_slug_prefixes: ["sources/"] surfaces raw provenance packets for cited-source drilldown', async () => {
+    const results = await engine.searchKeyword('raw widget book packet', {
+      include_slug_prefixes: ['sources/'],
+    });
+    const slugs = results.map(r => r.slug);
+    expect(slugs).toContain('sources/books/raw-widget-book');
   });
 });
 

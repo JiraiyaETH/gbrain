@@ -180,10 +180,33 @@ describeBoth('Engine parity — Postgres vs PGLite', () => {
       token_count: 5,
     }] satisfies ChunkInput[]);
 
+    // Garry-style raw source packets are provenance, not default query fodder.
+    // Exact reads / cited graph traversal can still opt in by prefix.
+    for (const eng of [pgEngine, pgliteEngine]) {
+      await eng.putPage('sources/books/parity-raw-book', {
+        type: 'source',
+        title: 'parity raw book',
+        compiled_truth: 'parity raw book fixture content',
+        timeline: '',
+      });
+      await eng.upsertChunks('sources/books/parity-raw-book', [{
+        chunk_index: 0,
+        chunk_text: 'parity raw book fixture content',
+        chunk_source: 'compiled_truth',
+        embedding: basisEmbedding(21),
+        token_count: 5,
+      }] satisfies ChunkInput[]);
+    }
+
     const pgDefault = await pgEngine.searchKeyword('parity test fixture');
     const pgliteDefault = await pgliteEngine.searchKeyword('parity test fixture');
     expect(pgDefault.map((r: SearchResult) => r.slug)).not.toContain('test/parity-fixture');
     expect(pgliteDefault.map((r: SearchResult) => r.slug)).not.toContain('test/parity-fixture');
+
+    const pgSourceDefault = await pgEngine.searchKeyword('parity raw book fixture');
+    const pgliteSourceDefault = await pgliteEngine.searchKeyword('parity raw book fixture');
+    expect(pgSourceDefault.map((r: SearchResult) => r.slug)).not.toContain('sources/books/parity-raw-book');
+    expect(pgliteSourceDefault.map((r: SearchResult) => r.slug)).not.toContain('sources/books/parity-raw-book');
 
     const pgOptIn = await pgEngine.searchKeyword('parity test fixture', {
       include_slug_prefixes: ['test/'],
@@ -193,6 +216,15 @@ describeBoth('Engine parity — Postgres vs PGLite', () => {
     });
     expect(pgOptIn.map((r: SearchResult) => r.slug)).toContain('test/parity-fixture');
     expect(pgliteOptIn.map((r: SearchResult) => r.slug)).toContain('test/parity-fixture');
+
+    const pgSourceOptIn = await pgEngine.searchKeyword('parity raw book fixture', {
+      include_slug_prefixes: ['sources/'],
+    });
+    const pgliteSourceOptIn = await pgliteEngine.searchKeyword('parity raw book fixture', {
+      include_slug_prefixes: ['sources/'],
+    });
+    expect(pgSourceOptIn.map((r: SearchResult) => r.slug)).toContain('sources/books/parity-raw-book');
+    expect(pgliteSourceOptIn.map((r: SearchResult) => r.slug)).toContain('sources/books/parity-raw-book');
   });
 
   test('detail=high produces a different ranking than default on at least one engine', async () => {
