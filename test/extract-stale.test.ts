@@ -119,6 +119,36 @@ describe('gbrain extract --stale', () => {
     expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(0);
   });
 
+  test('stamps legacy pre-version pages at least to extractor version', async () => {
+    await engine.putPage('people/alice', personPage('Alice'));
+    await engine.putPage('companies/acme', companyPage('Acme', '[Alice](people/alice) advises [Acme](companies/acme).'));
+    await engine.putPage('people/lonely', personPage('Lonely', 'No links here.'));
+    await engine.executeRaw(
+      `UPDATE pages SET updated_at = '2026-05-01T00:00:00Z', links_extracted_at = NULL`,
+    );
+
+    expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(3);
+
+    await runExtract(engine, ['--stale']);
+
+    expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(0);
+    expect(new Date((await stampOf('people/lonely'))!).getTime()).toBeGreaterThanOrEqual(new Date(LINK_EXTRACTOR_VERSION_TS).getTime());
+  });
+
+  test('preserves updated_at sub-millisecond precision when stamping', async () => {
+    await engine.putPage('people/alice', personPage('Alice'));
+    await engine.putPage('companies/acme', companyPage('Acme', '[Alice](people/alice) advises [Acme](companies/acme).'));
+    await engine.executeRaw(
+      `UPDATE pages SET updated_at = '2026-06-01T00:00:00.123456Z', links_extracted_at = NULL`,
+    );
+
+    expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(2);
+
+    await runExtract(engine, ['--stale']);
+
+    expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(0);
+  });
+
   test('idempotent: second run finds 0 stale and creates no new links', async () => {
     await engine.putPage('people/alice', personPage('Alice'));
     await engine.putPage('companies/acme', companyPage('Acme', '[Alice](people/alice) advises [Acme](companies/acme).'));

@@ -2423,7 +2423,7 @@ export class PGLiteEngine implements BrainEngine {
     params.push(opts.batchSize);
     const limitIdx = params.length;
     const { rows } = await this.db.query(
-      `SELECT id, slug, source_id, type, title, compiled_truth, timeline, frontmatter, updated_at
+      `SELECT id, slug, source_id, type, title, compiled_truth, timeline, frontmatter, updated_at, updated_at::text AS updated_at_raw
          FROM pages
          WHERE ${where}${afterClause}
          ORDER BY id
