@@ -1,0 +1,194 @@
+{
+  "fireflies": {
+    "completed": {
+      "provider": "fireflies",
+      "id": "ff-mtg-0001",
+      "title": "Acme Example Partner Review",
+      "started_at": "2026-05-20T03:00:00Z",
+      "ended_at": "2026-05-20T03:31:00Z",
+      "duration_seconds": 1860,
+      "timezone": "UTC",
+      "meeting_link": "https://meet.example.com/acme-example-partner-review",
+      "transcript_url": "https://recordings.example.com/meetings/ff-mtg-0001?X-Amz-Signature=fixture-signature&token=fixture-token-123",
+      "organizer": {
+        "name": "alice-example",
+        "email": "alice@example.com"
+      },
+      "attendees": [
+        {
+          "name": "alice-example",
+          "email": "alice@example.com"
+        },
+        {
+          "name": "bob-example",
+          "email": "bob@example.com"
+        },
+        {
+          "name": "charlie-example",
+          "email": "charlie@example.com"
+        }
+      ],
+      "summary": {
+        "short_summary": "Provider summary claims alice-example owns enterprise pricing and bob-example committed legal approval for acme-example.",
+        "action_items": [
+          "alice-example owns enterprise pricing by Friday",
+          "bob-example committed contract discount approval",
+          "charlie-example to send a safe recap with unresolved questions"
+        ],
+        "topics_discussed": [
+          "acme-example renewal",
+          "pricing questions",
+          "implementation risk"
+        ]
+      },
+      "sentences": [
+        {
+          "speaker_name": "alice-example",
+          "start_time": 0,
+          "end_time": 8,
+          "text": "Let's review the acme-example follow-up and keep this as exploratory."
+        },
+        {
+          "speaker_name": "bob-example",
+          "start_time": 9,
+          "end_time": 22,
+          "text": "I can collect questions, but I am not committing pricing or legal terms today."
+        },
+        {
+          "speaker_name": "charlie-example",
+          "start_time": 23,
+          "end_time": 35,
+          "text": "Please put any provider-generated action item in review, not as an assignment."
+        },
+        {
+          "speaker_name": "alice-example",
+          "start_time": 36,
+          "end_time": 52,
+          "text": "The recording URL had token=fixture-token-123 and a Bearer fixturebearer.abc.def string, so redact those before rendering."
+        },
+        {
+          "speaker_name": "bob-example",
+          "start_time": 53,
+          "end_time": 74,
+          "text": "The sample database string postgres://user:fixture-password@db.example.com:5432/app, payment token pm_fixture_12345, card 4242 4242 4242 4242, and wallet 0x1111111111111111111111111111111111111111 are redaction traps."
+        }
+      ],
+      "metadata": {
+        "provider_event_type": "transcript_completed",
+        "source_packet_kind": "synthetic_fixture"
+      }
+    },
+    "duplicate": {
+      "provider": "fireflies",
+      "id": "ff-mtg-duplicate-0001",
+      "title": "Acme Example Partner Review",
+      "started_at": "2026-05-20T03:02:00Z",
+      "duration_seconds": 1840,
+      "timezone": "UTC",
+      "meeting_link": "https://meet.example.com/acme-example-partner-review",
+      "attendees": [
+        {
+          "name": "alice-example",
+          "email": "alice@example.com"
+        },
+        {
+          "name": "bob-example",
+          "email": "bob@example.com"
+        }
+      ],
+      "summary": {
+        "short_summary": "Duplicate provider row for the same physical meeting.",
+        "action_items": [
+          "duplicate row should not create a second page"
+        ]
+      },
+      "sentences": [
+        {
+          "speaker_name": "alice-example",
+          "start_time": 0,
+          "end_time": 8,
+          "text": "Let's review the acme-example follow-up and keep this as exploratory."
+        },
+        {
+          "speaker_name": "bob-example",
+          "start_time": 9,
+          "end_time": 22,
+          "text": "I can collect questions, but I am not committing pricing or legal terms today."
+        }
+      ],
+      "metadata": {
+        "provider_event_type": "transcript_completed",
+        "source_packet_kind": "synthetic_duplicate_fixture"
+      }
+    },
+    "changedTranscript": {
+      "provider": "fireflies",
+      "id": "ff-mtg-0001",
+      "title": "Acme Example Partner Review",
+      "started_at": "2026-05-20T03:00:00Z",
+      "duration_seconds": 1860,
+      "timezone": "UTC",
+      "meeting_link": "https://meet.example.com/acme-example-partner-review",
+      "attendees": [
+        {
+          "name": "alice-example",
+          "email": "alice@example.com"
+        },
+        {
+          "name": "bob-example",
+          "email": "bob@example.com"
+        }
+      ],
+      "summary": {
+        "short_summary": "Corrected transcript received after the first render.",
+        "action_items": [
+          "review corrected transcript before enrichment"
+        ]
+      },
+      "sentences": [
+        {
+          "speaker_name": "alice-example",
+          "start_time": 0,
+          "end_time": 8,
+          "text": "Let's review the acme-example follow-up and keep this as exploratory."
+        },
+        {
+          "speaker_name": "bob-example",
+          "start_time": 9,
+          "end_time": 22,
+          "text": "Correction: I will collect questions, but I still am not committing pricing or legal terms today."
+        }
+      ],
+      "metadata": {
+        "provider_event_type": "transcript_corrected",
+        "source_packet_kind": "synthetic_changed_checksum_fixture"
+      }
+    },
+    "legacyTraps": {
+      "sourceIdFragments": [
+        "busi",
+        "ness"
+      ],
+      "envFragments": [
+        "GBRAIN_SOURCE=",
+        "busi",
+        "ness"
+      ],
+      "sourceFlagFragments": [
+        "--source",
+        "busi",
+        "ness"
+      ],
+      "frontmatterFragments": [
+        "source_id: ",
+        "busi",
+        "ness"
+      ],
+      "agentRootFragments": [
+        ".open",
+        "claw-jarvis-v2",
+        "brain"
+      ]
+    }
+  }
+}
