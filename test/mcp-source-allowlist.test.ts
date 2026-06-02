@@ -23,8 +23,8 @@ beforeEach(async () => {
 describe('MCP source allow-list env parsing', () => {
   test('parses comma-separated source ids and explicit-source requirement', () => {
     expect(parseMcpAllowedSourceIds({
-      GBRAIN_MCP_ALLOWED_SOURCE_IDS: 'hermes-agent-code, gbrain-runtime-code, hermes-agent-code',
-    })).toEqual(new Set(['hermes-agent-code', 'gbrain-runtime-code']));
+      GBRAIN_MCP_ALLOWED_SOURCE_IDS: 'agent-fork-code, runtime-code, agent-fork-code',
+    })).toEqual(new Set(['agent-fork-code', 'runtime-code']));
     expect(parseMcpAllowedSourceIds({})).toBeNull();
 
     expect(isMcpExplicitSourceRequired({ GBRAIN_MCP_REQUIRE_EXPLICIT_SOURCE_ID: '1' })).toBe(true);

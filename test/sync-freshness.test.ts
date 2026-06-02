@@ -6,7 +6,7 @@
  * it stale, because the exact-HEAD short circuit did not refresh
  * sources.last_sync_at / sync.last_run.
  */
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -14,6 +14,7 @@ import { join } from 'path';
 import { performSync } from '../src/commands/sync.ts';
 import { CHUNKER_VERSION } from '../src/core/chunkers/code.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { resetPgliteState } from './helpers/reset-pglite.ts';
 
 const OLD_ISO = '2000-01-01T00:00:00.000Z';
 
@@ -67,16 +68,24 @@ function toMillis(value: unknown): number {
 }
 
 describe('sync freshness bookkeeping', () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     engine = new PGLiteEngine();
     await engine.connect({});
     await engine.initSchema();
+  });
+
+  afterAll(async () => {
+    await engine.disconnect();
+  });
+
+  beforeEach(async () => {
+    await resetPgliteState(engine);
     createRepo();
   });
 
-  afterEach(async () => {
-    if (engine) await engine.disconnect();
+  afterEach(() => {
     if (repoPath) rmSync(repoPath, { recursive: true, force: true });
+    repoPath = '';
   });
 
   test('exact-HEAD up_to_date sync refreshes source last_sync_at and sync.last_run', async () => {

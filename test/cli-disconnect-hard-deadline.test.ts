@@ -25,37 +25,37 @@ describe('disconnectEngineWithHardDeadline', () => {
   });
 
   test('forces non-daemon CLI exit when disconnect hangs', async () => {
-    let exitCode: number | null = null;
+    const observed: { exitCode?: number } = {};
     const warnings: string[] = [];
 
     const result = await disconnectEngineWithHardDeadline(fakeEngine(() => new Promise<void>(() => {})), {
       label: 'gbrain onboard',
       deadlineMs: 10,
-      exit: (code) => { exitCode = code; },
+      exit: (code) => { observed.exitCode = code; },
       warn: (line) => warnings.push(line),
     });
 
     expect(result.outcome).toBe('forced_exit');
-    expect(exitCode).toBe(0);
+    expect(observed.exitCode).toBe(0);
     expect(warnings.join('\n')).toContain('gbrain onboard');
     expect(warnings.join('\n')).toContain('force-exiting');
   });
 
   test('preserves a pre-set nonzero exit code when forced', async () => {
     const previous = process.exitCode;
-    let exitCode: number | null = null;
+    const observed: { exitCode?: number } = {};
     process.exitCode = 7;
     try {
       await disconnectEngineWithHardDeadline(fakeEngine(() => new Promise<void>(() => {})), {
         label: 'gbrain import',
         deadlineMs: 10,
-        exit: (code) => { exitCode = code; },
+        exit: (code) => { observed.exitCode = code; },
         warn: () => {},
       });
     } finally {
       process.exitCode = previous ?? 0;
     }
 
-    expect(exitCode).toBe(7);
+    expect(observed.exitCode).toBe(7);
   });
 });
