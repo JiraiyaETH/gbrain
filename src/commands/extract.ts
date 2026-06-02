@@ -1530,8 +1530,17 @@ async function extractStaleFromDB(
       // stamp with the row's READ updated_at, NOT now() — a concurrent edit
       // landing between this SELECT and the stamp advances updated_at past the
       // stamped value, so the page stays stale and re-extracts next run instead
-      // of being marked fresh-with-stale-content.
-      processedRefs.push({ slug: page.slug, source_id: page.source_id, extractedAt: page.updated_at.toISOString() });
+      // of being marked fresh-with-stale-content. For legacy pre-version pages,
+      // stamp at least the extractor version; otherwise a completed sweep would
+      // still be stale via the `links_extracted_at < LINK_EXTRACTOR_VERSION_TS`
+      // arm even though no concurrent edit occurred.
+      const readUpdatedAt = page.updated_at_raw;
+      const versionMs = new Date(versionTs).getTime();
+      const readMs = page.updated_at.getTime();
+      const extractedAt = Number.isFinite(versionMs) && readMs < versionMs
+        ? versionTs
+        : readUpdatedAt;
+      processedRefs.push({ slug: page.slug, source_id: page.source_id, extractedAt });
     }
 
     // Flush NON-swallowing (CDX-4): a throw here propagates out of the sweep so

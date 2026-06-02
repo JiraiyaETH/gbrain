@@ -139,6 +139,8 @@ export function rowToStalePage(row: Record<string, unknown>): StalePageRow {
     timeline: (row.timeline as string | null) ?? '',
     frontmatter: (fm == null ? {} : (typeof fm === 'string' ? JSON.parse(fm) : fm)) as Record<string, unknown>,
     updated_at: new Date(row.updated_at as string),
+    updated_at_raw: (row.updated_at_raw as string | undefined)
+      ?? (row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)),
   };
 }
 

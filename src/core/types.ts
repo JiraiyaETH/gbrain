@@ -596,7 +596,8 @@ export interface StaleChunkRow {
  * timeline + frontmatter) so `gbrain extract --stale` extracts in ~1 query per
  * batch instead of an N+1 `getPage` per page (mirrors how StaleChunkRow carries
  * chunk_text). `id` is the keyset cursor; `updated_at` lets callers reason about
- * the edited-since-extract staleness arm.
+ * the edited-since-extract staleness arm. `updated_at_raw` preserves database
+ * timestamp precision for stamping; JS Date truncates Postgres microseconds.
  */
 export interface StalePageRow {
   id: number;
@@ -608,6 +609,7 @@ export interface StalePageRow {
   timeline: string;
   frontmatter: Record<string, unknown>;
   updated_at: Date;
+  updated_at_raw: string;
 }
 
 export interface ChunkInput {
