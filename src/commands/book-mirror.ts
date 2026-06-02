@@ -616,7 +616,7 @@ async function writeBrainPage(
       config: loadConfig() || { engine: 'postgres' },
       logger: { info: console.log, warn: console.warn, error: console.error },
       dryRun: false,
-      remote: false,             // local CLI caller — operator trust path
+      remote: false,             // local CLI caller — operator trust path; viaSubagent intentionally omitted
       cliOpts: getCliOptions(),
       sourceId: process.env.GBRAIN_SOURCE ?? 'default',
     },
