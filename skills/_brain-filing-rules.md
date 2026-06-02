@@ -144,7 +144,7 @@ subagent may write to:
 |-------------|--------------|----------------|
 | Reflection | `reflections/YYYY-MM-DD-<topic>-<hash[:6]>` | Self-knowledge, emotional processing, pattern recognition. Verbatim quotes from the user, with analysis. |
 | Original idea | `ideas/YYYY-MM-DD-<idea>-<hash[:6]>` | New frames, theses, mental models, "conceptive ideologist" outputs. Capture the user's exact phrasing — that's the artifact. |
-| People enrichment | `people/<existing-slug>` | Timeline entries appended to existing people pages from session mentions. Stub pages for new substantive people. |
+| People enrichment | `people/<existing-slug>` | Not writable by generic Dream subagents in the first autonomous scope. Person/entity updates must come from deterministic enrichment or an explicitly scoped human-approved lane; Dream output should link/search people, not overwrite them. |
 | Pattern | `patterns/<theme>` | Cross-session theme detected across ≥3 reflections. Highest-leverage output: a pattern can span 25 years if reflections reference dated content. |
 | Cycle summary | `dream-cycles/YYYY-MM-DD` | Index of every page produced by one dream cycle. Auto-written deterministically by the orchestrator. |
 

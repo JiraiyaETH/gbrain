@@ -20,9 +20,9 @@ describe('Dream semantic topology', () => {
       'reflections/*',
       'ideas/*',
       'patterns/*',
-      'people/*',
       'dream-cycles/*',
     ]));
+    expect(prefixes).not.toContain('people/*');
     expect(prefixes.some(prefix => prefix.startsWith('wiki/'))).toBe(false);
     expect(prefixes.some(prefix => prefix.includes('/personal/'))).toBe(false);
   });

@@ -171,7 +171,7 @@
     "Cross-link from related directories via back-links — do not duplicate content."
   ],
   "dream_synthesize_paths": {
-    "description": "Single source of truth for the Dream synthesize/patterns trusted-workspace allow-list and semantic write topology. The cycle threads globs as allowed_slug_prefixes to subagents; prompts and orchestrator summary writes consume routes. Editing this block is the only way to add a new directory Dream may write to.",
+    "description": "Single source of truth for the Dream synthesize/patterns trusted-workspace allow-list and semantic write topology. The cycle threads globs as allowed_slug_prefixes to subagents; prompts and orchestrator summary writes consume routes. Editing this block is the only way to add a new directory Dream may write to. Person/entity updates are intentionally not in this subagent write allow-list; they must flow through deterministic enrichment or an explicitly scoped human-approved lane.",
     "routes": {
       "reflections": "reflections",
       "original_ideas": "ideas",
@@ -183,7 +183,6 @@
       "reflections/*",
       "ideas/*",
       "patterns/*",
-      "people/*",
       "dream-cycles/*"
     ]
   }
