@@ -147,4 +147,31 @@ describe('gbrain reindex --markdown (v0.32.7)', () => {
     expect(result.pending).toBe(1);
     expect(result.reindexed).toBe(1);
   });
+
+  test('--source limits the sweep to one source without touching other sources', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, config) VALUES
+         ('default', 'default', '{}'::jsonb),
+         ('gbrain-runtime-code', 'GBrain Runtime Code', '{}'::jsonb)
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    await engine.executeRaw(
+      `INSERT INTO pages (slug, source_id, type, title, compiled_truth, page_kind, chunker_version)
+       VALUES
+         ('default-pending', 'default', 'note', 'Default Pending', 'default body', 'markdown', 1),
+         ('code-pending', 'gbrain-runtime-code', 'note', 'Code Pending', 'code body', 'markdown', 1)`,
+    );
+
+    const result = await runReindex(engine, ['--markdown', '--no-embed', '--source', 'default']);
+    expect(result.pending).toBe(1);
+    expect(result.reindexed).toBe(1);
+    expect(result.failed).toBe(0);
+
+    const rows = await engine.executeRaw<{ slug: string; chunker_version: number }>(
+      `SELECT slug, chunker_version FROM pages WHERE slug IN ('default-pending', 'code-pending') ORDER BY slug`,
+    );
+    const versions = Object.fromEntries(rows.map(r => [r.slug, Number(r.chunker_version)]));
+    expect(versions['default-pending']).toBe(MARKDOWN_CHUNKER_VERSION);
+    expect(versions['code-pending']).toBe(1);
+  });
 });
