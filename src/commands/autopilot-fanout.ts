@@ -48,6 +48,8 @@ export interface FanoutOpts {
   emit?: (line: string) => void;
   /** Sink for non-JSON human log lines; defaults to console.log. */
   log?: (line: string) => void;
+  /** Emit the exact jobs autopilot would submit without mutating the queue. */
+  proposeOnly?: boolean;
 }
 
 export interface FanoutResult {
@@ -176,16 +178,33 @@ export async function dispatchPerSource(
   if (sources.length === 0) {
     // Legacy path — preserves today's behavior for single-source brains
     // (default source) and pre-v0.18 brains without the sources table.
+    const data = { repoPath: opts.repoPath };
+    const submitOpts = {
+      queue: 'default',
+      idempotency_key: `autopilot-cycle:${opts.slot}`,
+      max_attempts: 2,
+      timeout_ms: opts.timeoutMs,
+      maxWaiting: 1,
+    };
+    if (opts.proposeOnly) {
+      if (opts.jsonMode) {
+        emit(JSON.stringify({
+          event: 'proposed',
+          mode: 'legacy',
+          job: 'autopilot-cycle',
+          slot: opts.slot,
+          params: data,
+          submit_opts: submitOpts,
+        }));
+      } else {
+        log('[propose] autopilot-cycle (legacy single-source)');
+      }
+      return { dispatched: [], skipped_fresh: [], skipped_cap: [], legacy_fallback: true };
+    }
     const job = await queue.add(
       'autopilot-cycle',
-      { repoPath: opts.repoPath },
-      {
-        queue: 'default',
-        idempotency_key: `autopilot-cycle:${opts.slot}`,
-        max_attempts: 2,
-        timeout_ms: opts.timeoutMs,
-        maxWaiting: 1,
-      },
+      data,
+      submitOpts,
     );
     if (opts.jsonMode) {
       emit(JSON.stringify({ event: 'dispatched', job_id: job.id, mode: 'legacy', slot: opts.slot }));
@@ -201,27 +220,46 @@ export async function dispatchPerSource(
   for (const src of dispatch) {
     try {
       const remoteUrl = typeof src.config?.remote_url === 'string' ? src.config.remote_url : null;
+      const data = {
+        repoPath: src.local_path,
+        source_id: src.id,
+        pull: !!remoteUrl,
+      };
+      const submitOpts = {
+        queue: 'default',
+        // Per-source idempotency key — two ticks for the same source
+        // within the same slot coalesce; different sources never collide.
+        idempotency_key: `autopilot-cycle:${src.id}:${opts.slot}`,
+        max_attempts: 2,
+        timeout_ms: opts.timeoutMs,
+        // DELIBERATELY no maxWaiting: 1 here. maxWaiting is per
+        // (name, queue), so it would coalesce all N per-source jobs
+        // sharing name='autopilot-cycle' down to ONE waiting job —
+        // killing the fan-out. The per-source idempotency_key
+        // already provides the right dedup granularity (one job per
+        // source per slot, regardless of how many ticks try).
+      };
+      if (opts.proposeOnly) {
+        if (opts.jsonMode) {
+          emit(JSON.stringify({
+            event: 'proposed',
+            mode: 'per_source',
+            job: 'autopilot-cycle',
+            source_id: src.id,
+            pull: !!remoteUrl,
+            slot: opts.slot,
+            params: data,
+            submit_opts: submitOpts,
+          }));
+        } else {
+          log(`[propose] autopilot-cycle source=${src.id}${remoteUrl ? ' pull=yes' : ''}`);
+        }
+        continue;
+      }
       const job = await queue.add(
         'autopilot-cycle',
-        {
-          repoPath: src.local_path,
-          source_id: src.id,
-          pull: !!remoteUrl,
-        },
-        {
-          queue: 'default',
-          // Per-source idempotency key — two ticks for the same source
-          // within the same slot coalesce; different sources never collide.
-          idempotency_key: `autopilot-cycle:${src.id}:${opts.slot}`,
-          max_attempts: 2,
-          timeout_ms: opts.timeoutMs,
-          // DELIBERATELY no maxWaiting: 1 here. maxWaiting is per
-          // (name, queue), so it would coalesce all N per-source jobs
-          // sharing name='autopilot-cycle' down to ONE waiting job —
-          // killing the fan-out. The per-source idempotency_key
-          // already provides the right dedup granularity (one job per
-          // source per slot, regardless of how many ticks try).
-        },
+        data,
+        submitOpts,
       );
       dispatched.push(src.id);
       if (opts.jsonMode) {

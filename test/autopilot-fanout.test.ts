@@ -315,4 +315,33 @@ describe('dispatchPerSource — integration with stubbed engine + queue', () => 
     expect(result.skipped_fresh.length).toBe(2);
     expect(added.length).toBe(0);
   });
+
+  test('proposeOnly emits exact per-source proposals without adding queue jobs', async () => {
+    const { engine, queue, added, events, fanoutOpts } = makeStubs([src('alpha')]);
+    const result = await dispatchPerSource(engine, queue, { ...fanoutOpts, proposeOnly: true });
+
+    expect(result.legacy_fallback).toBe(false);
+    expect(result.dispatched).toEqual([]);
+    expect(added.length).toBe(0);
+    const proposal = events.map(e => JSON.parse(e)).find(e => e.event === 'proposed');
+    expect(proposal).toEqual({
+      event: 'proposed',
+      mode: 'per_source',
+      job: 'autopilot-cycle',
+      source_id: 'alpha',
+      pull: false,
+      slot: '2026-05-22T12:00:00.000Z',
+      params: {
+        repoPath: '/tmp/alpha',
+        source_id: 'alpha',
+        pull: false,
+      },
+      submit_opts: {
+        queue: 'default',
+        idempotency_key: 'autopilot-cycle:alpha:2026-05-22T12:00:00.000Z',
+        max_attempts: 2,
+        timeout_ms: 600000,
+      },
+    });
+  });
 });

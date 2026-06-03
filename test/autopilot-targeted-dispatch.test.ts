@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildAutopilotFreshnessSyncData,
+  buildAutopilotProposalEvent,
   selectAutopilotFreshnessSources,
   selectDispatchableTargetedSteps,
+  shouldProposeAutopilot,
 } from '../src/commands/autopilot.ts';
 import type { RemediationStep } from '../src/core/remediation-step.ts';
 
@@ -75,5 +77,48 @@ describe('selectDispatchableTargetedSteps', () => {
 
     expect(selectAutopilotFreshnessSources(sources, 'default', { allSources: true }).map((s) => s.id))
       .toEqual(['default', 'gbrain-runtime-code']);
+  });
+
+  test('propose-only/observe flags put autopilot into no-dispatch proposal mode', () => {
+    expect(shouldProposeAutopilot(['--propose-only'])).toBe(true);
+    expect(shouldProposeAutopilot(['--observe'])).toBe(true);
+    expect(shouldProposeAutopilot(['--json'])).toBe(false);
+  });
+
+  test('proposal events expose the exact job payload without pretending it dispatched', () => {
+    const event = buildAutopilotProposalEvent({
+      mode: 'targeted',
+      job: 'embed-backfill',
+      params: { sourceId: 'default', batchSize: 1 },
+      submitOpts: {
+        queue: 'default',
+        idempotency_key: 'default:embed-backfill:abc12345',
+        max_attempts: 2,
+        timeout_ms: 300000,
+        maxWaiting: 1,
+      },
+      step: 'embed.stale',
+      score: 90,
+      planSize: 1,
+      protected: false,
+    });
+
+    expect(event).toEqual({
+      event: 'proposed',
+      mode: 'targeted',
+      job: 'embed-backfill',
+      params: { sourceId: 'default', batchSize: 1 },
+      submit_opts: {
+        queue: 'default',
+        idempotency_key: 'default:embed-backfill:abc12345',
+        max_attempts: 2,
+        timeout_ms: 300000,
+        maxWaiting: 1,
+      },
+      step: 'embed.stale',
+      score: 90,
+      plan_size: 1,
+      protected: false,
+    });
   });
 });

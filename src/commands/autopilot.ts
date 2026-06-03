@@ -136,6 +136,55 @@ export function shouldSpawnAutopilotWorker(args: string[]): boolean {
   return !args.includes('--no-worker');
 }
 
+export function shouldProposeAutopilot(args: string[]): boolean {
+  return args.includes('--propose-only') || args.includes('--observe');
+}
+
+export interface AutopilotProposalEvent {
+  event: 'proposed';
+  mode: string;
+  job: string;
+  params: Record<string, unknown>;
+  submit_opts: Record<string, unknown>;
+  step?: string;
+  score?: number;
+  plan_size?: number;
+  protected?: boolean;
+  source_id?: string;
+  pull?: boolean;
+  slot?: string;
+}
+
+export function buildAutopilotProposalEvent(opts: {
+  mode: string;
+  job: string;
+  params: Record<string, unknown>;
+  submitOpts: Record<string, unknown>;
+  step?: string;
+  score?: number;
+  planSize?: number;
+  protected?: boolean;
+  sourceId?: string;
+  pull?: boolean;
+  slot?: string;
+}): AutopilotProposalEvent {
+  const event: AutopilotProposalEvent = {
+    event: 'proposed',
+    mode: opts.mode,
+    job: opts.job,
+    params: opts.params,
+    submit_opts: opts.submitOpts,
+  };
+  if (opts.step !== undefined) event.step = opts.step;
+  if (opts.score !== undefined) event.score = opts.score;
+  if (opts.planSize !== undefined) event.plan_size = opts.planSize;
+  if (opts.protected !== undefined) event.protected = opts.protected;
+  if (opts.sourceId !== undefined) event.source_id = opts.sourceId;
+  if (opts.pull !== undefined) event.pull = opts.pull;
+  if (opts.slot !== undefined) event.slot = opts.slot;
+  return event;
+}
+
 export function selectDispatchableTargetedSteps(plan: RemediationStep[]): {
   dispatch: RemediationStep[];
   deferred: RemediationStep[];
@@ -194,12 +243,13 @@ export function buildAutopilotFreshnessSyncData(src: AutopilotFreshnessSource): 
 export async function runAutopilot(engine: BrainEngine, args: string[]) {
   if (args.includes('--help') || args.includes('-h')) {
     console.log(
-      'Usage: gbrain autopilot [--repo <path>] [--interval N] [--json] [--no-worker] [--all-sources]\n' +
+      'Usage: gbrain autopilot [--repo <path>] [--interval N] [--json] [--no-worker] [--all-sources] [--propose-only|--observe]\n' +
       '       gbrain autopilot --install [--repo <path>]\n' +
       '       gbrain autopilot --uninstall\n' +
       '       gbrain autopilot --status [--json]\n\n' +
       'Self-maintaining brain daemon. Runs the full maintenance cycle\n' +
-      '(lint + backlinks + sync + extract + embed + orphans) on an interval.\n\n' +
+      '(lint + backlinks + sync + extract + embed + orphans) on an interval.\n' +
+      '--propose-only / --observe computes the same plan but emits proposed jobs without submitting them.\n\n' +
       'For a one-shot cron-triggered cycle, see `gbrain dream`.',
     );
     return;
@@ -222,6 +272,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
   const repoPath = parseArg(args, '--repo') || await getDefaultSourcePath(engine);
   const baseInterval = parseInt(parseArg(args, '--interval') || '300', 10);
   const jsonMode = args.includes('--json');
+  const proposeOnly = shouldProposeAutopilot(args);
   const forceInline = args.includes('--inline');
   const noWorker = !shouldSpawnAutopilotWorker(args);
   const allSources = args.includes('--all-sources');
@@ -262,7 +313,11 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
   const cfg = loadConfig();
   const engineType = cfg?.engine ?? 'pglite';
   const useMinionsDispatch = mode !== 'off' && engineType === 'postgres' && !forceInline;
-  const spawnManagedWorker = useMinionsDispatch && !noWorker;
+  if (proposeOnly && !useMinionsDispatch) {
+    console.error('--propose-only/--observe requires Minions dispatch on a Postgres engine; refusing to fall back to inline mutation.');
+    process.exit(1);
+  }
+  const spawnManagedWorker = useMinionsDispatch && !noWorker && !proposeOnly;
 
   let stopping = false;
   let childSupervisor: ChildWorkerSupervisor | null = null;
@@ -536,16 +591,34 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
               const ageMs = now - lastSyncMs;
               if (ageMs < intervalMs) continue; // fresh enough
               try {
+                const data = buildAutopilotFreshnessSyncData({ id: src.id, local_path: src.local_path });
+                const submitOpts = {
+                  queue: 'default',
+                  idempotency_key: `autopilot-sync:${src.id}:${slot}`,
+                  max_attempts: 2,
+                  timeout_ms: timeoutMs,
+                  maxWaiting: 1,
+                };
+                if (proposeOnly) {
+                  const proposal = buildAutopilotProposalEvent({
+                    mode: 'freshness',
+                    job: 'sync',
+                    params: data,
+                    submitOpts,
+                    sourceId: src.id,
+                    slot,
+                  });
+                  if (jsonMode) {
+                    process.stderr.write(JSON.stringify({ ...proposal, age_ms: ageMs }) + '\n');
+                  } else {
+                    console.log(`[propose] sync freshness: ${src.id}; age=${Math.floor(ageMs / 60000)}min`);
+                  }
+                  continue;
+                }
                 const job = await queue.add(
                   'sync',
-                  buildAutopilotFreshnessSyncData({ id: src.id, local_path: src.local_path }),
-                  {
-                    queue: 'default',
-                    idempotency_key: `autopilot-sync:${src.id}:${slot}`,
-                    max_attempts: 2,
-                    timeout_ms: timeoutMs,
-                    maxWaiting: 1,
-                  },
+                  data,
+                  submitOpts,
                 );
                 if (jsonMode) {
                   process.stderr.write(JSON.stringify({
@@ -644,8 +717,9 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
             timeoutMs,
             fanoutMax,
             jsonMode,
+            proposeOnly,
           });
-          if (result.dispatched.length > 0 || result.legacy_fallback) {
+          if (!proposeOnly && (result.dispatched.length > 0 || result.legacy_fallback)) {
             lastFullCycleAt = Date.now();
           }
           if (jsonMode) {
@@ -698,6 +772,24 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
                 timeout_ms: timeoutMs,
                 maxWaiting: 1,
               };
+              if (proposeOnly) {
+                const proposal = buildAutopilotProposalEvent({
+                  mode: 'targeted',
+                  job: step.job,
+                  params: step.params,
+                  submitOpts,
+                  step: step.id,
+                  score,
+                  planSize: plan.length,
+                  protected: isProtected,
+                });
+                if (jsonMode) {
+                  process.stderr.write(JSON.stringify(proposal) + '\n');
+                } else {
+                  console.log(`[propose] ${step.job} (targeted: ${step.id}; score=${score})`);
+                }
+                continue;
+              }
               const job = await queue.add(
                 step.job,
                 step.params,
@@ -787,7 +879,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
     // loop. Probe runs even when cycleOk=false (probe may surface signal
     // explaining why the cycle is failing).
     try {
-      const probeEnabled = cfg?.autopilot?.nightly_quality_probe?.enabled === true;
+      const probeEnabled = cfg?.autopilot?.nightly_quality_probe?.enabled === true && !proposeOnly;
       if (probeEnabled) {
         const { runNightlyQualityProbe } = await import('../core/cycle/nightly-quality-probe.ts');
         const { runLongMemEvalForProbe, runCrossModalBatchForProbe } = await import('../core/cycle/nightly-probe-adapters.ts');
