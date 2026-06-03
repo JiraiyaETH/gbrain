@@ -37,7 +37,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'reinit-pglite', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'orphans', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'connect', 'skillopt', 'quarantine', 'meeting-intelligence']);
+const CLI_ONLY = new Set(['init', 'reinit-pglite', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'orphans', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'connect', 'skillopt', 'quarantine', 'meeting-intelligence', 'calendar-projection']);
 // CLI-only commands whose handlers print their own --help text. These are
 // excluded from the generic short-circuit so detailed per-command and
 // per-subcommand usage stays reachable.
@@ -84,6 +84,7 @@ const CLI_ONLY_SELF_HELP = new Set([
   // runConnect; route around the generic one-line short-circuit.
   'connect',
   'meeting-intelligence',
+  'calendar-projection',
 ]);
 
 async function main() {
@@ -962,6 +963,21 @@ async function handleCliOnly(command: string, args: string[]) {
       }
     } else {
       process.exitCode = await runMeetingIntelligenceCli(args);
+    }
+    return;
+  }
+  if (command === 'calendar-projection') {
+    const { runCalendarProjectionCli } = await import('./commands/calendar-projection.ts');
+    const engineCommands = new Set(['sync', 'paths']);
+    if (engineCommands.has(args[0] ?? '')) {
+      const engine = await connectEngine();
+      try {
+        process.exitCode = await runCalendarProjectionCli(args, {}, { engine });
+      } finally {
+        await engine.disconnect();
+      }
+    } else {
+      process.exitCode = await runCalendarProjectionCli(args);
     }
     return;
   }
@@ -2068,6 +2084,7 @@ TOOLS
   anomalies [--since D] [--sigma N]  v0.29: cohort-based statistical anomalies (tag, type)
   transcripts recent [--days N]      v0.29: recent raw .txt transcripts (local-only)
   meeting-intelligence dry-run       Render synthetic meeting page/audit/review receipts
+  calendar-projection dry-run        Render EventKit snapshot proof pages under sources/calendar
   dream [--dry-run] [--json]         Run the overnight maintenance cycle once (cron-friendly).
                                      See also: autopilot --install (continuous daemon).
   check-resolvable [--json] [--fix]  Validate skill tree (reachability/MECE/DRY)

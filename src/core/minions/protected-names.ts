@@ -52,6 +52,11 @@ export const PROTECTED_JOB_NAMES: ReadonlySet<string> = new Set([
   // can't auto-apply; user must run `gbrain onboard --auto-with-prompt`
   // or submit explicitly via `gbrain jobs submit unify-types --allow-protected`.
   'unify-types',
+  // v0.42 Calendar Projection migration — private macOS Calendar-derived
+  // source page writes. Local/operator jobs may submit this after proof;
+  // OAuth/MCP callers must not be able to trigger calendar projection or
+  // source-root writes remotely.
+  'calendar_projection_sync',
   // v0.42.0.0 — SkillOpt: optimizer Sonnet/Opus loops over a benchmark.
   // Preemptive register entry (v1 is CLI-only foreground; future Minion
   // handler must reject MCP submission). Costs user money (optimizer +
