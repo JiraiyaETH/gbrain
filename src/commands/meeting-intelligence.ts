@@ -8,6 +8,7 @@ import {
   buildMeetingRuntimeRun,
   claimMeetingWakeRequests,
   createFirefliesProviderAdapter,
+  emitMeetingWakeRequests,
   ensureMeetingIntelligenceSchema,
   loadMeetingLedgers,
   persistMeetingRuntimeRun,
@@ -106,6 +107,21 @@ interface MeetingIntelligenceCliOpts {
   engine?: BrainEngine;
   env?: Record<string, string | undefined>;
   firefliesGraphql?: FirefliesGraphqlFetch;
+}
+
+interface MaterializeMeetingSummary {
+  status: 'materialize_complete' | 'materialize_incomplete';
+  source_id: 'default';
+  provider: string;
+  provider_meeting_id: string;
+  meeting_slug: string;
+  source_slug: string;
+  meeting_import_status: string;
+  source_import_status: string;
+  meeting_chunks: number;
+  source_chunks: number;
+  meeting_readback_ok: boolean;
+  source_readback_ok: boolean;
 }
 
 export async function runMeetingIntelligenceCli(
@@ -255,18 +271,38 @@ async function runWatchCommand(
   const meetings = payloads.map((payload) => adapter.normalize(payload));
   const existingLedgers = await loadMeetingLedgers(engine, { limit: 500 });
   const runtime = buildMeetingRuntimeRun(meetings, { existing_ledgers: existingLedgers });
-  const persistence = await persistMeetingRuntimeRun(engine, runtime, meetings);
+  const initialPersistence = await persistMeetingRuntimeRun(engine, runtime, meetings, { emit_wake_requests: false });
+  const materializations: MaterializeMeetingSummary[] = [];
+  for (const receipt of runtime.receipts) {
+    if (!receipt.write_plan.write_required) continue;
+    materializations.push(await materializeStoredProviderMeeting(engine, receipt.provider, receipt.provider_meeting_id));
+  }
+  const wakePersistence = await emitMeetingWakeRequests(engine, runtime);
+  const persistence = {
+    provider_records_upserted: initialPersistence.provider_records_upserted,
+    ledgers_upserted: initialPersistence.ledgers_upserted,
+    receipts_recorded: initialPersistence.receipts_recorded + wakePersistence.receipts_recorded,
+    wake_requests_emitted: wakePersistence.wake_requests_emitted,
+    wake_requests_pending: wakePersistence.wake_requests_pending,
+  };
+  const materializedCount = materializations.filter((item) => item.meeting_readback_ok && item.source_readback_ok).length;
+  const liveGbrainWrites = materializations.reduce(
+    (sum, item) => sum + (item.meeting_readback_ok ? 1 : 0) + (item.source_readback_ok ? 1 : 0),
+    0,
+  );
   const summary = {
-    status: 'watch_complete',
+    status: materializedCount === materializations.length ? 'watch_complete' : 'watch_incomplete',
     provider: parsed.provider,
     source_id: 'default',
     runtime: runtime.summary,
     persistence,
     page_count: runtime.summary.page_count,
+    materialized_count: materializedCount,
+    materializations,
     wake_requests_emitted: persistence.wake_requests_emitted,
     wake_requests_pending: persistence.wake_requests_pending,
     live_provider_calls: liveProviderCalls,
-    live_gbrain_writes: 0,
+    live_gbrain_writes: liveGbrainWrites,
   };
   printSummary(summary, parsed.json, stdout, [
     `meeting-intelligence watch complete: ${summary.page_count} meeting(s)`,
@@ -339,6 +375,25 @@ async function runMaterializeCommand(
     stderr('meeting-intelligence materialize requires --transcript-id <provider id>');
     return 2;
   }
+  let summary: MaterializeMeetingSummary;
+  try {
+    summary = await materializeStoredProviderMeeting(engine, parsed.provider, parsed.transcriptId);
+  } catch (err) {
+    stderr(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+  printSummary(summary, parsed.json, stdout, [
+    `meeting-intelligence materialize ${summary.status}: ${summary.meeting_slug}`,
+    `source=${summary.source_slug}`,
+  ]);
+  return summary.meeting_readback_ok && summary.source_readback_ok ? 0 : 1;
+}
+
+async function materializeStoredProviderMeeting(
+  engine: BrainEngine,
+  provider: string,
+  transcriptId: string,
+): Promise<MaterializeMeetingSummary> {
   await ensureMeetingIntelligenceSchema(engine);
   const rows = await engine.executeRaw<{
     ledger_id: string | number | null;
@@ -354,12 +409,11 @@ async function runMaterializeCommand(
         AND p.provider = $1
         AND p.provider_meeting_id = $2
       LIMIT 1`,
-    [parsed.provider, parsed.transcriptId],
+    [provider, transcriptId],
   );
   const row = rows[0];
   if (!row) {
-    stderr(`no stored provider record for ${parsed.provider}:${redactSensitiveText(parsed.transcriptId)}`);
-    return 1;
+    throw new Error(`no stored provider record for ${provider}:${redactSensitiveText(transcriptId)}`);
   }
   const meeting = parseStoredJson<NormalizedProviderMeeting>(row.normalized_json);
   const page = renderMeetingPage(meeting);
@@ -403,7 +457,7 @@ async function runMaterializeCommand(
       source_slug: sourceSlug,
     });
   }
-  const summary = {
+  return {
     status: meetingReadback && sourceReadback ? 'materialize_complete' : 'materialize_incomplete',
     source_id: 'default',
     provider: meeting.provider,
@@ -417,11 +471,6 @@ async function runMaterializeCommand(
     meeting_readback_ok: Boolean(meetingReadback),
     source_readback_ok: Boolean(sourceReadback),
   };
-  printSummary(summary, parsed.json, stdout, [
-    `meeting-intelligence materialize ${summary.status}: ${page.slug}`,
-    `source=${sourceSlug}`,
-  ]);
-  return meetingReadback && sourceReadback ? 0 : 1;
 }
 
 function renderSourcePacketMarkdown(meeting: NormalizedProviderMeeting, meetingSlug: string): string {

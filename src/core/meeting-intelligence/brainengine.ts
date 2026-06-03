@@ -148,6 +148,7 @@ export async function persistMeetingRuntimeRun(
   engine: BrainEngine,
   runtime: MeetingRuntimeRun,
   meetings: readonly NormalizedProviderMeeting[],
+  opts: { emit_wake_requests?: boolean } = {},
 ): Promise<MeetingPersistenceSummary> {
   await ensureMeetingIntelligenceSchema(engine);
   let providerRecords = 0;
@@ -164,8 +165,10 @@ export async function persistMeetingRuntimeRun(
     const ledgerId = await upsertLedger(engine, ledger);
     ledgers++;
     receipts += await insertReceipt(engine, receipt, ledgerId, 'watcher_seen');
-    receipts += await insertReceipt(engine, receipt, ledgerId, 'alex_requested');
-    wakes += await upsertWakeRequest(engine, receipt.alex_wake, ledgerId);
+    if (opts.emit_wake_requests !== false && receipt.write_plan.write_required) {
+      receipts += await insertReceipt(engine, receipt, ledgerId, 'alex_requested');
+      wakes += await upsertWakeRequest(engine, receipt.alex_wake, ledgerId);
+    }
   }
 
   const pendingRows = await engine.executeRaw<{ count: string | number }>(
@@ -174,6 +177,36 @@ export async function persistMeetingRuntimeRun(
   return {
     provider_records_upserted: providerRecords,
     ledgers_upserted: ledgers,
+    receipts_recorded: receipts,
+    wake_requests_emitted: wakes,
+    wake_requests_pending: Number(pendingRows[0]?.count ?? 0),
+  };
+}
+
+export async function emitMeetingWakeRequests(
+  engine: BrainEngine,
+  runtime: MeetingRuntimeRun,
+): Promise<Pick<MeetingPersistenceSummary, 'receipts_recorded' | 'wake_requests_emitted' | 'wake_requests_pending'>> {
+  await ensureMeetingIntelligenceSchema(engine);
+  let receipts = 0;
+  let wakes = 0;
+  for (const receipt of runtime.receipts) {
+    if (!receipt.write_plan.write_required) continue;
+    const ledgerRows = await engine.executeRaw<{ id: string | number }>(
+      `SELECT id FROM meeting_ledger
+        WHERE source_id = 'default' AND provider = $1 AND provider_meeting_id = $2
+        LIMIT 1`,
+      [receipt.ledger.provider, receipt.ledger.provider_meeting_id],
+    );
+    const ledgerId = ledgerRows[0]?.id;
+    if (ledgerId == null) continue;
+    receipts += await insertReceipt(engine, receipt, String(ledgerId), 'alex_requested');
+    wakes += await upsertWakeRequest(engine, receipt.alex_wake, String(ledgerId));
+  }
+  const pendingRows = await engine.executeRaw<{ count: string | number }>(
+    `SELECT COUNT(*)::text AS count FROM meeting_wake_requests WHERE source_id = 'default' AND status = 'pending'`,
+  );
+  return {
     receipts_recorded: receipts,
     wake_requests_emitted: wakes,
     wake_requests_pending: Number(pendingRows[0]?.count ?? 0),

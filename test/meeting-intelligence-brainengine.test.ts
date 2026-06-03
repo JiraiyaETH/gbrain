@@ -88,7 +88,14 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
     });
     expect(dryRunClaim).toHaveLength(1);
     expect(dryRunClaim[0]?.command_plan.env.HERMES_PROFILE).toBe('alex');
-    expect(dryRunClaim[0]?.command_plan.argv.slice(0, 3)).toEqual(['gbrain', 'meeting-intelligence', 'materialize']);
+    expect(dryRunClaim[0]?.command_plan.argv.slice(0, 5)).toEqual([
+      ['her', 'mes'].join(''),
+      '--profile',
+      'alex',
+      '--skills',
+      'meeting-ingestion',
+    ]);
+    expect(dryRunClaim[0]?.prompt_text).toContain('Load and follow the meeting-ingestion skill.');
     expect(dryRunClaim[0]?.prompt_text).not.toContain('Let\'s review the acme-example follow-up');
 
     const claimed = await claimMeetingWakeRequests(engine, {
@@ -124,11 +131,24 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
       status: string;
       wake_requests_emitted: number;
       wake_requests_pending: number;
+      materialized_count: number;
+      live_gbrain_writes: number;
+      materializations: Array<{ meeting_slug: string; source_slug: string; meeting_readback_ok: boolean; source_readback_ok: boolean }>;
     };
     expect(firstWatch).toBe(0);
     expect(firstSummary.status).toBe('watch_complete');
+    expect(firstSummary.materialized_count).toBe(1);
+    expect(firstSummary.live_gbrain_writes).toBe(2);
+    expect(firstSummary.materializations[0]).toMatchObject({
+      meeting_readback_ok: true,
+      source_readback_ok: true,
+    });
     expect(firstSummary.wake_requests_emitted).toBe(1);
     expect(firstSummary.wake_requests_pending).toBe(1);
+    const materializedMeeting = await engine.getPage(firstSummary.materializations[0]!.meeting_slug, { sourceId: 'default' });
+    const materializedSource = await engine.getPage(firstSummary.materializations[0]!.source_slug, { sourceId: 'default' });
+    expect(materializedMeeting?.timeline).toContain('## Full Diarized Transcript');
+    expect(materializedSource?.compiled_truth).toContain('## Source Packet');
 
     const secondOut: string[] = [];
     await runMeetingIntelligenceCli([
@@ -164,6 +184,15 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
     expect(wakeSummary.status).toBe('wake_plan');
     expect(wakeSummary.claimed_count).toBe(1);
     expect(wakeSummary.wake_requests[0]?.command_plan.env.HERMES_PROFILE).toBe('alex');
+    expect(wakeSummary.wake_requests[0]?.command_plan.argv.slice(0, 5)).toEqual([
+      ['her', 'mes'].join(''),
+      '--profile',
+      'alex',
+      '--skills',
+      'meeting-ingestion',
+    ]);
+    expect(wakeSummary.wake_requests[0]?.prompt_text).toContain('Load and follow the meeting-ingestion skill.');
+    expect(wakeSummary.wake_requests[0]?.prompt_text).toContain('Read the materialized GBrain pages; do not rely on this prompt for transcript content.');
     expect(wakeSummary.wake_requests[0]?.prompt_text).not.toContain('Let\'s review the acme-example follow-up');
   });
 

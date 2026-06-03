@@ -309,21 +309,25 @@ describe('meeting intelligence foundation', () => {
     expect(runtime.write_plans[0]?.mode).toBe('dry_run');
     expect(runtime.enrichment_queue[0]?.reason).toContain('fallback_only');
     expect(runtime.alex_wake_requests[0]?.target_profile).toBe('alex');
-    expect(runtime.alex_wake_requests[0]?.command_plan.argv.slice(0, 6)).toEqual([
-      'gbrain',
-      'meeting-intelligence',
-      'materialize',
-      '--provider',
-      'fireflies',
-      '--transcript-id',
+    const wake = runtime.alex_wake_requests[0]!;
+    expect(wake.command_plan.argv.slice(0, 5)).toEqual([
+      ['her', 'mes'].join(''),
+      '--profile',
+      'alex',
+      '--skills',
+      'meeting-ingestion',
     ]);
+    expect(wake.command_plan.argv).toContain('chat');
+    expect(wake.command_plan.argv.slice(0, -1).join(' ')).not.toMatch(/claude|anthropic|minion/i);
     expect(runtime.alex_wake_requests[0]?.action).toBe('fetch_transcript_by_ledger_provider_id_and_enrich');
-    expect(runtime.alex_wake_requests[0]?.prompt_text).toContain('gbrain meeting-intelligence materialize --provider fireflies --transcript-id');
-    expect(runtime.alex_wake_requests[0]?.prompt_text).toContain('--source default --json');
-    expect(runtime.alex_wake_requests[0]?.prompt_text).toContain('Provider meeting id: ff-mtg-0001');
-    expect(runtime.alex_wake_requests[0]?.prompt_text).toContain('Fetch the transcript by provider + provider_meeting_id');
-    expect(runtime.alex_wake_requests[0]?.prompt_text).not.toContain('Let\'s review the acme-example follow-up');
-    expect(runtime.alex_wake_requests[0]?.prompt_text).not.toContain('enterprise pricing by Friday');
+    expect(wake.prompt_text).toContain('Load and follow the meeting-ingestion skill.');
+    expect(wake.prompt_text).toContain('Provider meeting id: ff-mtg-0001');
+    expect(wake.prompt_text).toContain('Meeting page: meetings/2026-05-20-acme-example-partner-review-fireflies-ff-mtg-0001');
+    expect(wake.prompt_text).toContain('Source packet: sources/fireflies/2026-05-20-acme-example-partner-review-fireflies-ff-mtg-0001');
+    expect(wake.prompt_text).toContain('Read the materialized GBrain pages; do not rely on this prompt for transcript content.');
+    expect(wake.prompt_text).not.toContain('Materialize command:');
+    expect(wake.prompt_text).not.toContain('Let\'s review the acme-example follow-up');
+    expect(wake.prompt_text).not.toContain('enterprise pricing by Friday');
     expect(runtime.review_receipts[0]?.status).toBe('review_queued');
     expect(runtime.ledgers[0]?.state).toBe('alex_requested');
   });

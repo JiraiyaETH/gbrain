@@ -202,6 +202,7 @@ export interface AlexWakeRequestPlan {
   provider: string;
   provider_meeting_id: string;
   page_slug: string;
+  source_slug: string;
   transcript_checksum: string;
   source_checksum: string;
   action: 'fetch_transcript_by_ledger_provider_id_and_enrich';
@@ -211,6 +212,7 @@ export interface AlexWakeRequestPlan {
     provider: string;
     provider_meeting_id: string;
     page_slug: string;
+    source_slug: string;
     transcript_checksum: string;
     action: 'fetch_transcript_by_ledger_provider_id_and_enrich';
     guardrails: string[];
@@ -1175,36 +1177,40 @@ export function buildAlexWakeRequestPlan(
     meeting.transcript_checksum,
   ].join('|'));
   const providerMeetingId = redactSensitiveText(meeting.provider_meeting_id);
+  const sourceSlug = page.slug.replace(/^meetings\//, `sources/${meeting.provider}/`);
   const guardrails = [
-    'Fetch the transcript by provider + provider_meeting_id from the BrainEngine meeting_provider_records table; do not rely on this prompt for transcript content.',
+    'Read the materialized GBrain pages; do not rely on this prompt for transcript content.',
     'Write durable meeting/source/person/company knowledge only to GBrain source_id=default.',
     'Treat generated provider summaries and action items as low-trust hints until transcript or human notes support them.',
     'Queue fuzzy identity, money/legal/commercial commitments, and unsupported action ownership for review instead of promoting them.',
-  ];
-  const materializeCommand = [
-    'gbrain',
-    'meeting-intelligence',
-    'materialize',
-    '--provider',
-    meeting.provider,
-    '--transcript-id',
-    providerMeetingId,
-    '--source',
-    'default',
-    '--json',
+    'Capture changed pages back to GBrain, read them back, and record receipts before closing the wake.',
   ];
   const promptText = [
-    'Meeting ingest wake request.',
+    'Meeting ingest enrichment wake request.',
+    'Load and follow the meeting-ingestion skill.',
     `Provider: ${redactSensitiveText(meeting.provider)}`,
     `Provider meeting id: ${providerMeetingId}`,
-    `Page slug: ${page.slug}`,
+    `Meeting page: ${page.slug}`,
+    `Source packet: ${sourceSlug}`,
     `Transcript checksum: ${meeting.transcript_checksum}`,
-    `Action: execute deterministic materialization, then perform only conservative enrichment/review from the materialized pages.`,
-    `Materialize command: ${materializeCommand.join(' ')}`,
+    'Action: enrich attendee/entity Brain pages from the materialized meeting/source pages only; do not call Claude, Anthropic, or Minions by default.',
+    'Extraction lenses: identity, origin/current location, family/language context, travel context, working style, content direction, commercial signals, follow-ups, review-only risks.',
     'Guardrails:',
     ...guardrails.map((item) => `- ${item}`),
   ].join('\n');
-  const argv = materializeCommand;
+  const argv = [
+    'hermes',
+    '--profile',
+    targetProfile,
+    '--skills',
+    'meeting-ingestion',
+    'chat',
+    '-Q',
+    '--source',
+    'meeting-intelligence-wake',
+    '-q',
+    promptText,
+  ];
   return {
     wake_key: wakeKey,
     source_id: 'default',
@@ -1213,6 +1219,7 @@ export function buildAlexWakeRequestPlan(
     provider: meeting.provider,
     provider_meeting_id: providerMeetingId,
     page_slug: page.slug,
+    source_slug: sourceSlug,
     transcript_checksum: meeting.transcript_checksum,
     source_checksum: meeting.source_checksum,
     action: 'fetch_transcript_by_ledger_provider_id_and_enrich',
@@ -1222,6 +1229,7 @@ export function buildAlexWakeRequestPlan(
       provider: meeting.provider,
       provider_meeting_id: providerMeetingId,
       page_slug: page.slug,
+      source_slug: sourceSlug,
       transcript_checksum: meeting.transcript_checksum,
       action: 'fetch_transcript_by_ledger_provider_id_and_enrich',
       guardrails,
