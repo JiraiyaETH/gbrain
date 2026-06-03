@@ -315,4 +315,34 @@ describe('dispatchPerSource — integration with stubbed engine + queue', () => 
     expect(result.skipped_fresh.length).toBe(2);
     expect(added.length).toBe(0);
   });
+
+  test('propose-only emits exact per-source payloads without queue mutation', async () => {
+    const { engine, events, fanoutOpts } = makeStubs([src('alpha'), src('beta')]);
+    const queue = {
+      add: async () => {
+        throw new Error('queue.add must not run in fanout propose-only mode');
+      },
+    } as unknown as Parameters<typeof dispatchPerSource>[1];
+
+    const result = await dispatchPerSource(engine, queue, { ...fanoutOpts, proposeOnly: true });
+
+    expect(result.dispatched).toEqual([]);
+    expect(result.proposed?.sort()).toEqual(['alpha', 'beta']);
+    const proposed = events.map((e) => JSON.parse(e)).filter((e) => e.event === 'proposed');
+    expect(proposed.length).toBe(2);
+    expect(proposed[0]).toMatchObject({
+      event: 'proposed',
+      mode: 'per_source',
+      job: 'autopilot-cycle',
+      params: { repoPath: '/tmp/alpha', source_id: 'alpha', pull: false },
+      submit_options: {
+        queue: 'default',
+        idempotency_key: 'autopilot-cycle:alpha:2026-05-22T12:00:00.000Z',
+        max_attempts: 2,
+        timeout_ms: 600_000,
+      },
+      source_id: 'alpha',
+      slot: '2026-05-22T12:00:00.000Z',
+    });
+  });
 });

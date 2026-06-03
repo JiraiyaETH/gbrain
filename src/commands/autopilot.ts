@@ -26,6 +26,17 @@ import { loadPreferences } from '../core/preferences.ts';
 import { loadConfig, gbrainPath as gbrainHomePath } from '../core/config.ts';
 import { ChildWorkerSupervisor } from '../core/minions/child-worker-supervisor.ts';
 import { getDefaultSourcePath, resolveSourceId } from '../core/source-resolver.ts';
+import {
+  buildAutopilotJobProposal,
+  isAutopilotProposeOnly,
+  submitOrProposeAutopilotJob,
+  type AutopilotJobProposal,
+} from './autopilot-proposals.ts';
+export {
+  buildAutopilotJobProposal,
+  isAutopilotProposeOnly,
+  submitOrProposeAutopilotJob,
+} from './autopilot-proposals.ts';
 
 /**
  * v0.37.7.0 #1162 — classify autopilot reconnect-loop errors.
@@ -194,12 +205,13 @@ export function buildAutopilotFreshnessSyncData(src: AutopilotFreshnessSource): 
 export async function runAutopilot(engine: BrainEngine, args: string[]) {
   if (args.includes('--help') || args.includes('-h')) {
     console.log(
-      'Usage: gbrain autopilot [--repo <path>] [--interval N] [--json] [--no-worker] [--all-sources]\n' +
+      'Usage: gbrain autopilot [--repo <path>] [--interval N] [--json] [--no-worker] [--all-sources] [--observe|--propose-only]\n' +
       '       gbrain autopilot --install [--repo <path>]\n' +
       '       gbrain autopilot --uninstall\n' +
       '       gbrain autopilot --status [--json]\n\n' +
       'Self-maintaining brain daemon. Runs the full maintenance cycle\n' +
-      '(lint + backlinks + sync + extract + embed + orphans) on an interval.\n\n' +
+      '(lint + backlinks + sync + extract + embed + orphans) on an interval.\n' +
+      '--observe/--propose-only performs one non-mutating planning tick and exits.\n\n' +
       'For a one-shot cron-triggered cycle, see `gbrain dream`.',
     );
     return;
@@ -222,8 +234,9 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
   const repoPath = parseArg(args, '--repo') || await getDefaultSourcePath(engine);
   const baseInterval = parseInt(parseArg(args, '--interval') || '300', 10);
   const jsonMode = args.includes('--json');
+  const proposeOnly = isAutopilotProposeOnly(args);
   const forceInline = args.includes('--inline');
-  const noWorker = !shouldSpawnAutopilotWorker(args);
+  const noWorker = !shouldSpawnAutopilotWorker(args) || proposeOnly;
   const allSources = args.includes('--all-sources');
 
   if (!repoPath) {
@@ -231,7 +244,13 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
     process.exit(1);
   }
   const sourceId = await resolveSourceId(engine, null, repoPath);
-
+  const emitProposal = (proposal: AutopilotJobProposal) => {
+    if (jsonMode) {
+      process.stderr.write(JSON.stringify(proposal) + '\n');
+    } else {
+      console.log(`[propose] ${proposal.job} ${JSON.stringify({ mode: proposal.mode, params: proposal.params, submit_options: proposal.submit_options })}`);
+    }
+  };
   // Lock file to prevent concurrent instances (#14).
   // v0.37.7.0 #1226: route through gbrainPath() so the lockfile lives
   // under GBRAIN_HOME when set, not the hardcoded ~/.gbrain. Pre-fix,
@@ -263,6 +282,16 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
   const engineType = cfg?.engine ?? 'pglite';
   const useMinionsDispatch = mode !== 'off' && engineType === 'postgres' && !forceInline;
   const spawnManagedWorker = useMinionsDispatch && !noWorker;
+
+  if (proposeOnly && !useMinionsDispatch) {
+    const why = mode === 'off'
+      ? 'minion_mode=off'
+      : (engineType !== 'postgres' ? 'engine=pglite' : 'flag=--inline');
+    console.error(`[autopilot] --observe/--propose-only refuses inline fallback (${why}); no jobs submitted.`);
+    try { unlinkSync(lockPath); } catch { /* already absent */ }
+    process.exitCode = 2;
+    return;
+  }
 
   let stopping = false;
   let childSupervisor: ChildWorkerSupervisor | null = null;
@@ -536,24 +565,38 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
               const ageMs = now - lastSyncMs;
               if (ageMs < intervalMs) continue; // fresh enough
               try {
-                const job = await queue.add(
-                  'sync',
-                  buildAutopilotFreshnessSyncData({ id: src.id, local_path: src.local_path }),
-                  {
-                    queue: 'default',
-                    idempotency_key: `autopilot-sync:${src.id}:${slot}`,
-                    max_attempts: 2,
-                    timeout_ms: timeoutMs,
-                    maxWaiting: 1,
-                  },
-                );
-                if (jsonMode) {
+                const params = buildAutopilotFreshnessSyncData({ id: src.id, local_path: src.local_path });
+                const submitOptions = {
+                  queue: 'default',
+                  idempotency_key: `autopilot-sync:${src.id}:${slot}`,
+                  max_attempts: 2,
+                  timeout_ms: timeoutMs,
+                  maxWaiting: 1,
+                };
+                const proposal = buildAutopilotJobProposal({
+                  mode: 'freshness',
+                  job: 'sync',
+                  params,
+                  submitOptions,
+                  metadata: { source_id: src.id, age_ms: ageMs },
+                });
+                const result = await submitOrProposeAutopilotJob({
+                  queue,
+                  proposeOnly,
+                  job: 'sync',
+                  params,
+                  submitOptions,
+                  proposal,
+                });
+                if (result.kind === 'proposed') {
+                  emitProposal(result.proposal);
+                } else if (jsonMode) {
                   process.stderr.write(JSON.stringify({
-                    event: 'dispatched', job_id: job.id, mode: 'freshness',
+                    event: 'dispatched', job_id: result.job_id, mode: 'freshness',
                     source_id: src.id, age_ms: ageMs,
                   }) + '\n');
                 } else {
-                  console.log(`[dispatch] job #${job.id} sync (freshness: ${src.id}; age=${Math.floor(ageMs / 60000)}min)`);
+                  console.log(`[dispatch] job #${result.job_id} sync (freshness: ${src.id}; age=${Math.floor(ageMs / 60000)}min)`);
                 }
               } catch (e) {
                 logError('dispatch.freshness', e);
@@ -644,14 +687,16 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
             timeoutMs,
             fanoutMax,
             jsonMode,
+            proposeOnly,
           });
-          if (result.dispatched.length > 0 || result.legacy_fallback) {
+          if (!proposeOnly && (result.dispatched.length > 0 || result.legacy_fallback)) {
             lastFullCycleAt = Date.now();
           }
           if (jsonMode) {
             process.stderr.write(JSON.stringify({
               event: 'fanout_summary',
               dispatched: result.dispatched,
+              proposed: result.proposed ?? [],
               skipped_fresh: result.skipped_fresh,
               skipped_cap: result.skipped_cap,
               legacy_fallback: result.legacy_fallback,
@@ -698,16 +743,34 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
                 timeout_ms: timeoutMs,
                 maxWaiting: 1,
               };
-              const job = await queue.add(
-                step.job,
-                step.params,
-                submitOpts,
-                isProtected ? { allowProtectedSubmit: true } : undefined,
-              );
-              if (jsonMode) {
-                process.stderr.write(JSON.stringify({ event: 'dispatched', job_id: job.id, mode: 'targeted', step: step.id, score, plan_size: plan.length }) + '\n');
+              const params = step.params as Record<string, unknown>;
+              const proposal = buildAutopilotJobProposal({
+                mode: 'targeted',
+                job: step.job,
+                params,
+                submitOptions: submitOpts,
+                metadata: {
+                  step: step.id,
+                  score,
+                  plan_size: plan.length,
+                  protected: isProtected || undefined,
+                },
+              });
+              const result = await submitOrProposeAutopilotJob({
+                queue,
+                proposeOnly,
+                job: step.job,
+                params,
+                submitOptions: submitOpts,
+                proposal,
+                protectedSubmitContext: isProtected ? { allowProtectedSubmit: true } : undefined,
+              });
+              if (result.kind === 'proposed') {
+                emitProposal(result.proposal);
+              } else if (jsonMode) {
+                process.stderr.write(JSON.stringify({ event: 'dispatched', job_id: result.job_id, mode: 'targeted', step: step.id, score, plan_size: plan.length }) + '\n');
               } else {
-                console.log(`[dispatch] job #${job.id} ${step.job} (targeted: ${step.id}; score=${score})`);
+                console.log(`[dispatch] job #${result.job_id} ${step.job} (targeted: ${step.id}; score=${score})`);
               }
             } catch (e) {
               logError('dispatch.step', e);
@@ -786,27 +849,34 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
     // Wrapped in try/catch — a probe failure NEVER crashes the autopilot
     // loop. Probe runs even when cycleOk=false (probe may surface signal
     // explaining why the cycle is failing).
-    try {
-      const probeEnabled = cfg?.autopilot?.nightly_quality_probe?.enabled === true;
-      if (probeEnabled) {
-        const { runNightlyQualityProbe } = await import('../core/cycle/nightly-quality-probe.ts');
-        const { runLongMemEvalForProbe, runCrossModalBatchForProbe } = await import('../core/cycle/nightly-probe-adapters.ts');
-        const { isAvailable } = await import('../core/ai/gateway.ts');
-        const maxUsd = Number(cfg?.autopilot?.nightly_quality_probe?.max_usd ?? 5);
-        await runNightlyQualityProbe({
-          isEnabled: () => true, // already gated above; phase re-checks for defense-in-depth
-          hasEmbeddingProvider: () => isAvailable('embedding'),
-          resolveMaxUsd: () => maxUsd,
-          resolveRepoRoot: () => repoPath ?? gbrainHomePath('.'),
-          runLongMemEval: runLongMemEvalForProbe,
-          runCrossModalBatch: runCrossModalBatchForProbe,
-          now: () => new Date(),
-        });
+    if (!proposeOnly) {
+      try {
+        const probeEnabled = cfg?.autopilot?.nightly_quality_probe?.enabled === true;
+        if (probeEnabled) {
+          const { runNightlyQualityProbe } = await import('../core/cycle/nightly-quality-probe.ts');
+          const { runLongMemEvalForProbe, runCrossModalBatchForProbe } = await import('../core/cycle/nightly-probe-adapters.ts');
+          const { isAvailable } = await import('../core/ai/gateway.ts');
+          const maxUsd = Number(cfg?.autopilot?.nightly_quality_probe?.max_usd ?? 5);
+          await runNightlyQualityProbe({
+            isEnabled: () => true, // already gated above; phase re-checks for defense-in-depth
+            hasEmbeddingProvider: () => isAvailable('embedding'),
+            resolveMaxUsd: () => maxUsd,
+            resolveRepoRoot: () => repoPath ?? gbrainHomePath('.'),
+            runLongMemEval: runLongMemEvalForProbe,
+            runCrossModalBatch: runCrossModalBatchForProbe,
+            now: () => new Date(),
+          });
+        }
+      } catch (e) {
+        logError('autopilot.nightly_probe', e);
+        // Intentional: do NOT bump consecutiveErrors. Probe failure is
+        // informational; autopilot loop continues.
       }
-    } catch (e) {
-      logError('autopilot.nightly_probe', e);
-      // Intentional: do NOT bump consecutiveErrors. Probe failure is
-      // informational; autopilot loop continues.
+    }
+
+    if (proposeOnly) {
+      try { unlinkSync(lockPath); } catch { /* already absent */ }
+      break;
     }
 
     // Wait for next cycle

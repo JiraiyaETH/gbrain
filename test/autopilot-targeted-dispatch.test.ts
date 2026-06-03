@@ -1,8 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  buildAutopilotJobProposal,
   buildAutopilotFreshnessSyncData,
+  isAutopilotProposeOnly,
   selectAutopilotFreshnessSources,
   selectDispatchableTargetedSteps,
+  submitOrProposeAutopilotJob,
 } from '../src/commands/autopilot.ts';
 import type { RemediationStep } from '../src/core/remediation-step.ts';
 
@@ -75,5 +78,87 @@ describe('selectDispatchableTargetedSteps', () => {
 
     expect(selectAutopilotFreshnessSources(sources, 'default', { allSources: true }).map((s) => s.id))
       .toEqual(['default', 'gbrain-runtime-code']);
+  });
+
+  test('observe and propose-only aliases enter non-mutating proposal mode', () => {
+    expect(isAutopilotProposeOnly(['--observe'])).toBe(true);
+    expect(isAutopilotProposeOnly(['--propose-only'])).toBe(true);
+    expect(isAutopilotProposeOnly(['--status'])).toBe(false);
+  });
+
+  test('proposal payload preserves the exact job data and submit options', () => {
+    const proposal = buildAutopilotJobProposal({
+      mode: 'targeted',
+      job: 'embed-backfill',
+      params: { sourceId: 'default', batchSize: 1, maxChunks: 1 },
+      submitOptions: {
+        queue: 'default',
+        idempotency_key: 'autopilot:embed:default:test',
+        max_attempts: 2,
+        timeout_ms: 300_000,
+        maxWaiting: 1,
+      },
+      metadata: {
+        step: 'embed.stale',
+        score: 76,
+        plan_size: 1,
+        protected: true,
+      },
+    });
+
+    expect(proposal).toEqual({
+      event: 'proposed',
+      mode: 'targeted',
+      job: 'embed-backfill',
+      params: { sourceId: 'default', batchSize: 1, maxChunks: 1 },
+      submit_options: {
+        queue: 'default',
+        idempotency_key: 'autopilot:embed:default:test',
+        max_attempts: 2,
+        timeout_ms: 300_000,
+        maxWaiting: 1,
+      },
+      step: 'embed.stale',
+      score: 76,
+      plan_size: 1,
+      protected: true,
+    });
+  });
+
+  test('proposal mode never calls queue.add', async () => {
+    let addCalls = 0;
+    const queue = {
+      add: async () => {
+        addCalls += 1;
+        throw new Error('queue.add must not run in proposal mode');
+      },
+    };
+    const proposal = buildAutopilotJobProposal({
+      mode: 'freshness',
+      job: 'sync',
+      params: buildAutopilotFreshnessSyncData({ id: 'default', local_path: '/brain' }),
+      submitOptions: {
+        queue: 'default',
+        idempotency_key: 'autopilot-sync:default:test',
+        max_attempts: 2,
+        timeout_ms: 300_000,
+        maxWaiting: 1,
+      },
+      metadata: { source_id: 'default', age_ms: 60_000 },
+    });
+
+    const result = await submitOrProposeAutopilotJob({
+      queue,
+      proposeOnly: true,
+      job: 'sync',
+      params: proposal.params,
+      submitOptions: proposal.submit_options,
+      proposal,
+    });
+
+    expect(addCalls).toBe(0);
+    expect(result.kind).toBe('proposed');
+    if (result.kind !== 'proposed') throw new Error('expected proposal result');
+    expect(result.proposal).toEqual(proposal);
   });
 });

@@ -31,6 +31,7 @@
 
 import type { BrainEngine, SourceRow } from '../core/engine.ts';
 import type { MinionQueue } from '../core/minions/queue.ts';
+import { buildAutopilotJobProposal } from './autopilot-proposals.ts';
 
 const FULL_CYCLE_FLOOR_MIN = 60;
 
@@ -48,11 +49,15 @@ export interface FanoutOpts {
   emit?: (line: string) => void;
   /** Sink for non-JSON human log lines; defaults to console.log. */
   log?: (line: string) => void;
+  /** Non-mutating planning mode: emit exact job payloads instead of queue.add. */
+  proposeOnly?: boolean;
 }
 
 export interface FanoutResult {
   /** Source ids dispatched this tick. */
   dispatched: string[];
+  /** Source ids proposed in non-mutating mode. */
+  proposed?: string[];
   /** Source ids skipped because their last_full_cycle_at is still fresh. */
   skipped_fresh: string[];
   /** Source ids beyond the fanoutMax cap (will retry next tick). */
@@ -176,17 +181,27 @@ export async function dispatchPerSource(
   if (sources.length === 0) {
     // Legacy path — preserves today's behavior for single-source brains
     // (default source) and pre-v0.18 brains without the sources table.
-    const job = await queue.add(
-      'autopilot-cycle',
-      { repoPath: opts.repoPath },
-      {
-        queue: 'default',
-        idempotency_key: `autopilot-cycle:${opts.slot}`,
-        max_attempts: 2,
-        timeout_ms: opts.timeoutMs,
-        maxWaiting: 1,
-      },
-    );
+    const params = { repoPath: opts.repoPath };
+    const submitOptions = {
+      queue: 'default',
+      idempotency_key: `autopilot-cycle:${opts.slot}`,
+      max_attempts: 2,
+      timeout_ms: opts.timeoutMs,
+      maxWaiting: 1,
+    };
+    if (opts.proposeOnly) {
+      const proposal = buildAutopilotJobProposal({
+        mode: 'legacy',
+        job: 'autopilot-cycle',
+        params,
+        submitOptions,
+        metadata: { slot: opts.slot },
+      });
+      if (opts.jsonMode) emit(JSON.stringify(proposal));
+      else log(`[propose] autopilot-cycle ${JSON.stringify({ mode: proposal.mode, params, submit_options: submitOptions })}`);
+      return { dispatched: [], proposed: ['legacy'], skipped_fresh: [], skipped_cap: [], legacy_fallback: true };
+    }
+    const job = await queue.add('autopilot-cycle', params, submitOptions);
     if (opts.jsonMode) {
       emit(JSON.stringify({ event: 'dispatched', job_id: job.id, mode: 'legacy', slot: opts.slot }));
     } else {
@@ -198,31 +213,46 @@ export async function dispatchPerSource(
   const { dispatch, skippedFresh, skippedCap } = selectSourcesForDispatch(sources, opts.fanoutMax);
 
   const dispatched: string[] = [];
+  const proposed: string[] = [];
   for (const src of dispatch) {
     try {
       const remoteUrl = typeof src.config?.remote_url === 'string' ? src.config.remote_url : null;
-      const job = await queue.add(
-        'autopilot-cycle',
-        {
-          repoPath: src.local_path,
-          source_id: src.id,
-          pull: !!remoteUrl,
-        },
-        {
-          queue: 'default',
-          // Per-source idempotency key — two ticks for the same source
-          // within the same slot coalesce; different sources never collide.
-          idempotency_key: `autopilot-cycle:${src.id}:${opts.slot}`,
-          max_attempts: 2,
-          timeout_ms: opts.timeoutMs,
-          // DELIBERATELY no maxWaiting: 1 here. maxWaiting is per
-          // (name, queue), so it would coalesce all N per-source jobs
-          // sharing name='autopilot-cycle' down to ONE waiting job —
-          // killing the fan-out. The per-source idempotency_key
-          // already provides the right dedup granularity (one job per
-          // source per slot, regardless of how many ticks try).
-        },
-      );
+      const params = {
+        repoPath: src.local_path,
+        source_id: src.id,
+        pull: !!remoteUrl,
+      };
+      const submitOptions = {
+        queue: 'default',
+        // Per-source idempotency key — two ticks for the same source
+        // within the same slot coalesce; different sources never collide.
+        idempotency_key: `autopilot-cycle:${src.id}:${opts.slot}`,
+        max_attempts: 2,
+        timeout_ms: opts.timeoutMs,
+        // DELIBERATELY no maxWaiting: 1 here. maxWaiting is per
+        // (name, queue), so it would coalesce all N per-source jobs
+        // sharing name='autopilot-cycle' down to ONE waiting job —
+        // killing the fan-out. The per-source idempotency_key
+        // already provides the right dedup granularity (one job per
+        // source per slot, regardless of how many ticks try).
+      };
+      if (opts.proposeOnly) {
+        const proposal = buildAutopilotJobProposal({
+          mode: 'per_source',
+          job: 'autopilot-cycle',
+          params,
+          submitOptions,
+          metadata: { source_id: src.id, slot: opts.slot },
+        });
+        proposed.push(src.id);
+        if (opts.jsonMode) {
+          emit(JSON.stringify(proposal));
+        } else {
+          log(`[propose] autopilot-cycle source=${src.id} ${JSON.stringify({ params, submit_options: submitOptions })}`);
+        }
+        continue;
+      }
+      const job = await queue.add('autopilot-cycle', params, submitOptions);
       dispatched.push(src.id);
       if (opts.jsonMode) {
         emit(JSON.stringify({
@@ -262,6 +292,7 @@ export async function dispatchPerSource(
 
   return {
     dispatched,
+    proposed: proposed.length > 0 ? proposed : undefined,
     skipped_fresh: skippedFresh.map(s => s.id),
     skipped_cap: skippedCap.map(s => s.id),
     legacy_fallback: false,
