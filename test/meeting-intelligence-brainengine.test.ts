@@ -307,6 +307,10 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
     expect(meetingPage?.compiled_truth).toContain('## Meeting Record');
     expect(meetingPage?.timeline).toContain('## Full Diarized Transcript');
     expect(sourcePage?.compiled_truth).toContain('## Source Packet');
+    const meetingLinks = await engine.getLinks(summary.meeting_slug, { sourceId: 'default' });
+    const sourceLinks = await engine.getLinks(summary.source_slug, { sourceId: 'default' });
+    expect(meetingLinks.some((link) => link.to_slug === summary.source_slug && link.link_type === 'source')).toBe(true);
+    expect(sourceLinks.some((link) => link.to_slug === summary.meeting_slug && link.link_type === 'source')).toBe(true);
   });
 
   test('top-level CLI connects BrainEngine for materialize subcommand', async () => {

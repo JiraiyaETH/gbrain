@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { BrainEngine } from '../core/engine.ts';
 import { importFromContent } from '../core/import-file.ts';
 import { serializeMarkdown } from '../core/markdown.ts';
+import { slugifySegment } from '../core/sync.ts';
 import {
   buildMeetingRepairSweepPlan,
   buildMeetingRuntimeRun,
@@ -435,6 +436,7 @@ async function materializeStoredProviderMeeting(
     ingested_via: 'meeting-intelligence:materialize:source',
     remote: false,
   });
+  await reconcileMaterializedMeetingLinks(engine, meeting, page.slug, sourceSlug);
   const meetingReadback = await engine.getPage(page.slug, { sourceId: 'default' });
   const sourceReadback = await engine.getPage(sourceSlug, { sourceId: 'default' });
   await engine.executeRaw(
@@ -471,6 +473,43 @@ async function materializeStoredProviderMeeting(
     meeting_readback_ok: Boolean(meetingReadback),
     source_readback_ok: Boolean(sourceReadback),
   };
+}
+
+async function reconcileMaterializedMeetingLinks(
+  engine: BrainEngine,
+  meeting: NormalizedProviderMeeting,
+  meetingSlug: string,
+  sourceSlug: string,
+): Promise<void> {
+  const sourceOpts = { fromSourceId: 'default', toSourceId: 'default' };
+  await engine.addLink(meetingSlug, sourceSlug, 'meeting-intelligence materialized source packet', 'source', 'manual', undefined, undefined, sourceOpts); // gbrain-allow-direct-insert: materialize writes the canonical meeting/source pages, then reconciles deterministic same-source graph edges.
+  await engine.addLink(sourceSlug, meetingSlug, 'meeting-intelligence materialized meeting page', 'source', 'manual', undefined, undefined, sourceOpts); // gbrain-allow-direct-insert: materialize writes the canonical meeting/source pages, then reconciles deterministic same-source graph edges.
+
+  for (const personSlug of materializedMeetingPersonSlugs(meeting)) {
+    try {
+      await engine.addLink(meetingSlug, personSlug, 'meeting-intelligence materialized attendee/speaker', 'attended', 'manual', undefined, undefined, sourceOpts); // gbrain-allow-direct-insert: attendee/speaker edge is derived from materialized transcript metadata; unresolved people are skipped below.
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/not found/i.test(message)) throw err;
+    }
+  }
+}
+
+function materializedMeetingPersonSlugs(meeting: NormalizedProviderMeeting): string[] {
+  const labels = new Set<string>();
+  const push = (label: unknown) => {
+    if (typeof label !== 'string') return;
+    const trimmed = redactSensitiveText(label.trim());
+    if (!trimmed || trimmed.includes('@') || trimmed.startsWith('<REDACTED:')) return;
+    if (/^unknown[-_\s]?speaker$/i.test(trimmed)) return;
+    const slug = slugifySegment(trimmed);
+    if (slug) labels.add(`people/${slug}`);
+  };
+
+  push(meeting.organizer?.name);
+  for (const attendee of meeting.attendees) push(attendee.name);
+  for (const turn of meeting.transcript) push(turn.speaker);
+  return [...labels].sort();
 }
 
 function renderSourcePacketMarkdown(meeting: NormalizedProviderMeeting, meetingSlug: string): string {
