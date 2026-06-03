@@ -11,6 +11,7 @@ triggers:
   - "personalized version of this book"
   - "mirror this book"
   - "story-first book mirror"
+  - "two-column book analysis"
   - "apply this book to my life"
   - "how does this book apply to me"
 mutating: true

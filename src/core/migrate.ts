@@ -5088,6 +5088,103 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 113,
+    name: 'meeting_intelligence_brainengine_tables',
+    idempotent: true,
+    sql: `
+      CREATE TABLE IF NOT EXISTS meeting_provider_records (
+        id BIGSERIAL PRIMARY KEY,
+        source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE DEFAULT 'default',
+        provider TEXT NOT NULL,
+        provider_meeting_id TEXT NOT NULL,
+        dedupe_key TEXT NOT NULL,
+        title TEXT NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL,
+        meeting_date DATE NOT NULL,
+        transcript_checksum TEXT NOT NULL,
+        source_checksum TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('received','completed','duplicate','error')),
+        normalized_json JSONB NOT NULL,
+        provider_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (source_id, provider, provider_meeting_id)
+      );
+      CREATE INDEX IF NOT EXISTS meeting_provider_records_dedupe_idx
+        ON meeting_provider_records (source_id, provider, dedupe_key);
+      CREATE INDEX IF NOT EXISTS meeting_provider_records_started_idx
+        ON meeting_provider_records (source_id, started_at DESC);
+
+      CREATE TABLE IF NOT EXISTS meeting_ledger (
+        id BIGSERIAL PRIMARY KEY,
+        source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE DEFAULT 'default',
+        provider TEXT NOT NULL,
+        provider_meeting_id TEXT NOT NULL,
+        page_slug TEXT,
+        transcript_checksum TEXT NOT NULL,
+        source_checksum TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('received','transcript_ready','page_rendered','enrichment_pending','alex_requested','alex_running','alex_failed','enriched','review_queued','skipped','error')),
+        history_json JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (source_id, provider, provider_meeting_id)
+      );
+      CREATE INDEX IF NOT EXISTS meeting_ledger_state_idx
+        ON meeting_ledger (source_id, state, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS meeting_ledger_page_slug_idx
+        ON meeting_ledger (source_id, page_slug);
+
+      CREATE TABLE IF NOT EXISTS meeting_receipts (
+        id BIGSERIAL PRIMARY KEY,
+        source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE DEFAULT 'default',
+        ledger_id BIGINT REFERENCES meeting_ledger(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        provider_meeting_id TEXT NOT NULL,
+        receipt_key TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('watcher_seen','alex_requested','alex_started','page_written','readback_ok','enrichment_done','review_queued','alex_failed','fallback_staged','error')),
+        receipt_json JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (source_id, receipt_key)
+      );
+      CREATE INDEX IF NOT EXISTS meeting_receipts_ledger_idx
+        ON meeting_receipts (ledger_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS meeting_wake_requests (
+        id BIGSERIAL PRIMARY KEY,
+        source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE DEFAULT 'default',
+        ledger_id BIGINT REFERENCES meeting_ledger(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        provider_meeting_id TEXT NOT NULL,
+        wake_key TEXT NOT NULL,
+        target_profile TEXT NOT NULL DEFAULT 'alex',
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','claimed','done','failed','cancelled')),
+        prompt_text TEXT NOT NULL,
+        payload_json JSONB NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        claimed_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        error_text TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (source_id, wake_key)
+      );
+      CREATE INDEX IF NOT EXISTS meeting_wake_requests_pending_idx
+        ON meeting_wake_requests (source_id, target_profile, created_at ASC)
+        WHERE status = 'pending';
+      CREATE INDEX IF NOT EXISTS meeting_wake_requests_ledger_idx
+        ON meeting_wake_requests (ledger_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS meeting_provider_cursors (
+        source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE DEFAULT 'default',
+        provider TEXT NOT NULL,
+        cursor_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (source_id, provider)
+      );
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

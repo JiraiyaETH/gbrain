@@ -68,6 +68,63 @@ on new_meeting_transcript(meeting):
 4. **The agent's analysis is the value, not a summary.** "They discussed Q2 targets" is worthless. "Pedro pushed back on the burn rate, Diana didn't commit to the timeline, and nobody addressed the pricing gap" is useful.
 5. **Back-links must be bidirectional.** The meeting page links to attendee pages AND attendee pages link back to the meeting. The graph is bidirectional. Always.
 
+## Neutral Provider Foundation
+
+`src/core/meeting-intelligence/` is the deterministic foundation for provider-neutral meeting intake. Fireflies, Circleback, and future services are adapters that normalize provider payloads into the same meeting record; they are not the canonical owner.
+
+The foundation models long-lived runtime state separately from Brain pages:
+
+- Runtime/source ledger: `$HOME/data/meeting-intelligence/meeting-intelligence.db` in a live deployment.
+- Run receipts and operator audits: `$HOME/ops/meeting-intelligence/` in a live deployment.
+- Durable knowledge: GBrain default source pages under `meetings/`, plus later evidence-gated propagation to `people/` and `companies/`.
+
+The first implementation slice is temp-only: synthetic provider payloads render deterministic full-transcript meeting pages and audit JSON under a caller-approved dry-run root. It does not call provider APIs, does not enable a scheduler, and does not mutate a live GBrain corpus.
+
+## Live-Wiring Candidate Flow
+
+The live-wiring candidate keeps Fireflies as an adapter around the provider-neutral core:
+
+1. Adapter fetch boundary: `createFirefliesProviderAdapter({ mode: 'fixture' })` is the default test/dry-run path. `mode: 'live'` refuses until explicit rollout approval, a valid credential shape, and an injected approved fetch implementation are present. Refusal messages do not print credential values.
+2. Normalization: Fireflies payloads become `NormalizedProviderMeeting` records with a full diarized transcript checksum and source checksum.
+3. Ledger reconciliation: `buildMeetingRuntimeRun()` compares provider id + transcript checksum against existing ledgers to classify insert, noop, update, or duplicate without inferring state from files.
+4. Default-source page plan: every full-transcript page write candidate includes `gbrain put <slug> --source default` and rejects ambient or non-default source routing.
+5. Enrichment and review: generated provider summaries/action items enqueue evidence-gated enrichment and produce review receipts. No generated hint becomes a durable assignment, fact, commitment, commercial term, pricing term, or legal claim without transcript or human-note evidence.
+6. Audit receipt: dry-runs and live plans carry `live_provider_calls=0` and `live_gbrain_writes=0` unless the operator approves the final live rollout and supplies the side-effect implementations.
+
+Dry-run operator surface:
+
+```bash
+gbrain meeting-intelligence dry-run \
+  --fixture test/fixtures/meeting-intelligence/fireflies-completed.synthetic.json \
+  --out .hermes/proofs/neutral-meeting-intelligence/live-wiring-dry-run \
+  --allow-root .hermes/proofs/neutral-meeting-intelligence/live-wiring-dry-run \
+  --include-duplicates \
+  --json
+```
+
+This writes deterministic page, audit, ledger, review, receipt, and summary artifacts under the approved proof root only.
+
+Neutral runtime paths for an approved rollout:
+
+- Runtime/source ledger: `/Users/jarvis/data/meeting-intelligence/meeting-intelligence.db`.
+- Run receipts and operator audits: `/Users/jarvis/ops/meeting-intelligence/`.
+- Durable knowledge: GBrain source `default`, meeting pages under `meetings/`.
+
+Fallback repair sweep model:
+
+- Stale `received` ledgers become `fetch_full_transcript` candidates.
+- Stale `transcript_ready` or `page_rendered` ledgers become `render_or_write_page` candidates.
+- Stale `enrichment_pending` ledgers become `reconcile_enrichment` candidates.
+- `review_queued` ledgers wait for human review.
+- No scheduler or poller is enabled by default; live scheduling remains a separate approval gate.
+
+Safety rules:
+
+- Normal write intent is explicit default-source semantics; use `--source default` when a CLI caller could inherit ambient source state, and never use legacy/non-default meeting-page source flags.
+- Generated provider summaries and action items are review hints only. They cannot become assignments, commitments, ownership changes, pricing/legal/commercial facts, or durable entity truth without transcript or human-note evidence.
+- Rendered pages must include the full diarized transcript, not just a compact provider packet.
+- Signed URLs, token-looking strings, connection strings, wallet/payment-looking strings, and payment-card-looking values must be redacted before pages or audits are written.
+
 ## How to Verify
 
 1. After ingesting a meeting, run `gbrain get meetings/{date}-{slug}`. Confirm the page has the agent's analysis above the bar and the full diarized transcript below it.
