@@ -218,7 +218,7 @@ describe('meeting intelligence foundation', () => {
     }
   });
 
-  test('builds a ledger-driven runtime receipt with write, enrichment, and review state', () => {
+  test('builds a BrainEngine-ledger runtime receipt with an Alex wake request and no transcript in prompt', () => {
     const meeting = normalizeFirefliesMeeting(fixture.fireflies.completed);
     const runtime = buildMeetingRuntimeRun([meeting], {
       dry_run: true,
@@ -226,8 +226,11 @@ describe('meeting intelligence foundation', () => {
     });
 
     expect(runtime.summary.source_id).toBe('default');
-    expect(runtime.summary.runtime_db_path).toBe('/Users/jarvis/data/meeting-intelligence/meeting-intelligence.db');
+    expect(runtime.summary.runtime_authority).toBe('gbrain_brainengine');
+    expect(runtime.summary.table_names.ledger).toBe('meeting_ledger');
     expect(runtime.summary.write_required_count).toBe(1);
+    expect(runtime.summary.wake_request_count).toBe(1);
+    expect(runtime.summary.wake_requests_emitted).toBe(1);
     expect(runtime.summary.review_queue_count).toBe(3);
     expect(runtime.summary.live_provider_calls).toBe(0);
     expect(runtime.summary.live_gbrain_writes).toBe(0);
@@ -239,9 +242,15 @@ describe('meeting intelligence foundation', () => {
       'default',
     ]);
     expect(runtime.write_plans[0]?.mode).toBe('dry_run');
-    expect(runtime.enrichment_queue[0]?.status).toBe('queued');
+    expect(runtime.enrichment_queue[0]?.reason).toContain('fallback_only');
+    expect(runtime.alex_wake_requests[0]?.target_profile).toBe('alex');
+    expect(runtime.alex_wake_requests[0]?.action).toBe('fetch_transcript_by_ledger_provider_id_and_enrich');
+    expect(runtime.alex_wake_requests[0]?.prompt_text).toContain('Provider meeting id: ff-mtg-0001');
+    expect(runtime.alex_wake_requests[0]?.prompt_text).toContain('fetch transcript by ledger/provider id');
+    expect(runtime.alex_wake_requests[0]?.prompt_text).not.toContain('Let\'s review the acme-example follow-up');
+    expect(runtime.alex_wake_requests[0]?.prompt_text).not.toContain('enterprise pricing by Friday');
     expect(runtime.review_receipts[0]?.status).toBe('review_queued');
-    expect(runtime.ledgers[0]?.state).toBe('review_queued');
+    expect(runtime.ledgers[0]?.state).toBe('alex_requested');
   });
 
   test('uses existing ledger checksums for no-op and changed-transcript runtime reconciliation', () => {

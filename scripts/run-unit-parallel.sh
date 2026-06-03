@@ -71,14 +71,13 @@ if [ -z "${SHARDS_OVERRIDE:-}" ] && [ -z "${SHARDS:-}" ] && [ "$N" -gt 4 ]; then
 fi
 
 INTRA_CONC="${MAX_CONCURRENCY_OVERRIDE:-${GBRAIN_TEST_MAX_CONCURRENCY:-4}}"
-# v0.40.10 flake-hardening: bump per-shard cap 600 → 1500 (was 900). At
-# 4-shard default each shard runs 159 files / ~2420 tests with internal
-# wallclock 960-1020s. The 900s value (sized for 8-shard's ~80 files /
-# 1100 tests at 620-770s) false-killed shard 1 at 900s even though it
-# had completed in 968s. 1500s cap gives ~55% headroom over observed
-# 4-shard wallclock; real hangs still hit it. Override via
+# v0.42.8 flake-hardening: bump per-shard cap 1500 → 2100. The
+# 4-shard default can legitimately exceed 1500s on loaded Apple Silicon after
+# the migration-heavy test corpus grew (observed shard: 2970 pass / 0 fail in
+# 1651s, falsely marked wedged by the old cap). 2100s keeps a real hang bound
+# while avoiding false-red full-suite closeouts. Override via
 # GBRAIN_TEST_SHARD_TIMEOUT=N.
-SHARD_TIMEOUT="${GBRAIN_TEST_SHARD_TIMEOUT:-1500}"
+SHARD_TIMEOUT="${GBRAIN_TEST_SHARD_TIMEOUT:-2100}"
 
 # ──────────────────────────────────────────────────────────────────────────
 # Output directories. Prefer workspace-local .context/, fall back to /tmp.

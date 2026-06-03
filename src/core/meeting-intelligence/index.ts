@@ -9,6 +9,9 @@ export const MEETING_INTELLIGENCE_STATES = [
   'transcript_ready',
   'page_rendered',
   'enrichment_pending',
+  'alex_requested',
+  'alex_running',
+  'alex_failed',
   'enriched',
   'review_queued',
   'skipped',
@@ -139,9 +142,16 @@ export class MeetingIntelligenceCredentialError extends Error {
 }
 
 export interface MeetingRuntimePaths {
-  runtime_db_path: string;
+  runtime_authority: 'gbrain_brainengine';
   receipt_root: string;
   source_id: 'default';
+  table_names: {
+    provider_records: 'meeting_provider_records';
+    ledger: 'meeting_ledger';
+    receipts: 'meeting_receipts';
+    wake_requests: 'meeting_wake_requests';
+    provider_cursors: 'meeting_provider_cursors';
+  };
 }
 
 export interface MeetingPageWriteCandidate extends DefaultSourceWritePlan {
@@ -164,6 +174,33 @@ export interface EnrichmentQueuePlan {
   live_gbrain_writes: 0;
 }
 
+export interface AlexWakeRequestPlan {
+  wake_key: string;
+  source_id: 'default';
+  target_profile: string;
+  status: 'pending';
+  provider: string;
+  provider_meeting_id: string;
+  page_slug: string;
+  transcript_checksum: string;
+  source_checksum: string;
+  action: 'fetch_transcript_by_ledger_provider_id_and_enrich';
+  prompt_text: string;
+  payload: {
+    kind: 'meeting_ingest_wake_request';
+    provider: string;
+    provider_meeting_id: string;
+    page_slug: string;
+    transcript_checksum: string;
+    action: 'fetch_transcript_by_ledger_provider_id_and_enrich';
+    guardrails: string[];
+  };
+  command_plan: {
+    env: Record<string, string>;
+    argv: string[];
+  };
+}
+
 export interface MeetingReviewReceipt {
   page_slug: string;
   status: 'review_queued' | 'no_review_required';
@@ -184,6 +221,7 @@ export interface MeetingRuntimeReceipt {
   dry_run: boolean;
   write_plan: MeetingPageWriteCandidate;
   enrichment: EnrichmentQueuePlan;
+  alex_wake: AlexWakeRequestPlan;
   review: MeetingReviewReceipt;
   ledger: MeetingLedger;
   audit: {
@@ -193,7 +231,8 @@ export interface MeetingRuntimeReceipt {
     write_required: boolean;
     review_queue_count: number;
     duplicate_raw_records: number;
-    runtime_db_path: string;
+    runtime_authority: 'gbrain_brainengine';
+    table_names: MeetingRuntimePaths['table_names'];
     receipt_root: string;
   };
   trace: Array<{ step: string; status: 'ok' | 'queued' | 'skipped'; detail: string }>;
@@ -204,13 +243,17 @@ export interface MeetingRuntimeRun {
   ledgers: MeetingLedger[];
   write_plans: MeetingPageWriteCandidate[];
   enrichment_queue: EnrichmentQueuePlan[];
+  alex_wake_requests: AlexWakeRequestPlan[];
   review_receipts: MeetingReviewReceipt[];
   summary: {
-    runtime_db_path: string;
+    runtime_authority: 'gbrain_brainengine';
+    table_names: MeetingRuntimePaths['table_names'];
     receipt_root: string;
     source_id: 'default';
     page_count: number;
     write_required_count: number;
+    wake_request_count: number;
+    wake_requests_emitted: number;
     review_queue_count: number;
     live_provider_calls: 0;
     live_gbrain_writes: 0;
@@ -226,6 +269,8 @@ export interface MeetingRepairSweepPlan {
     action:
       | 'fetch_full_transcript'
       | 'render_or_write_page'
+      | 'reemit_alex_wake'
+      | 'stage_deterministic_fallback'
       | 'reconcile_enrichment'
       | 'await_human_review';
     reason: string;
@@ -290,7 +335,10 @@ const ALLOWED_TRANSITIONS: Record<MeetingIntelligenceState, MeetingIntelligenceS
   received: ['transcript_ready', 'skipped', 'error'],
   transcript_ready: ['page_rendered', 'skipped', 'error'],
   page_rendered: ['enrichment_pending', 'skipped', 'error'],
-  enrichment_pending: ['enriched', 'review_queued', 'skipped', 'error'],
+  enrichment_pending: ['alex_requested', 'enriched', 'review_queued', 'skipped', 'error'],
+  alex_requested: ['alex_running', 'alex_failed', 'skipped', 'error'],
+  alex_running: ['enriched', 'review_queued', 'alex_failed', 'error'],
+  alex_failed: ['alex_requested', 'error'],
   enriched: [],
   review_queued: ['enriched', 'skipped', 'error'],
   skipped: [],
@@ -354,18 +402,20 @@ export function assertFirefliesLiveFetchAllowed(
 }
 
 export function resolveMeetingRuntimePaths(
-  opts: { home?: string; runtime_db_path?: string; receipt_root?: string } = {},
+  opts: { home?: string; receipt_root?: string } = {},
 ): MeetingRuntimePaths {
   const home = opts.home ?? DEFAULT_RUNTIME_HOME;
   return {
-    runtime_db_path: opts.runtime_db_path ?? join(
-      home,
-      'data',
-      'meeting-intelligence',
-      'meeting-intelligence.db',
-    ),
+    runtime_authority: 'gbrain_brainengine',
     receipt_root: opts.receipt_root ?? join(home, 'ops', 'meeting-intelligence'),
     source_id: 'default',
+    table_names: {
+      provider_records: 'meeting_provider_records',
+      ledger: 'meeting_ledger',
+      receipts: 'meeting_receipts',
+      wake_requests: 'meeting_wake_requests',
+      provider_cursors: 'meeting_provider_cursors',
+    },
   };
 }
 
@@ -807,10 +857,81 @@ export function buildEnrichmentQueuePlan(
     page_slug: page.slug,
     source_id: 'default',
     status: 'queued',
-    reason: 'evidence_gated_enrichment_after_full_transcript_page',
+    reason: 'fallback_only_after_alex_wake_failure_or_repair',
     review_queue_count: gate.review_queue.length,
     live_provider_calls: 0,
     live_gbrain_writes: 0,
+  };
+}
+
+export function buildAlexWakeRequestPlan(
+  meeting: NormalizedProviderMeeting,
+  page: RenderedMeetingPage,
+  opts: { target_profile?: string } = {},
+): AlexWakeRequestPlan {
+  const targetProfile = opts.target_profile ?? 'alex';
+  const wakeKey = sha256([
+    'alex-wake',
+    targetProfile,
+    meeting.provider,
+    meeting.provider_meeting_id,
+    meeting.transcript_checksum,
+  ].join('|'));
+  const providerMeetingId = redactSensitiveText(meeting.provider_meeting_id);
+  const guardrails = [
+    'Fetch the transcript by provider + provider_meeting_id from the BrainEngine meeting_provider_records table; do not rely on this prompt for transcript content.',
+    'Write durable meeting/source/person/company knowledge only to GBrain source_id=default.',
+    'Treat generated provider summaries and action items as low-trust hints until transcript or human notes support them.',
+    'Queue fuzzy identity, money/legal/commercial commitments, and unsupported action ownership for review instead of promoting them.',
+  ];
+  const promptText = [
+    'Meeting ingest wake request.',
+    `Provider: ${redactSensitiveText(meeting.provider)}`,
+    `Provider meeting id: ${providerMeetingId}`,
+    `Page slug: ${page.slug}`,
+    `Transcript checksum: ${meeting.transcript_checksum}`,
+    'Action: fetch transcript by ledger/provider id, run meeting ingestion + enrichment, write GBrain pages and receipts/readback.',
+    'Guardrails:',
+    ...guardrails.map((item) => `- ${item}`),
+  ].join('\n');
+  const argv = [
+    'hermes',
+    'chat',
+    '--query',
+    promptText,
+    '--source',
+    'meeting-intelligence',
+    '--quiet',
+    '--skills',
+    'meeting-ingestion,brain-ops',
+    '--toolsets',
+    'gbrain,file,terminal',
+  ];
+  return {
+    wake_key: wakeKey,
+    source_id: 'default',
+    target_profile: targetProfile,
+    status: 'pending',
+    provider: meeting.provider,
+    provider_meeting_id: providerMeetingId,
+    page_slug: page.slug,
+    transcript_checksum: meeting.transcript_checksum,
+    source_checksum: meeting.source_checksum,
+    action: 'fetch_transcript_by_ledger_provider_id_and_enrich',
+    prompt_text: promptText,
+    payload: {
+      kind: 'meeting_ingest_wake_request',
+      provider: meeting.provider,
+      provider_meeting_id: providerMeetingId,
+      page_slug: page.slug,
+      transcript_checksum: meeting.transcript_checksum,
+      action: 'fetch_transcript_by_ledger_provider_id_and_enrich',
+      guardrails,
+    },
+    command_plan: {
+      env: { HERMES_PROFILE: targetProfile },
+      argv,
+    },
   };
 }
 
@@ -849,6 +970,7 @@ export function reconcileMeetingRuntimeEvent(
     reason: idempotency.reason,
   });
   const enrichment = buildEnrichmentQueuePlan(meeting, page, gate);
+  const alexWake = buildAlexWakeRequestPlan(meeting, page);
   const review = buildMeetingReviewReceipt(page, gate);
   const ledger = buildRuntimeLedger(existing, meeting, page, idempotency, review, now);
   const receiptId = sha256([
@@ -871,6 +993,7 @@ export function reconcileMeetingRuntimeEvent(
     dry_run: opts.dry_run === true,
     write_plan: writePlan,
     enrichment,
+    alex_wake: alexWake,
     review,
     ledger,
     audit: {
@@ -880,14 +1003,16 @@ export function reconcileMeetingRuntimeEvent(
       write_required: writeRequired,
       review_queue_count: gate.review_queue.length,
       duplicate_raw_records: packet.duplicates.length,
-      runtime_db_path: paths.runtime_db_path,
+      runtime_authority: paths.runtime_authority,
+      table_names: paths.table_names,
       receipt_root: paths.receipt_root,
     },
     trace: [
       { step: 'provider_completed_event', status: 'ok', detail: 'provider payload accepted by adapter boundary' },
       { step: 'full_transcript_normalized', status: 'ok', detail: meeting.transcript.length > 0 ? 'diarized transcript present' : 'transcript missing' },
       { step: 'default_source_write_plan', status: writeRequired ? 'queued' : 'skipped', detail: idempotency.reason },
-      { step: 'enrichment_enqueue', status: 'queued', detail: enrichment.reason },
+      { step: 'alex_wake_request', status: writeRequired ? 'queued' : 'skipped', detail: 'durable Alex wake request emitted; prompt excludes transcript text' },
+      { step: 'fallback_enrichment_plan', status: 'queued', detail: enrichment.reason },
       { step: 'review_receipt', status: review.status === 'review_queued' ? 'queued' : 'ok', detail: `${review.review_queue.length} generated hints require review` },
     ],
   };
@@ -927,13 +1052,17 @@ export function buildMeetingRuntimeRun(
     ledgers: receipts.map((receipt) => receipt.ledger),
     write_plans: receipts.map((receipt) => receipt.write_plan),
     enrichment_queue: receipts.map((receipt) => receipt.enrichment),
+    alex_wake_requests: receipts.map((receipt) => receipt.alex_wake),
     review_receipts: reviewReceipts,
     summary: {
-      runtime_db_path: paths.runtime_db_path,
+      runtime_authority: paths.runtime_authority,
+      table_names: paths.table_names,
       receipt_root: paths.receipt_root,
       source_id: 'default',
       page_count: receipts.length,
       write_required_count: receipts.filter((receipt) => receipt.write_plan.write_required).length,
+      wake_request_count: receipts.length,
+      wake_requests_emitted: receipts.filter((receipt) => receipt.write_plan.write_required).length,
       review_queue_count: reviewQueueCount,
       live_provider_calls: 0,
       live_gbrain_writes: 0,
@@ -946,32 +1075,19 @@ function buildRuntimeLedger(
   meeting: NormalizedProviderMeeting,
   page: RenderedMeetingPage,
   idempotency: TranscriptIdempotencyResult,
-  review: MeetingReviewReceipt,
+  _review: MeetingReviewReceipt,
   at: string,
 ): MeetingLedger {
   if (idempotency.effect === 'noop' && existing) {
-    if (existing.state === 'skipped' || existing.state === 'enriched') {
-      return { ...existing, page_slug: existing.page_slug ?? page.slug };
-    }
-    return {
-      ...transitionMeetingLedger(existing, 'skipped', idempotency.reason, at),
-      page_slug: existing.page_slug ?? page.slug,
-    };
+    return { ...existing, page_slug: existing.page_slug ?? page.slug };
   }
 
   let ledger = existing && idempotency.effect === 'update'
     ? resetMeetingLedgerForChangedTranscript(existing, meeting, at)
     : buildInitialMeetingLedger(meeting, at);
   ledger = transitionMeetingLedger(ledger, 'page_rendered', 'rendered_full_transcript_page', at);
-  ledger = transitionMeetingLedger(ledger, 'enrichment_pending', 'queued_evidence_gated_enrichment', at);
-  if (review.status === 'review_queued') {
-    ledger = transitionMeetingLedger(
-      ledger,
-      'review_queued',
-      'generated_provider_hints_waiting_for_human_review',
-      at,
-    );
-  }
+  ledger = transitionMeetingLedger(ledger, 'enrichment_pending', 'prepared_default_source_page_and_fallback_plan', at);
+  ledger = transitionMeetingLedger(ledger, 'alex_requested', 'durable_alex_wake_requested', at);
   return { ...ledger, page_slug: page.slug };
 }
 
@@ -1018,6 +1134,8 @@ function repairActionForState(
 ): MeetingRepairSweepPlan['candidates'][number]['action'] {
   if (state === 'received') return 'fetch_full_transcript';
   if (state === 'transcript_ready' || state === 'page_rendered') return 'render_or_write_page';
+  if (state === 'alex_requested') return 'reemit_alex_wake';
+  if (state === 'alex_running' || state === 'alex_failed') return 'stage_deterministic_fallback';
   if (state === 'review_queued') return 'await_human_review';
   return 'reconcile_enrichment';
 }
@@ -1333,3 +1451,5 @@ function sortStable(value: unknown): unknown {
   }
   return value;
 }
+
+export * from './brainengine.ts';

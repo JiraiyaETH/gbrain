@@ -952,7 +952,17 @@ async function handleCliOnly(command: string, args: string[]) {
   }
   if (command === 'meeting-intelligence') {
     const { runMeetingIntelligenceCli } = await import('./commands/meeting-intelligence.ts');
-    process.exitCode = await runMeetingIntelligenceCli(args);
+    const engineCommands = new Set(['watch', 'wake', 'repair']);
+    if (engineCommands.has(args[0] ?? '')) {
+      const engine = await connectEngine();
+      try {
+        process.exitCode = await runMeetingIntelligenceCli(args, {}, { engine });
+      } finally {
+        await engine.disconnect();
+      }
+    } else {
+      process.exitCode = await runMeetingIntelligenceCli(args);
+    }
     return;
   }
   if (command === 'auth') {
