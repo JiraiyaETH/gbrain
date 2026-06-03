@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { BrainEngine } from '../core/engine.ts';
+import { importFromContent } from '../core/import-file.ts';
+import { serializeMarkdown } from '../core/markdown.ts';
 import {
   buildMeetingRepairSweepPlan,
   buildMeetingRuntimeRun,
@@ -9,8 +11,15 @@ import {
   ensureMeetingIntelligenceSchema,
   loadMeetingLedgers,
   persistMeetingRuntimeRun,
+  recordMeetingWakeExecutionResults,
+  redactSensitiveText,
+  renderMeetingPage,
   resolveMeetingRuntimePaths,
   runMeetingIntelligenceDryRun,
+  type ClaimedMeetingWakeRequest,
+  type FirefliesGraphqlFetch,
+  type MeetingWakeExecutionResult,
+  type NormalizedProviderMeeting,
 } from '../core/meeting-intelligence/index.ts';
 
 const HELP = `Usage: gbrain meeting-intelligence <command> [options]
@@ -19,6 +28,7 @@ Commands:
   dry-run      Render synthetic provider payloads to page/audit/review receipts
   watch        Poll/ingest completed provider meetings into BrainEngine ledger + Alex wake rows
   wake         Claim pending Alex wake rows and print/execute isolated Hermes command plans
+  materialize  Write source packet + full meeting page from a stored provider record
   repair       Plan stale ledger/wake repair actions
   paths        Print neutral runtime authority/table defaults
 
@@ -30,8 +40,14 @@ Dry-run options:
   --json                  Print JSON summary
 
 Watch options:
-  --provider fireflies    Provider adapter (currently fixture-backed Fireflies)
+  --provider fireflies    Provider adapter (default: fireflies)
   --fixture PATH          JSON fixture file with fireflies.completed payload
+  --live                  Explicitly enable live Fireflies GraphQL fetch
+  --since ISO             Live fetch lower bound (default: now - --since-hours)
+  --until ISO             Live fetch upper bound (default: now)
+  --since-hours N         Live fetch lookback when --since omitted (default: 24)
+  --title-match TEXT      Optional case-insensitive title substring filter
+  --transcript-id ID      Fetch one known Fireflies transcript id directly
   --source default        Required canonical source (default: default)
   --limit N               Max payloads to ingest (default: 10)
   --target-profile alex   Hermes profile to wake (default: alex)
@@ -43,6 +59,15 @@ Wake options:
   --target-profile alex   Hermes profile to wake (default: alex)
   --dry-run               Do not mark rows claimed; only print plans
   --execute               Spawn Hermes for claimed rows (never used by tests)
+  --retry-claimed         Re-claim rows left claimed by an interrupted bridge
+  --retry-failed          Re-claim failed rows after operator/runtime repair
+  --timeout-ms N          Per-child execution timeout (default: 900000)
+  --json                  Print JSON summary
+
+Materialize options:
+  --provider fireflies    Provider adapter (default: fireflies)
+  --transcript-id ID      Required provider transcript id
+  --source default        Required canonical source (default: default)
   --json                  Print JSON summary
 
 Repair options:
@@ -50,7 +75,7 @@ Repair options:
   --stale-after-ms N      Staleness threshold (default: 6h)
   --json                  Print JSON summary
 
-Live provider fetch is approval-gated; fixture mode is the safe rollout/test path.
+Live provider fetch is explicit and credential-gated: pass --live and FIREFLIES_API_KEY; fixture mode remains the safe default.
 `;
 
 interface ParsedArgs {
@@ -65,13 +90,28 @@ interface ParsedArgs {
   targetProfile: string;
   dryRun: boolean;
   execute: boolean;
+  live: boolean;
+  since?: string;
+  until?: string;
+  sinceHours: number;
+  titleMatch?: string;
+  transcriptId?: string;
   staleAfterMs?: number;
+  retryClaimed: boolean;
+  retryFailed: boolean;
+  timeoutMs: number;
+}
+
+interface MeetingIntelligenceCliOpts {
+  engine?: BrainEngine;
+  env?: Record<string, string | undefined>;
+  firefliesGraphql?: FirefliesGraphqlFetch;
 }
 
 export async function runMeetingIntelligenceCli(
   args: string[],
   io: { stdout?: (text: string) => void; stderr?: (text: string) => void } = {},
-  opts: { engine?: BrainEngine } = {},
+  opts: MeetingIntelligenceCliOpts = {},
 ): Promise<number> {
   const stdout = io.stdout ?? ((text: string) => console.log(text));
   const stderr = io.stderr ?? ((text: string) => console.error(text));
@@ -98,11 +138,15 @@ export async function runMeetingIntelligenceCli(
   }
   if (command === 'watch') {
     if (!opts.engine) return missingEngine(stderr, command);
-    return runWatchCommand(parsed, opts.engine, stdout, stderr);
+    return runWatchCommand(parsed, opts.engine, stdout, stderr, opts);
   }
   if (command === 'wake') {
     if (!opts.engine) return missingEngine(stderr, command);
     return runWakeCommand(parsed, opts.engine, stdout);
+  }
+  if (command === 'materialize') {
+    if (!opts.engine) return missingEngine(stderr, command);
+    return runMaterializeCommand(parsed, opts.engine, stdout, stderr);
   }
   if (command === 'repair') {
     if (!opts.engine) return missingEngine(stderr, command);
@@ -162,6 +206,7 @@ async function runWatchCommand(
   engine: BrainEngine,
   stdout: (text: string) => void,
   stderr: (text: string) => void,
+  opts: MeetingIntelligenceCliOpts,
 ): Promise<number> {
   if (parsed.source !== 'default') {
     stderr('meeting-intelligence watch only writes source default');
@@ -171,14 +216,42 @@ async function runWatchCommand(
     stderr(`unsupported meeting provider: ${parsed.provider}`);
     return 2;
   }
-  if (!parsed.fixture) {
-    stderr('live Fireflies watch is approval-gated in this build; provide --fixture for controlled rollout/testing');
+  if (!parsed.fixture && !parsed.live) {
+    stderr('meeting-intelligence watch requires --fixture or explicit --live');
     return 2;
   }
   await ensureMeetingIntelligenceSchema(engine);
-  const fixture = JSON.parse(readFileSync(resolve(parsed.fixture), 'utf8')) as unknown;
-  const payloads = await loadFirefliesFixturePayloads(fixture, parsed.includeDuplicates, parsed.limit);
-  const adapter = createFirefliesProviderAdapter({ mode: 'fixture', fixture_payloads: payloads });
+
+  let liveProviderCalls = 0;
+  let payloads: unknown[];
+  let adapter = createFirefliesProviderAdapter({ mode: 'fixture', fixture_payloads: [] });
+  if (parsed.fixture) {
+    const fixture = JSON.parse(readFileSync(resolve(parsed.fixture), 'utf8')) as unknown;
+    payloads = await loadFirefliesFixturePayloads(fixture, parsed.includeDuplicates, parsed.limit);
+    adapter = createFirefliesProviderAdapter({ mode: 'fixture', fixture_payloads: payloads });
+  } else {
+    const env = opts.env ?? process.env;
+    const apiKey = resolveFirefliesApiKey(env);
+    adapter = createFirefliesProviderAdapter({
+      mode: 'live',
+      allow_live_fetch: true,
+      api_key: apiKey,
+      fetch_graphql: async (request) => {
+        liveProviderCalls++;
+        if (opts.firefliesGraphql) return opts.firefliesGraphql(request);
+        const { performFirefliesGraphqlRequest } = await import('../core/meeting-intelligence/index.ts');
+        return performFirefliesGraphqlRequest(request);
+      },
+    });
+    payloads = await adapter.fetchCompletedMeetings!({
+      from_date: parsed.since ?? new Date(Date.now() - parsed.sinceHours * 60 * 60 * 1000).toISOString(),
+      to_date: parsed.until ?? new Date().toISOString(),
+      limit: parsed.limit,
+      title_match: parsed.titleMatch,
+      provider_meeting_id: parsed.transcriptId,
+    });
+  }
+
   const meetings = payloads.map((payload) => adapter.normalize(payload));
   const existingLedgers = await loadMeetingLedgers(engine, { limit: 500 });
   const runtime = buildMeetingRuntimeRun(meetings, { existing_ledgers: existingLedgers });
@@ -192,7 +265,7 @@ async function runWatchCommand(
     page_count: runtime.summary.page_count,
     wake_requests_emitted: persistence.wake_requests_emitted,
     wake_requests_pending: persistence.wake_requests_pending,
-    live_provider_calls: 0,
+    live_provider_calls: liveProviderCalls,
     live_gbrain_writes: 0,
   };
   printSummary(summary, parsed.json, stdout, [
@@ -201,6 +274,10 @@ async function runWatchCommand(
     `wake_requests_pending=${summary.wake_requests_pending}`,
   ]);
   return 0;
+}
+
+function resolveFirefliesApiKey(env: Record<string, string | undefined>): string | undefined {
+  return env.FIREFLIES_API_KEY?.trim() || env.Fireflies_API_Key?.trim() || env.FIREFLIES_TOKEN?.trim();
 }
 
 async function runWakeCommand(
@@ -212,15 +289,28 @@ async function runWakeCommand(
     target_profile: parsed.targetProfile,
     limit: parsed.limit,
     dry_run: parsed.dryRun,
+    retry_claimed: parsed.retryClaimed,
+    retry_failed: parsed.retryFailed,
   });
   const executions = parsed.execute && !parsed.dryRun
-    ? executeWakePlans(claimed.map((row) => row.command_plan))
+    ? executeWakePlans(claimed, parsed.timeoutMs)
     : [];
+  if (executions.length > 0) {
+    await recordMeetingWakeExecutionResults(engine, executions);
+  }
+  const failed = executions.some((result) => !result.ok);
   const summary = {
-    status: parsed.dryRun ? 'wake_plan' : 'wake_claimed',
+    status: parsed.dryRun
+      ? 'wake_plan'
+      : parsed.execute
+        ? (failed ? 'wake_failed' : 'wake_executed')
+        : 'wake_claimed',
     target_profile: parsed.targetProfile,
     dry_run: parsed.dryRun,
     execute: parsed.execute,
+    retry_claimed: parsed.retryClaimed,
+    retry_failed: parsed.retryFailed,
+    timeout_ms: parsed.timeoutMs,
     claimed_count: claimed.length,
     wake_requests: claimed,
     executions,
@@ -228,7 +318,179 @@ async function runWakeCommand(
   printSummary(summary, parsed.json, stdout, [
     `meeting-intelligence wake ${summary.status}: ${summary.claimed_count} request(s)`,
   ]);
-  return 0;
+  return failed ? 1 : 0;
+}
+
+async function runMaterializeCommand(
+  parsed: ParsedArgs,
+  engine: BrainEngine,
+  stdout: (text: string) => void,
+  stderr: (text: string) => void,
+): Promise<number> {
+  if (parsed.source !== 'default') {
+    stderr('meeting-intelligence materialize only writes source default');
+    return 2;
+  }
+  if (parsed.provider !== 'fireflies') {
+    stderr(`unsupported meeting provider: ${parsed.provider}`);
+    return 2;
+  }
+  if (!parsed.transcriptId) {
+    stderr('meeting-intelligence materialize requires --transcript-id <provider id>');
+    return 2;
+  }
+  await ensureMeetingIntelligenceSchema(engine);
+  const rows = await engine.executeRaw<{
+    ledger_id: string | number | null;
+    normalized_json: unknown;
+  }>(
+    `SELECT l.id AS ledger_id, p.normalized_json
+       FROM meeting_provider_records p
+       LEFT JOIN meeting_ledger l
+         ON l.source_id = p.source_id
+        AND l.provider = p.provider
+        AND l.provider_meeting_id = p.provider_meeting_id
+      WHERE p.source_id = 'default'
+        AND p.provider = $1
+        AND p.provider_meeting_id = $2
+      LIMIT 1`,
+    [parsed.provider, parsed.transcriptId],
+  );
+  const row = rows[0];
+  if (!row) {
+    stderr(`no stored provider record for ${parsed.provider}:${redactSensitiveText(parsed.transcriptId)}`);
+    return 1;
+  }
+  const meeting = parseStoredJson<NormalizedProviderMeeting>(row.normalized_json);
+  const page = renderMeetingPage(meeting);
+  const sourceSlug = page.slug.replace(/^meetings\//, `sources/${meeting.provider}/`);
+  const sourceMarkdown = renderSourcePacketMarkdown(meeting, page.slug);
+  const meetingImport = await importFromContent(engine, page.slug, page.markdown, {
+    noEmbed: true,
+    sourceId: 'default',
+    source_kind: 'meeting-intelligence',
+    source_uri: `${meeting.provider}:${meeting.provider_meeting_id}`,
+    ingested_via: 'meeting-intelligence:materialize:meeting',
+    remote: false,
+  });
+  const sourceImport = await importFromContent(engine, sourceSlug, sourceMarkdown, {
+    noEmbed: true,
+    sourceId: 'default',
+    source_kind: 'meeting-intelligence',
+    source_uri: `${meeting.provider}:${meeting.provider_meeting_id}`,
+    ingested_via: 'meeting-intelligence:materialize:source',
+    remote: false,
+  });
+  const meetingReadback = await engine.getPage(page.slug, { sourceId: 'default' });
+  const sourceReadback = await engine.getPage(sourceSlug, { sourceId: 'default' });
+  await engine.executeRaw(
+    `UPDATE meeting_ledger
+       SET page_slug = $3, updated_at = now()
+     WHERE source_id = 'default' AND provider = $1 AND provider_meeting_id = $2`,
+    [meeting.provider, meeting.provider_meeting_id, page.slug],
+  );
+  await insertMaterializeReceipt(engine, row.ledger_id, meeting, 'page_written', {
+    meeting_slug: page.slug,
+    source_slug: sourceSlug,
+    meeting_import_status: meetingImport.status,
+    source_import_status: sourceImport.status,
+    meeting_chunks: meetingImport.chunks,
+    source_chunks: sourceImport.chunks,
+  });
+  if (meetingReadback && sourceReadback) {
+    await insertMaterializeReceipt(engine, row.ledger_id, meeting, 'readback_ok', {
+      meeting_slug: page.slug,
+      source_slug: sourceSlug,
+    });
+  }
+  const summary = {
+    status: meetingReadback && sourceReadback ? 'materialize_complete' : 'materialize_incomplete',
+    source_id: 'default',
+    provider: meeting.provider,
+    provider_meeting_id: redactSensitiveText(meeting.provider_meeting_id),
+    meeting_slug: page.slug,
+    source_slug: sourceSlug,
+    meeting_import_status: meetingImport.status,
+    source_import_status: sourceImport.status,
+    meeting_chunks: meetingImport.chunks,
+    source_chunks: sourceImport.chunks,
+    meeting_readback_ok: Boolean(meetingReadback),
+    source_readback_ok: Boolean(sourceReadback),
+  };
+  printSummary(summary, parsed.json, stdout, [
+    `meeting-intelligence materialize ${summary.status}: ${page.slug}`,
+    `source=${sourceSlug}`,
+  ]);
+  return meetingReadback && sourceReadback ? 0 : 1;
+}
+
+function renderSourcePacketMarkdown(meeting: NormalizedProviderMeeting, meetingSlug: string): string {
+  const compiledTruth = [
+    `# Fireflies Source Packet: ${redactSensitiveText(meeting.title)}`,
+    '',
+    '## Source Packet',
+    `- Provider adapter: ${meeting.provider}`,
+    '- Canonical owner: GBrain meeting intelligence',
+    '- GBrain source intent: default',
+    `- Provider meeting id: ${redactSensitiveText(meeting.provider_meeting_id)}`,
+    `- Meeting page: [[${meetingSlug}]]`,
+    `- Transcript checksum: ${meeting.transcript_checksum}`,
+    `- Source checksum: ${meeting.source_checksum}`,
+    `- Started at: ${meeting.started_at}`,
+    '',
+    '## Promotion Boundary',
+    '- This packet identifies the provider source and readback target.',
+    '- Full diarized transcript is stored on the linked meeting page, not duplicated here.',
+    '- Generated Fireflies summaries/action items remain low-trust hints until transcript or human notes support promotion.',
+  ].join('\n');
+  return serializeMarkdown(
+    {
+      provider: meeting.provider,
+      provider_meeting_id: redactSensitiveText(meeting.provider_meeting_id),
+      provider_canonical_id: `${meeting.provider}:${redactSensitiveText(meeting.provider_meeting_id)}`,
+      gbrain_source_id: 'default',
+      meeting_page: meetingSlug,
+      meeting_date: meeting.meeting_date,
+      started_at: meeting.started_at,
+      transcript_checksum: meeting.transcript_checksum,
+      source_checksum: meeting.source_checksum,
+      source_system: 'meeting-intelligence',
+    },
+    compiledTruth,
+    '',
+    {
+      type: 'source',
+      title: `Fireflies Source Packet: ${redactSensitiveText(meeting.title)}`,
+      tags: ['source', 'fireflies', 'meeting-intelligence', 'meeting-source'],
+    },
+  );
+}
+
+async function insertMaterializeReceipt(
+  engine: BrainEngine,
+  ledgerId: string | number | null,
+  meeting: NormalizedProviderMeeting,
+  kind: 'page_written' | 'readback_ok',
+  payload: Record<string, unknown>,
+): Promise<void> {
+  await engine.executeRaw(
+    `INSERT INTO meeting_receipts
+      (source_id, ledger_id, provider, provider_meeting_id, receipt_key, kind, receipt_json)
+     VALUES ('default', $1, $2, $3, $4, $5, $6::jsonb)
+     ON CONFLICT (source_id, receipt_key) DO NOTHING`,
+    [
+      ledgerId,
+      meeting.provider,
+      meeting.provider_meeting_id,
+      `${kind}:${meeting.provider}:${meeting.provider_meeting_id}`,
+      kind,
+      JSON.stringify({ ...payload, source_id: 'default', provider: meeting.provider, provider_meeting_id: redactSensitiveText(meeting.provider_meeting_id) }),
+    ],
+  );
+}
+
+function parseStoredJson<T>(value: unknown): T {
+  return typeof value === 'string' ? JSON.parse(value) as T : value as T;
 }
 
 async function runRepairCommand(
@@ -261,6 +523,11 @@ function parseArgs(args: string[]): ParsedArgs | { help: true } {
     targetProfile: 'alex',
     dryRun: false,
     execute: false,
+    live: false,
+    sinceHours: 24,
+    retryClaimed: false,
+    retryFailed: false,
+    timeoutMs: 900_000,
   };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -269,6 +536,9 @@ function parseArgs(args: string[]): ParsedArgs | { help: true } {
     if (arg === '--include-duplicates') { parsed.includeDuplicates = true; continue; }
     if (arg === '--dry-run') { parsed.dryRun = true; continue; }
     if (arg === '--execute') { parsed.execute = true; continue; }
+    if (arg === '--retry-claimed') { parsed.retryClaimed = true; continue; }
+    if (arg === '--retry-failed') { parsed.retryFailed = true; continue; }
+    if (arg === '--live') { parsed.live = true; continue; }
     if (arg === '--fixture') { parsed.fixture = args[++i]; continue; }
     if (arg === '--out') { parsed.out = args[++i]; continue; }
     if (arg === '--allow-root') { parsed.allowRoot = args[++i]; continue; }
@@ -276,7 +546,13 @@ function parseArgs(args: string[]): ParsedArgs | { help: true } {
     if (arg === '--source') { parsed.source = args[++i] ?? parsed.source; continue; }
     if (arg === '--target-profile') { parsed.targetProfile = args[++i] ?? parsed.targetProfile; continue; }
     if (arg === '--limit') { parsed.limit = positiveInt(args[++i], '--limit'); continue; }
+    if (arg === '--since-hours') { parsed.sinceHours = positiveInt(args[++i], '--since-hours'); continue; }
+    if (arg === '--since') { parsed.since = requireValue(args[++i], '--since'); continue; }
+    if (arg === '--until') { parsed.until = requireValue(args[++i], '--until'); continue; }
+    if (arg === '--title-match') { parsed.titleMatch = requireValue(args[++i], '--title-match'); continue; }
+    if (arg === '--transcript-id') { parsed.transcriptId = requireValue(args[++i], '--transcript-id'); continue; }
     if (arg === '--stale-after-ms') { parsed.staleAfterMs = positiveInt(args[++i], '--stale-after-ms'); continue; }
+    if (arg === '--timeout-ms') { parsed.timeoutMs = positiveInt(args[++i], '--timeout-ms'); continue; }
   }
   return parsed;
 }
@@ -339,20 +615,89 @@ function positiveInt(value: string | undefined, label: string): number {
   return parsed;
 }
 
+function requireValue(value: string | undefined, label: string): string {
+  if (!value || value.trim().length === 0) throw new Error(`${label} requires a value`);
+  return value.trim();
+}
+
 function printSummary(summary: unknown, json: boolean, stdout: (text: string) => void, lines: string[]): void {
   if (json) stdout(JSON.stringify(summary, null, 2));
   else stdout(lines.join('\n'));
 }
 
-function executeWakePlans(plans: Array<{ env: Record<string, string>; argv: string[] }>): Array<{ status: number | null; signal: NodeJS.Signals | null }> {
+function executeWakePlans(
+  requests: readonly ClaimedMeetingWakeRequest[],
+  timeoutMs: number,
+): MeetingWakeExecutionResult[] {
   // Imported lazily so dry-run/test paths do not acquire subprocess state.
   const { spawnSync } = require('node:child_process') as typeof import('node:child_process');
-  return plans.map((plan) => {
+  return requests.map((request) => {
+    const plan = normalizeWakeCommandPlan(request.command_plan, request.target_profile);
     const [command, ...args] = plan.argv;
-    const result = spawnSync(command!, args, {
+    if (!command) {
+      return {
+        wake_request_id: request.id,
+        ok: false,
+        status: null,
+        signal: null,
+        error_text: 'wake command plan missing argv[0]',
+      };
+    }
+    const result = spawnSync(command, args, {
       env: { ...process.env, ...plan.env },
-      stdio: 'ignore',
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024,
+      stdio: 'pipe',
+      timeout: timeoutMs,
     });
-    return { status: result.status, signal: result.signal };
+    const timedOut = Boolean(result.error && (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT');
+    const ok = result.status === 0 && !result.signal && !result.error;
+    const statusText = result.status === null ? 'no exit status' : `exited with status ${result.status}`;
+    const signalText = result.signal ? `signal ${result.signal}` : undefined;
+    const errorText = ok
+      ? undefined
+      : [
+        timedOut ? `timed out after ${timeoutMs}ms` : undefined,
+        result.error?.message,
+        statusText,
+        signalText,
+      ].filter(Boolean).join('; ');
+    return {
+      wake_request_id: request.id,
+      ok,
+      status: result.status,
+      signal: result.signal,
+      timed_out: timedOut || undefined,
+      error_text: errorText,
+    };
   });
+}
+
+export function normalizeWakeCommandPlan(
+  plan: { env: Record<string, string>; argv: string[] },
+  targetProfile: string,
+): { env: Record<string, string>; argv: string[] } {
+  const promptIndex = plan.argv.indexOf('--query');
+  const promptText = promptIndex >= 0 ? plan.argv[promptIndex + 1] : undefined;
+  const materializeMatch = typeof promptText === 'string'
+    ? promptText.match(/(?:^|\n)Materialize command:\s*(gbrain\s+meeting-intelligence\s+materialize\s+--provider\s+\S+\s+--transcript-id\s+\S+\s+--source\s+default\s+--json)(?:\n|$)/)
+    : null;
+  if (materializeMatch?.[1]) {
+    return {
+      env: { ...plan.env, HERMES_PROFILE: plan.env.HERMES_PROFILE ?? targetProfile },
+      argv: materializeMatch[1].trim().split(/\s+/),
+    };
+  }
+
+  const [command, firstArg, ...rest] = plan.argv;
+  if (command === 'hermes' && firstArg === 'chat') {
+    return {
+      env: { ...plan.env, HERMES_PROFILE: targetProfile },
+      argv: [command, '--profile', targetProfile, firstArg, ...rest],
+    };
+  }
+  return {
+    env: { ...plan.env, HERMES_PROFILE: plan.env.HERMES_PROFILE ?? targetProfile },
+    argv: plan.argv,
+  };
 }

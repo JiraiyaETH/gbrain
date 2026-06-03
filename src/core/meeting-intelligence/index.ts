@@ -119,10 +119,28 @@ export interface ProviderTranscriptFetchRequest {
   provider_meeting_id: string;
 }
 
+export interface ProviderCompletedMeetingsFetchRequest {
+  from_date?: string;
+  to_date?: string;
+  limit?: number;
+  title_match?: string;
+  provider_meeting_id?: string;
+}
+
+export interface FirefliesGraphqlRequest {
+  operation: 'list' | 'detail';
+  query: string;
+  variables: Record<string, unknown>;
+  api_key: string;
+}
+
+export type FirefliesGraphqlFetch = (request: FirefliesGraphqlRequest) => Promise<unknown>;
+
 export interface MeetingProviderAdapter {
   provider: string;
   normalize(payload: unknown): NormalizedProviderMeeting;
   fetchCompletedMeeting(request: ProviderTranscriptFetchRequest): Promise<unknown>;
+  fetchCompletedMeetings?(request: ProviderCompletedMeetingsFetchRequest): Promise<unknown[]>;
 }
 
 export interface FirefliesProviderAdapterOpts {
@@ -131,6 +149,8 @@ export interface FirefliesProviderAdapterOpts {
   allow_live_fetch?: boolean;
   api_key?: string;
   fetch?: (request: ProviderTranscriptFetchRequest, auth: { api_key: string }) => Promise<unknown>;
+  fetch_graphql?: FirefliesGraphqlFetch;
+  list_limit?: number;
 }
 
 export class MeetingIntelligenceApprovalError extends Error {
@@ -347,6 +367,68 @@ const ALLOWED_TRANSITIONS: Record<MeetingIntelligenceState, MeetingIntelligenceS
 
 const DEFAULT_RUNTIME_HOME = '/Users/jarvis';
 const DEFAULT_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
+const FIREFLIES_API_URL = 'https://api.fireflies.ai/graphql';
+const FIREFLIES_LIST_LIMIT = 50;
+
+const FIREFLIES_LIST_TRANSCRIPTS_QUERY = `
+query RecentTranscripts($fromDate: DateTime, $toDate: DateTime, $limit: Int, $skip: Int) {
+  transcripts(fromDate: $fromDate, toDate: $toDate, limit: $limit, skip: $skip) {
+    id
+    title
+    date
+    dateString
+    organizer_email
+    participants
+    duration
+    transcript_url
+  }
+}
+`;
+
+const FIREFLIES_DETAIL_TRANSCRIPT_QUERY = `
+query TranscriptDetail($transcriptId: String!) {
+  transcript(id: $transcriptId) {
+    id
+    title
+    date
+    dateString
+    organizer_email
+    participants
+    transcript_url
+    duration
+    video_url
+    meeting_link
+    summary {
+      overview
+      action_items
+      short_summary
+      keywords
+      topics_discussed
+      meeting_type
+      outline
+    }
+    sentences {
+      speaker_name
+      text
+      start_time
+      end_time
+    }
+    meeting_attendees {
+      displayName
+      email
+      phoneNumber
+      name
+    }
+    analytics {
+      sentiments {
+        positive_pct
+        neutral_pct
+        negative_pct
+      }
+    }
+  }
+}
+`;
 
 export function createFirefliesProviderAdapter(
   opts: FirefliesProviderAdapterOpts,
@@ -356,11 +438,7 @@ export function createFirefliesProviderAdapter(
     normalize: normalizeFirefliesMeeting,
     async fetchCompletedMeeting(request) {
       if (opts.mode === 'fixture') {
-        const match = (opts.fixture_payloads ?? []).find((payload) => {
-          const raw = asOptionalRecord(payload);
-          const id = optionalString(raw?.id ?? raw?.transcript_id);
-          return id === request.provider_meeting_id;
-        });
+        const match = findFirefliesFixturePayload(opts.fixture_payloads ?? [], request.provider_meeting_id);
         if (!match) {
           throw new Error(
             `fixture Fireflies meeting not found: ${redactSensitiveText(request.provider_meeting_id)}`,
@@ -370,14 +448,35 @@ export function createFirefliesProviderAdapter(
       }
 
       assertFirefliesLiveFetchAllowed(opts);
-      if (!opts.fetch) {
-        throw new MeetingIntelligenceApprovalError(
-          'live Fireflies HTTP fetch is not wired in this candidate; inject an approved fetch implementation at rollout',
-        );
+      if (opts.fetch) return opts.fetch(request, { api_key: opts.api_key!.trim() });
+      return fetchLiveFirefliesTranscriptDetail(opts, request.provider_meeting_id);
+    },
+    async fetchCompletedMeetings(request) {
+      if (opts.mode === 'fixture') {
+        return (opts.fixture_payloads ?? [])
+          .filter((payload) => {
+            const raw = asOptionalRecord(payload);
+            const id = optionalString(raw?.id ?? raw?.transcript_id);
+            if (request.provider_meeting_id && id !== request.provider_meeting_id) return false;
+            if (request.title_match) {
+              const title = optionalString(raw?.title) ?? '';
+              if (!matchesText(title, request.title_match)) return false;
+            }
+            return true;
+          })
+          .slice(0, clampPositiveInt(request.limit, 10, 100));
       }
-      return opts.fetch(request, { api_key: opts.api_key!.trim() });
+      return fetchLiveFirefliesCompletedMeetings(opts, request);
     },
   };
+}
+
+function findFirefliesFixturePayload(payloads: readonly unknown[], providerMeetingId: string): unknown | undefined {
+  return payloads.find((payload) => {
+    const raw = asOptionalRecord(payload);
+    const id = optionalString(raw?.id ?? raw?.transcript_id);
+    return id === providerMeetingId;
+  });
 }
 
 export function assertFirefliesLiveFetchAllowed(
@@ -399,6 +498,204 @@ export function assertFirefliesLiveFetchAllowed(
       'approved live Fireflies fetch received an invalid API key shape; credential value was not printed',
     );
   }
+}
+
+async function fetchLiveFirefliesCompletedMeetings(
+  opts: FirefliesProviderAdapterOpts,
+  request: ProviderCompletedMeetingsFetchRequest,
+): Promise<unknown[]> {
+  assertFirefliesLiveFetchAllowed(opts);
+  if (request.provider_meeting_id) {
+    return [await fetchLiveFirefliesTranscriptDetail(opts, request.provider_meeting_id)];
+  }
+  const fromDate = requireString(request.from_date, 'live Fireflies watch from_date');
+  const limit = clampPositiveInt(request.limit, 10, 100);
+  const listLimit = Math.min(clampPositiveInt(opts.list_limit, FIREFLIES_LIST_LIMIT, FIREFLIES_LIST_LIMIT), limit);
+  const summaries: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  let skip = 0;
+
+  while (summaries.length < limit) {
+    const payload = await runFirefliesGraphql(opts, {
+      operation: 'list',
+      query: FIREFLIES_LIST_TRANSCRIPTS_QUERY,
+      variables: {
+        fromDate,
+        toDate: request.to_date ?? null,
+        limit: listLimit,
+        skip,
+      },
+      api_key: opts.api_key!.trim(),
+    });
+    const data = asOptionalRecord(payload)?.data;
+    const transcripts = asOptionalRecord(data)?.transcripts;
+    if (!Array.isArray(transcripts)) {
+      throw new Error('Fireflies live list returned invalid transcripts payload');
+    }
+    const pageItems = transcripts.filter((item): item is Record<string, unknown> => Boolean(asOptionalRecord(item)));
+    let newItems = 0;
+    for (const item of pageItems) {
+      const id = optionalString(item.id);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      newItems++;
+      if (request.title_match && !matchesText(optionalString(item.title) ?? '', request.title_match)) continue;
+      summaries.push(item);
+      if (summaries.length >= limit) break;
+    }
+    if (pageItems.length < listLimit || newItems === 0) break;
+    skip += listLimit;
+  }
+
+  const details: unknown[] = [];
+  for (const summary of summaries) {
+    const id = requireString(summary.id, 'Fireflies transcript id');
+    const detail = await fetchLiveFirefliesTranscriptDetail(opts, id);
+    if (request.title_match) {
+      const title = optionalString(asOptionalRecord(detail)?.title) ?? '';
+      if (!matchesText(title, request.title_match)) continue;
+    }
+    const meeting = normalizeFirefliesMeeting(detail);
+    if (meeting.transcript.length === 0) continue;
+    details.push(detail);
+    if (details.length >= limit) break;
+  }
+  return details;
+}
+
+async function fetchLiveFirefliesTranscriptDetail(
+  opts: FirefliesProviderAdapterOpts,
+  providerMeetingId: string,
+): Promise<Record<string, unknown>> {
+  assertFirefliesLiveFetchAllowed(opts);
+  const payload = await runFirefliesGraphql(opts, {
+    operation: 'detail',
+    query: FIREFLIES_DETAIL_TRANSCRIPT_QUERY,
+    variables: { transcriptId: providerMeetingId },
+    api_key: opts.api_key!.trim(),
+  });
+  const data = asOptionalRecord(asOptionalRecord(payload)?.data);
+  const transcript = asOptionalRecord(data?.transcript);
+  if (!transcript) {
+    throw new Error(`Fireflies live detail returned no transcript for ${redactSensitiveText(providerMeetingId)}`);
+  }
+  return normalizeFirefliesApiTranscriptPayload(transcript as Record<string, unknown>);
+}
+
+async function runFirefliesGraphql(
+  opts: FirefliesProviderAdapterOpts,
+  request: FirefliesGraphqlRequest,
+): Promise<unknown> {
+  if (opts.fetch_graphql) return opts.fetch_graphql(request);
+  return performFirefliesGraphqlRequest(request);
+}
+
+export async function performFirefliesGraphqlRequest(request: FirefliesGraphqlRequest): Promise<unknown> {
+  const response = await fetch(FIREFLIES_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${request.api_key}`,
+    },
+    body: JSON.stringify({ query: request.query, variables: request.variables }),
+  });
+  if (response.status === 401) {
+    throw new MeetingIntelligenceCredentialError('Fireflies API key rejected; credential value was not printed');
+  }
+  if (response.status === 429) {
+    throw new Error('Fireflies API rate limited; credential value was not printed');
+  }
+  if (!response.ok) {
+    throw new Error(`Fireflies API ${request.operation} request failed with HTTP ${response.status}; credential value was not printed`);
+  }
+  const payload = await response.json();
+  const record = asRecord(payload, 'Fireflies GraphQL response');
+  if (record.errors) {
+    throw new Error(`Fireflies GraphQL ${request.operation} returned errors; credential value was not printed`);
+  }
+  if (!('data' in record)) {
+    throw new Error(`Fireflies GraphQL ${request.operation} returned no data; credential value was not printed`);
+  }
+  return record;
+}
+
+function normalizeFirefliesApiTranscriptPayload(detail: Record<string, unknown>): Record<string, unknown> {
+  const id = requireString(detail.id, 'Fireflies transcript id');
+  const dateMs = optionalNumber(detail.date);
+  const startedAt = optionalString(detail.started_at ?? detail.date_recorded)
+    ?? (dateMs !== undefined ? new Date(dateMs).toISOString() : undefined);
+  const durationSeconds = optionalNumber(detail.duration_seconds)
+    ?? (optionalNumber(detail.duration) !== undefined ? Math.round(optionalNumber(detail.duration)! * 60) : undefined);
+  const organizerEmail = optionalString(detail.organizer_email);
+  return {
+    provider: 'fireflies',
+    id,
+    transcript_id: id,
+    title: stringOr(detail.title, 'Untitled meeting'),
+    started_at: requireString(startedAt, 'Fireflies meeting started_at'),
+    date_recorded: requireString(startedAt, 'Fireflies meeting date_recorded'),
+    duration_seconds: durationSeconds,
+    transcript_url: optionalString(detail.transcript_url),
+    meeting_link: optionalString(detail.meeting_link),
+    video_url: optionalString(detail.video_url),
+    organizer: organizerEmail ? { name: organizerEmail, email: organizerEmail } : undefined,
+    attendees: normalizeFirefliesApiAttendees(detail.meeting_attendees, detail.participants),
+    summary: asOptionalRecord(detail.summary) ?? {},
+    sentences: Array.isArray(detail.sentences) ? detail.sentences : [],
+    metadata: redactRecord({
+      date: detail.date,
+      dateString: detail.dateString,
+      organizer_email: detail.organizer_email,
+      participants: detail.participants,
+      analytics: detail.analytics,
+      provider_shape: 'fireflies_graphql_transcript_detail_v1',
+    }),
+  };
+}
+
+function normalizeFirefliesApiAttendees(attendees: unknown, participants: unknown): MeetingParticipant[] {
+  const seen = new Set<string>();
+  const seenEmails = new Set<string>();
+  const result: MeetingParticipant[] = [];
+  const push = (participant: MeetingParticipant | undefined) => {
+    if (!participant) return;
+    const emailKey = participant.email?.toLowerCase();
+    if (emailKey && seenEmails.has(emailKey)) return;
+    const key = `${participant.name}|${participant.email ?? ''}`.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (emailKey) seenEmails.add(emailKey);
+    result.push(participant);
+  };
+  if (Array.isArray(attendees)) {
+    for (const attendee of attendees) {
+      const row = asOptionalRecord(attendee);
+      if (!row) continue;
+      const email = optionalString(row.email);
+      const name = optionalString(row.displayName ?? row.name ?? row.phoneNumber ?? email);
+      if (name) push(email ? { name, email } : { name });
+    }
+  }
+  if (Array.isArray(participants)) {
+    for (const item of participants) {
+      if (typeof item === 'string') {
+        const label = optionalString(item);
+        if (label) push(label.includes('@') ? { name: label, email: label } : { name: label });
+        continue;
+      }
+      push(normalizeParticipant(item));
+    }
+  }
+  return result;
+}
+
+function matchesText(value: string, query: string): boolean {
+  return value.toLowerCase().includes(query.toLowerCase());
+}
+
+function clampPositiveInt(value: number | undefined, fallback: number, max: number): number {
+  if (!Number.isInteger(value) || value === undefined || value <= 0) return fallback;
+  return Math.min(value, max);
 }
 
 export function resolveMeetingRuntimePaths(
@@ -884,29 +1181,30 @@ export function buildAlexWakeRequestPlan(
     'Treat generated provider summaries and action items as low-trust hints until transcript or human notes support them.',
     'Queue fuzzy identity, money/legal/commercial commitments, and unsupported action ownership for review instead of promoting them.',
   ];
+  const materializeCommand = [
+    'gbrain',
+    'meeting-intelligence',
+    'materialize',
+    '--provider',
+    meeting.provider,
+    '--transcript-id',
+    providerMeetingId,
+    '--source',
+    'default',
+    '--json',
+  ];
   const promptText = [
     'Meeting ingest wake request.',
     `Provider: ${redactSensitiveText(meeting.provider)}`,
     `Provider meeting id: ${providerMeetingId}`,
     `Page slug: ${page.slug}`,
     `Transcript checksum: ${meeting.transcript_checksum}`,
-    'Action: fetch transcript by ledger/provider id, run meeting ingestion + enrichment, write GBrain pages and receipts/readback.',
+    `Action: execute deterministic materialization, then perform only conservative enrichment/review from the materialized pages.`,
+    `Materialize command: ${materializeCommand.join(' ')}`,
     'Guardrails:',
     ...guardrails.map((item) => `- ${item}`),
   ].join('\n');
-  const argv = [
-    'hermes',
-    'chat',
-    '--query',
-    promptText,
-    '--source',
-    'meeting-intelligence',
-    '--quiet',
-    '--skills',
-    'meeting-ingestion,brain-ops',
-    '--toolsets',
-    'gbrain,file,terminal',
-  ];
+  const argv = materializeCommand;
   return {
     wake_key: wakeKey,
     source_id: 'default',

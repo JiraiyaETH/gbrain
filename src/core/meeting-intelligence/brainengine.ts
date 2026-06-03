@@ -122,6 +122,15 @@ export interface ClaimedMeetingWakeRequest {
   command_plan: AlexWakeRequestPlan['command_plan'];
 }
 
+export interface MeetingWakeExecutionResult {
+  wake_request_id: string;
+  ok: boolean;
+  status: number | null;
+  signal: string | null;
+  timed_out?: boolean;
+  error_text?: string;
+}
+
 export async function ensureMeetingIntelligenceSchema(engine: BrainEngine): Promise<void> {
   for (const statement of splitSqlStatements(MEETING_INTELLIGENCE_SCHEMA_SQL)) {
     await engine.executeRaw(statement);
@@ -193,33 +202,36 @@ export async function loadMeetingLedgers(
 
 export async function claimMeetingWakeRequests(
   engine: BrainEngine,
-  opts: { target_profile?: string; limit?: number; dry_run?: boolean } = {},
+  opts: { target_profile?: string; limit?: number; dry_run?: boolean; retry_claimed?: boolean; retry_failed?: boolean } = {},
 ): Promise<ClaimedMeetingWakeRequest[]> {
   await ensureMeetingIntelligenceSchema(engine);
   const targetProfile = opts.target_profile ?? 'alex';
   const limit = Math.max(1, Math.min(opts.limit ?? 3, 20));
+  const statuses = ['pending'];
+  if (opts.retry_claimed) statuses.push('claimed');
+  if (opts.retry_failed) statuses.push('failed');
   const rows = await engine.executeRaw<WakeRow>(
     `SELECT * FROM meeting_wake_requests
-      WHERE source_id = 'default' AND target_profile = $1 AND status = 'pending'
+      WHERE source_id = 'default' AND target_profile = $1 AND status = ANY($2::text[])
       ORDER BY created_at ASC
-      LIMIT $2`,
-    [targetProfile, limit],
+      LIMIT $3`,
+    [targetProfile, statuses, limit],
   );
   const claimed: ClaimedMeetingWakeRequest[] = [];
   for (const row of rows) {
     if (!opts.dry_run) {
       await engine.executeRaw(
         `UPDATE meeting_wake_requests
-           SET status = 'claimed', attempts = attempts + 1, claimed_at = now(), updated_at = now()
-         WHERE id = $1 AND status = 'pending'`,
-        [row.id],
+           SET status = 'claimed', attempts = attempts + 1, claimed_at = now(), updated_at = now(), error_text = NULL
+         WHERE id = $1 AND status = ANY($2::text[])`,
+        [row.id, statuses],
       );
       await engine.executeRaw(
         `UPDATE meeting_ledger
            SET state = 'alex_running', updated_at = now(),
                history_json = history_json || $1::jsonb
-         WHERE id = $2 AND state = 'alex_requested'`,
-        [JSON.stringify([{ from: 'alex_requested', to: 'alex_running', reason: 'wake_claimed_by_hermes_bridge', at: new Date().toISOString() }]), row.ledger_id],
+         WHERE id = $2 AND state IN ('alex_requested', 'alex_failed', 'alex_running')`,
+        [JSON.stringify([{ from: row.status === 'failed' ? 'alex_failed' : 'alex_requested', to: 'alex_running', reason: 'wake_claimed_by_hermes_bridge', at: new Date().toISOString() }]), row.ledger_id],
       );
     }
     const payload = parseJson<AlexWakeRequestPlan>(row.payload_json);
@@ -238,6 +250,63 @@ export async function claimMeetingWakeRequests(
     });
   }
   return claimed;
+}
+
+export async function recordMeetingWakeExecutionResults(
+  engine: BrainEngine,
+  results: readonly MeetingWakeExecutionResult[],
+): Promise<void> {
+  await ensureMeetingIntelligenceSchema(engine);
+  for (const result of results) {
+    const nextStatus = result.ok ? 'done' : 'failed';
+    const errorText = result.ok ? null : (result.error_text ?? (result.timed_out ? 'wake execution timed out' : 'wake execution failed'));
+    await engine.executeRaw(
+      `UPDATE meeting_wake_requests
+         SET status = $2, completed_at = CASE WHEN $2 = 'done' THEN now() ELSE completed_at END,
+             error_text = $3, updated_at = now()
+       WHERE id = $1 AND status = 'claimed'`,
+      [result.wake_request_id, nextStatus, errorText],
+    );
+    if (result.ok) {
+      await engine.executeRaw(
+        `UPDATE meeting_ledger
+           SET state = 'enriched', updated_at = now(),
+               history_json = history_json || $1::jsonb
+         WHERE id = (
+           SELECT ledger_id FROM meeting_wake_requests WHERE id = $2
+         ) AND state = 'alex_running'`,
+        [JSON.stringify([{ from: 'alex_running', to: 'enriched', reason: 'wake_execution_completed', at: new Date().toISOString() }]), result.wake_request_id],
+      );
+      await engine.executeRaw(
+        `INSERT INTO meeting_receipts
+          (source_id, ledger_id, provider, provider_meeting_id, receipt_key, kind, receipt_json)
+         SELECT source_id, ledger_id, provider, provider_meeting_id, $2, 'enrichment_done', $3::jsonb
+           FROM meeting_wake_requests
+          WHERE id = $1
+         ON CONFLICT (source_id, receipt_key) DO NOTHING`,
+        [result.wake_request_id, `enrichment_done:wake:${result.wake_request_id}`, JSON.stringify({ wake_request_id: result.wake_request_id, status: result.status, signal: result.signal })],
+      );
+      continue;
+    }
+    await engine.executeRaw(
+      `UPDATE meeting_ledger
+         SET state = 'alex_failed', updated_at = now(),
+             history_json = history_json || $1::jsonb
+       WHERE id = (
+         SELECT ledger_id FROM meeting_wake_requests WHERE id = $2
+       ) AND state = 'alex_running'`,
+      [JSON.stringify([{ from: 'alex_running', to: 'alex_failed', reason: errorText, at: new Date().toISOString() }]), result.wake_request_id],
+    );
+    await engine.executeRaw(
+      `INSERT INTO meeting_receipts
+        (source_id, ledger_id, provider, provider_meeting_id, receipt_key, kind, receipt_json)
+       SELECT source_id, ledger_id, provider, provider_meeting_id, $2, 'alex_failed', $3::jsonb
+         FROM meeting_wake_requests
+        WHERE id = $1
+       ON CONFLICT (source_id, receipt_key) DO NOTHING`,
+      [result.wake_request_id, `alex_failed:wake:${result.wake_request_id}`, JSON.stringify({ wake_request_id: result.wake_request_id, error_text: errorText, status: result.status, signal: result.signal, timed_out: result.timed_out === true })],
+    );
+  }
 }
 
 async function upsertProviderRecord(engine: BrainEngine, meeting: NormalizedProviderMeeting): Promise<void> {
@@ -321,15 +390,22 @@ async function upsertWakeRequest(
   wake: AlexWakeRequestPlan,
   ledgerId: string,
 ): Promise<number> {
-  const rows = await engine.executeRaw<{ id: string | number }>(
+  const rows = await engine.executeRaw<{ inserted: string | number | boolean }>(
     `INSERT INTO meeting_wake_requests
       (source_id, ledger_id, provider, provider_meeting_id, wake_key, target_profile, status, prompt_text, payload_json)
      VALUES ('default', $1, $2, $3, $4, $5, 'pending', $6, $7::jsonb)
-     ON CONFLICT (source_id, wake_key) DO NOTHING
-     RETURNING id`,
+     ON CONFLICT (source_id, wake_key) DO UPDATE SET
+       target_profile = EXCLUDED.target_profile,
+       prompt_text = EXCLUDED.prompt_text,
+       payload_json = EXCLUDED.payload_json,
+       updated_at = now(),
+       error_text = NULL
+     WHERE meeting_wake_requests.status IN ('pending','claimed','failed')
+     RETURNING (xmax = 0) AS inserted`,
     [ledgerId, wake.provider, wake.provider_meeting_id, wake.wake_key, wake.target_profile, wake.prompt_text, JSON.stringify(wake)],
   );
-  return rows.length;
+  const inserted = rows[0]?.inserted;
+  return inserted === true || inserted === 'true' || inserted === 1 || inserted === '1' ? 1 : 0;
 }
 
 interface MeetingLedgerRow {
@@ -349,6 +425,7 @@ interface WakeRow {
   provider: string;
   provider_meeting_id: string;
   target_profile: string;
+  status: string;
   prompt_text: string;
   payload_json: unknown;
 }

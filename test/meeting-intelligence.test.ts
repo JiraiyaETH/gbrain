@@ -218,6 +218,71 @@ describe('meeting intelligence foundation', () => {
     }
   });
 
+  test('live Fireflies adapter lists then hydrates completed transcript details without leaking credentials', async () => {
+    const apiKey = 'fireflies_live_secret_fixture_123';
+    const calls: Array<{ operation: string; variables: Record<string, unknown>; api_key: string }> = [];
+    const adapter = createFirefliesProviderAdapter({
+      mode: 'live',
+      allow_live_fetch: true,
+      api_key: apiKey,
+      fetch_graphql: async (request) => {
+        calls.push({ operation: request.operation, variables: request.variables, api_key: request.api_key });
+        if (request.operation === 'list') {
+          return {
+            data: {
+              transcripts: [{ id: 'live-eli5defi-0001', title: 'Jiraiya <> Eli5DeFi', date: 1780456200000 }],
+            },
+          };
+        }
+        return {
+          data: {
+            transcript: {
+              id: 'live-eli5defi-0001',
+              title: 'Jiraiya <> Eli5DeFi',
+              date: 1780456200000,
+              dateString: '2026-06-03 11:10 AM',
+              organizer_email: 'jiraiya@example.com',
+              participants: ['jiraiya@example.com', 'eli5defi@example.com'],
+              transcript_url: 'https://app.fireflies.ai/view/live-eli5defi-0001',
+              duration: 31,
+              meeting_link: 'https://meet.google.com/eli-5defi-live',
+              summary: {
+                short_summary: 'Introductory Eli5DeFi conversation.',
+                action_items: ['Generated hint that must remain review-only'],
+                topics_discussed: ['Eli5DeFi', 'Tailored'],
+              },
+              sentences: [
+                { speaker_name: 'Jiraiya', text: 'Fresh live transcript line.', start_time: 0, end_time: 3 },
+                { speaker_name: 'Eli5DeFi', text: 'We should keep this source-backed.', start_time: 4, end_time: 9 },
+              ],
+              meeting_attendees: [
+                { displayName: 'Jiraiya', email: 'jiraiya@example.com' },
+                { displayName: 'Eli5DeFi', email: 'eli5defi@example.com' },
+              ],
+            },
+          },
+        };
+      },
+    });
+
+    const payloads = await adapter.fetchCompletedMeetings!({
+      from_date: '2026-06-03T00:00:00.000Z',
+      to_date: '2026-06-03T23:59:59.000Z',
+      limit: 1,
+      title_match: 'Eli5DeFi',
+    });
+    const meeting = adapter.normalize(payloads[0]);
+
+    expect(calls.map((call) => call.operation)).toEqual(['list', 'detail']);
+    expect(calls.every((call) => call.api_key === apiKey)).toBe(true);
+    expect(meeting.provider_meeting_id).toBe('live-eli5defi-0001');
+    expect(meeting.started_at).toBe('2026-06-03T03:10:00.000Z');
+    expect(meeting.duration_seconds).toBe(1860);
+    expect(meeting.attendees.map((attendee) => attendee.name)).toEqual(['Jiraiya', 'Eli5DeFi']);
+    expect(meeting.transcript).toHaveLength(2);
+    expect(JSON.stringify(payloads)).not.toContain(apiKey);
+  });
+
   test('builds a BrainEngine-ledger runtime receipt with an Alex wake request and no transcript in prompt', () => {
     const meeting = normalizeFirefliesMeeting(fixture.fireflies.completed);
     const runtime = buildMeetingRuntimeRun([meeting], {
@@ -244,9 +309,19 @@ describe('meeting intelligence foundation', () => {
     expect(runtime.write_plans[0]?.mode).toBe('dry_run');
     expect(runtime.enrichment_queue[0]?.reason).toContain('fallback_only');
     expect(runtime.alex_wake_requests[0]?.target_profile).toBe('alex');
+    expect(runtime.alex_wake_requests[0]?.command_plan.argv.slice(0, 6)).toEqual([
+      'gbrain',
+      'meeting-intelligence',
+      'materialize',
+      '--provider',
+      'fireflies',
+      '--transcript-id',
+    ]);
     expect(runtime.alex_wake_requests[0]?.action).toBe('fetch_transcript_by_ledger_provider_id_and_enrich');
+    expect(runtime.alex_wake_requests[0]?.prompt_text).toContain('gbrain meeting-intelligence materialize --provider fireflies --transcript-id');
+    expect(runtime.alex_wake_requests[0]?.prompt_text).toContain('--source default --json');
     expect(runtime.alex_wake_requests[0]?.prompt_text).toContain('Provider meeting id: ff-mtg-0001');
-    expect(runtime.alex_wake_requests[0]?.prompt_text).toContain('fetch transcript by ledger/provider id');
+    expect(runtime.alex_wake_requests[0]?.prompt_text).toContain('Fetch the transcript by provider + provider_meeting_id');
     expect(runtime.alex_wake_requests[0]?.prompt_text).not.toContain('Let\'s review the acme-example follow-up');
     expect(runtime.alex_wake_requests[0]?.prompt_text).not.toContain('enterprise pricing by Friday');
     expect(runtime.review_receipts[0]?.status).toBe('review_queued');
