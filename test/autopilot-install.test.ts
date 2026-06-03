@@ -20,7 +20,11 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { detectInstallTarget } from '../src/commands/autopilot.ts';
+import {
+  buildAutopilotWrapperScript,
+  detectInstallTarget,
+  generateLaunchdPlist,
+} from '../src/commands/autopilot.ts';
 
 let tmp: string;
 const envSnapshot: Record<string, string | undefined> = {};
@@ -86,16 +90,45 @@ describe('detectInstallTarget', () => {
 // exported GBRAIN_DATABASE_URL or {OPENAI,ANTHROPIC}_API_KEY in zshrc and
 // expected autopilot to inherit them hit silent missing-secret failures.
 describe('autopilot wrapper script — env source order (v0.36.1.x #966)', () => {
-  test('wrapper sources ~/.zshenv before ~/.zshrc', async () => {
-    const { readFileSync } = await import('fs');
-    const src = readFileSync('src/commands/autopilot.ts', 'utf8');
+  test('wrapper sources ~/.zshenv before ~/.zshrc', () => {
+    const src = buildAutopilotWrapperScript('/usr/local/bin/gbrain', '/Users/me/brain');
     const zshenvIdx = src.indexOf('~/.zshenv');
     const zshrcIdx = src.indexOf('~/.zshrc');
     expect(zshenvIdx).toBeGreaterThan(0);
     expect(zshrcIdx).toBeGreaterThan(0);
     expect(zshenvIdx).toBeLessThan(zshrcIdx);
-    // Both should appear inside writeWrapperScript's heredoc as `source ~/.foo`
     expect(src).toMatch(/source\s+~\/\.zshenv/);
     expect(src).toMatch(/source\s+~\/\.zshrc/);
+  });
+
+  test('wrapper can pin the runtime binary behind the secret bridge', () => {
+    const src = buildAutopilotWrapperScript('/Users/jarvis/.local/bin/gbrain', '/Users/me/brain', {
+      mode: 'observe-propose',
+      intervalSeconds: 600,
+      runtimeBinOverride: '/Users/jarvis/gbrain-runtime/src/cli.ts',
+    });
+
+    expect(src).toContain("export GBRAIN_BIN='/Users/jarvis/gbrain-runtime/src/cli.ts'");
+    expect(src).toContain("exec '/Users/jarvis/.local/bin/gbrain' autopilot --repo '/Users/me/brain' --interval 600 --no-worker --propose-only --json");
+    expect(src).not.toContain('jobs work');
+    expect(src).not.toContain('dream');
+  });
+});
+
+describe('observe/propose launchd canary plist', () => {
+  test('runs on StartInterval without KeepAlive daemon semantics', () => {
+    const plist = generateLaunchdPlist('/Users/me/.gbrain/autopilot-observe-propose-run.sh', '/Users/me', {
+      label: 'com.gbrain.autopilot.observe-propose',
+      startIntervalSeconds: 600,
+      keepAlive: false,
+      stdoutName: 'autopilot-observe-propose.log',
+      stderrName: 'autopilot-observe-propose.err',
+    });
+
+    expect(plist).toContain('<key>Label</key><string>com.gbrain.autopilot.observe-propose</string>');
+    expect(plist).toContain('<key>StartInterval</key><integer>600</integer>');
+    expect(plist).not.toContain('<key>KeepAlive</key><true/>');
+    expect(plist).toContain('/Users/me/.gbrain/autopilot-observe-propose.log');
+    expect(plist).toContain('/Users/me/.gbrain/autopilot-observe-propose.err');
   });
 });

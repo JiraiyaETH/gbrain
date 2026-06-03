@@ -43,7 +43,7 @@ const CLI_ONLY = new Set(['init', 'reinit-pglite', 'upgrade', 'post-upgrade', 'c
 // per-subcommand usage stays reachable.
 const CLI_ONLY_SELF_HELP = new Set([
   'upgrade', 'post-upgrade', 'check-update',
-  'embed', 'config',
+  'embed', 'config', 'autopilot',
   'skillpack', 'skillpack-check',
   'integrations', 'friction',
   'frontmatter', 'check-resolvable',
@@ -1480,9 +1480,19 @@ async function handleCliOnly(command: string, args: string[]) {
         break;
       }
       case 'autopilot': {
-        const { runAutopilot } = await import('./commands/autopilot.ts');
+        const { isAutopilotProposeOnly, runAutopilot } = await import('./commands/autopilot.ts');
         await runAutopilot(engine, args);
-        return; // autopilot doesn't disconnect (long-running)
+        if (isAutopilotProposeOnly(args)) {
+          // Observe/propose is a deliberate one-shot canary path: it has
+          // already emitted exact proposed job payloads and must exit quietly
+          // for launchd StartInterval use. Supabase/PgBouncer disconnect can
+          // hang after read-only planning; skipping graceful disconnect avoids
+          // a false noisy `[cli] ... force-exiting` warning on every green tick.
+          await new Promise<void>(resolve => process.stdout.write('', () => resolve()));
+          await new Promise<void>(resolve => process.stderr.write('', () => resolve()));
+          process.exit(typeof process.exitCode === 'number' ? process.exitCode : 0);
+        }
+        return; // daemon autopilot disconnects only when the long-running loop ends
       }
       case 'graph-query': {
         const { runGraphQuery } = await import('./commands/graph-query.ts');
