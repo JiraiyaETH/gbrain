@@ -1791,6 +1791,42 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     return await makeEmbedBackfillHandler(engine)(job);
   });
 
+  // v0.42 Calendar Projection migration — protected because it can write
+  // private macOS Calendar-derived source pages. The collector stays outside
+  // OpenClaw; this handler consumes an explicit snapshot and calls the core
+  // BrainEngine ledger/receipt path directly (no CLI wrapper/process.exit).
+  worker.register('calendar_projection_sync', async (job) => {
+    const { runCalendarProjectionSync } = await import('../core/calendar-projection/index.ts');
+    const data = (job.data ?? {}) as {
+      sourceId?: string;
+      snapshot?: unknown;
+      snapshotPath?: string;
+      now?: string;
+      dryRun?: boolean;
+      outputRoot?: string;
+      allowedRoot?: string;
+    };
+    let snapshot = data.snapshot;
+    if (!snapshot && data.snapshotPath) {
+      const { readFile } = await import('node:fs/promises');
+      snapshot = JSON.parse(await readFile(data.snapshotPath, 'utf8')) as unknown;
+    }
+    if (!snapshot) {
+      throw new Error('calendar_projection_sync requires job.data.snapshot or job.data.snapshotPath');
+    }
+    await job.updateProgress?.({ stage: 'calendar_projection_sync', status: 'running' });
+    const result = await runCalendarProjectionSync(engine, {
+      sourceId: data.sourceId ?? 'default',
+      snapshot,
+      now: data.now,
+      dryRun: data.dryRun,
+      outputRoot: data.outputRoot,
+      allowedRoot: data.dryRun ? (data.allowedRoot ?? data.outputRoot) : undefined,
+    });
+    await job.updateProgress?.({ stage: 'calendar_projection_sync', status: result.status, summary: result.summary });
+    return result;
+  });
+
   // v0.41.18.0 (A10, T7): extract-ner handler for the gbrain onboard
   // remediation pipeline. Wraps extractNerLinks; emits typed_ner kind
   // alongside the by-mention 'plain' kind. NOT in PROTECTED_JOB_NAMES

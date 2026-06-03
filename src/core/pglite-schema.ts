@@ -1051,6 +1051,78 @@ CREATE TABLE IF NOT EXISTS meeting_provider_cursors (
 );
 
 -- ============================================================
+-- calendar_projection (v114): EventKit snapshot projection ledger
+-- ============================================================
+-- Mirrors src/schema.sql. PGLite uses the same BrainEngine table shape;
+-- no RLS block is needed in embedded local tests.
+CREATE TABLE IF NOT EXISTS calendar_provider_records (
+  id BIGSERIAL PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE DEFAULT 'default',
+  provider TEXT NOT NULL,
+  provider_event_id TEXT NOT NULL,
+  occurrence_key TEXT NOT NULL,
+  calendar_name TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  start_at TIMESTAMPTZ NOT NULL,
+  end_at TIMESTAMPTZ,
+  event_date DATE NOT NULL,
+  all_day BOOLEAN NOT NULL DEFAULT false,
+  recurring BOOLEAN NOT NULL DEFAULT false,
+  content_checksum TEXT NOT NULL,
+  normalized_json JSONB NOT NULL,
+  provider_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (source_id, provider, occurrence_key)
+);
+CREATE INDEX IF NOT EXISTS calendar_provider_records_date_idx
+  ON calendar_provider_records (source_id, event_date, start_at);
+CREATE INDEX IF NOT EXISTS calendar_provider_records_event_idx
+  ON calendar_provider_records (source_id, provider, provider_event_id);
+
+CREATE TABLE IF NOT EXISTS calendar_day_ledger (
+  id BIGSERIAL PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE DEFAULT 'default',
+  provider TEXT NOT NULL,
+  occurrence_key TEXT NOT NULL,
+  page_slug TEXT NOT NULL,
+  event_date DATE NOT NULL,
+  content_checksum TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('received','page_rendered','page_written','skipped','error')),
+  history_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (source_id, provider, occurrence_key)
+);
+CREATE INDEX IF NOT EXISTS calendar_day_ledger_state_idx
+  ON calendar_day_ledger (source_id, state, updated_at DESC);
+CREATE INDEX IF NOT EXISTS calendar_day_ledger_page_slug_idx
+  ON calendar_day_ledger (source_id, page_slug);
+
+CREATE TABLE IF NOT EXISTS calendar_projection_receipts (
+  id BIGSERIAL PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE DEFAULT 'default',
+  ledger_id BIGINT REFERENCES calendar_day_ledger(id) ON DELETE CASCADE,
+  receipt_key TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('snapshot_seen','page_rendered','page_written','readback_ok','dry_run','error')),
+  page_slug TEXT NOT NULL,
+  receipt_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (source_id, receipt_key)
+);
+CREATE INDEX IF NOT EXISTS calendar_projection_receipts_page_idx
+  ON calendar_projection_receipts (source_id, page_slug, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS calendar_provider_cursors (
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE DEFAULT 'default',
+  provider TEXT NOT NULL,
+  cursor_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (source_id, provider)
+);
+
+-- ============================================================
 -- Trigger-based search_vector (spans pages + timeline_entries)
 -- ============================================================
 ALTER TABLE pages ADD COLUMN IF NOT EXISTS search_vector tsvector;
