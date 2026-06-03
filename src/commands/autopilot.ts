@@ -157,10 +157,44 @@ export function selectDispatchableTargetedSteps(plan: RemediationStep[]): {
   return { dispatch, deferred };
 }
 
+export interface AutopilotFreshnessSource {
+  id: string;
+  local_path: string;
+}
+
+export interface AutopilotFreshnessCandidate {
+  id: string;
+  local_path?: string | null;
+}
+
+export function selectAutopilotFreshnessSources<T extends AutopilotFreshnessCandidate>(
+  sources: T[],
+  sourceId: string,
+  opts: { allSources?: boolean } = {},
+): Array<T & AutopilotFreshnessSource> {
+  return sources.filter((src): src is T & AutopilotFreshnessSource => {
+    return typeof src.local_path === 'string'
+      && src.local_path.length > 0
+      && (opts.allSources === true || src.id === sourceId);
+  });
+}
+
+export function buildAutopilotFreshnessSyncData(src: AutopilotFreshnessSource): Record<string, unknown> {
+  return {
+    sourceId: src.id,
+    repoPath: src.local_path,
+    // Autopilot must not let a freshness sync immediately enqueue the legacy
+    // unbounded embed-backfill shape. The targeted planner submits bounded
+    // source-scoped microbatches after sync has settled.
+    auto_embed_backfill: false,
+    embed_reason: 'autopilot_freshness',
+  };
+}
+
 export async function runAutopilot(engine: BrainEngine, args: string[]) {
   if (args.includes('--help') || args.includes('-h')) {
     console.log(
-      'Usage: gbrain autopilot [--repo <path>] [--interval N] [--json] [--no-worker]\n' +
+      'Usage: gbrain autopilot [--repo <path>] [--interval N] [--json] [--no-worker] [--all-sources]\n' +
       '       gbrain autopilot --install [--repo <path>]\n' +
       '       gbrain autopilot --uninstall\n' +
       '       gbrain autopilot --status [--json]\n\n' +
@@ -190,6 +224,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
   const jsonMode = args.includes('--json');
   const forceInline = args.includes('--inline');
   const noWorker = !shouldSpawnAutopilotWorker(args);
+  const allSources = args.includes('--all-sources');
 
   if (!repoPath) {
     console.error('No repo path. Use --repo or attach a local_path to the default source with `gbrain sources add/default`.');
@@ -489,23 +524,21 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
           const { isFederatedV2Enabled } = await import('../core/feature-flags.ts');
           if (await isFederatedV2Enabled(engine)) {
             const { loadAllSources } = await import('../core/sources-load.ts');
-            const sources = await loadAllSources(engine);
+            const sources = selectAutopilotFreshnessSources(
+              await loadAllSources(engine),
+              sourceId,
+              { allSources },
+            );
             const intervalMs = baseInterval * 1000;
             const now = Date.now();
             for (const src of sources) {
-              if (!src.local_path) continue;
               const lastSyncMs = src.last_sync_at ? new Date(src.last_sync_at).getTime() : 0;
               const ageMs = now - lastSyncMs;
               if (ageMs < intervalMs) continue; // fresh enough
               try {
                 const job = await queue.add(
                   'sync',
-                  {
-                    sourceId: src.id,
-                    repoPath: src.local_path,
-                    auto_embed_backfill: true,
-                    embed_reason: 'autopilot_freshness',
-                  },
+                  buildAutopilotFreshnessSyncData({ id: src.id, local_path: src.local_path }),
                   {
                     queue: 'default',
                     idempotency_key: `autopilot-sync:${src.id}:${slot}`,

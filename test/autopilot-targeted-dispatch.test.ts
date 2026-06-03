@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { selectDispatchableTargetedSteps } from '../src/commands/autopilot.ts';
+import {
+  buildAutopilotFreshnessSyncData,
+  selectAutopilotFreshnessSources,
+  selectDispatchableTargetedSteps,
+} from '../src/commands/autopilot.ts';
 import type { RemediationStep } from '../src/core/remediation-step.ts';
 
 function step(id: string, depends_on: string[] = []): RemediationStep {
@@ -38,5 +42,38 @@ describe('selectDispatchableTargetedSteps', () => {
 
     expect(selected.dispatch.map(s => s.id)).toEqual(['embed.stale']);
     expect(selected.deferred).toEqual([]);
+  });
+
+  test('autopilot freshness sync does not auto-enqueue unbounded embed backfill', () => {
+    const data = buildAutopilotFreshnessSyncData({
+      id: 'default',
+      local_path: '/brain',
+    });
+
+    expect(data).toEqual({
+      sourceId: 'default',
+      repoPath: '/brain',
+      auto_embed_backfill: false,
+      embed_reason: 'autopilot_freshness',
+    });
+  });
+
+  test('repo-scoped autopilot freshness only targets the resolved source by default', () => {
+    const sources = [
+      { id: 'default', local_path: '/brain' },
+      { id: 'gbrain-runtime-code', local_path: '/code' },
+    ];
+
+    expect(selectAutopilotFreshnessSources(sources, 'default').map((s) => s.id)).toEqual(['default']);
+  });
+
+  test('autopilot freshness can still be widened explicitly to all local sources', () => {
+    const sources = [
+      { id: 'default', local_path: '/brain' },
+      { id: 'gbrain-runtime-code', local_path: '/code' },
+    ];
+
+    expect(selectAutopilotFreshnessSources(sources, 'default', { allSources: true }).map((s) => s.id))
+      .toEqual(['default', 'gbrain-runtime-code']);
   });
 });

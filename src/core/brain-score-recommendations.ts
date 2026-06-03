@@ -126,6 +126,9 @@ import type {
 // without a sed pass. New code should reference RemediationStep directly.
 type Remediation = RemediationStep;
 
+export const AUTOPILOT_EMBED_BACKFILL_BATCH_SIZE = 1;
+export const AUTOPILOT_EMBED_BACKFILL_MAX_CHUNKS = 1;
+
 export interface RecommendationContext {
   /** Source id this remediation is scoped to (multi-source brains). */
   sourceId?: string;
@@ -214,10 +217,7 @@ export function computeRecommendations(
   // embed.stale — missing embeddings. Critical: invisible to vector search
   // ---------------------------------------------------------------------
   if (health.missing_embeddings > 0 && ctx.embeddingProviderConfigured !== false) {
-    const params = {
-      sourceId: source,
-      reason: 'autopilot:embed.stale',
-    };
+    const params = embedBackfillMicrobatchParams(source, 'autopilot:embed.stale');
     const embedModel = ctx.embeddingModel ?? 'openai:text-embedding-3-large';
     const embedDims = ctx.embeddingDimensions ?? 3072;
     // Rough char estimate per chunk ~ 1.5k chars (chunker target).
@@ -295,7 +295,23 @@ export function computeRecommendations(
   // extra accidentally duplicates a hardcoded id.
   if (extraRemediations.length > 0) {
     const hardcodedIds = new Set(out.map((r) => r.id));
+    const hardcodedEmbedPlanned = out.some((r) => r.id === 'embed.stale' || r.job === 'embed-backfill');
     for (const extra of extraRemediations) {
+      if (isLegacyEmbedCatchUp(extra)) {
+        // Onboard's legacy catch-up remediation wraps the full CLI catch-up
+        // path. Autopilot/doctor remediation should never reintroduce that
+        // unbounded worker once the source-scoped embed-backfill lane exists.
+        if (hardcodedEmbedPlanned) continue;
+        const params = embedBackfillMicrobatchParams(source, `remediation:${extra.id}`);
+        out.push({
+          ...extra,
+          job: 'embed-backfill',
+          params,
+          idempotency_key: idemKey(source, 'embed-backfill', { ...params, recommendation: extra.id }),
+          rationale: `${extra.rationale} (bounded embed-backfill microbatch)`,
+        });
+        continue;
+      }
       if (!hardcodedIds.has(extra.id)) out.push(extra);
     }
   }
@@ -312,6 +328,19 @@ export function computeRecommendations(
   });
 
   return out;
+}
+
+function embedBackfillMicrobatchParams(source: string, reason: string): Record<string, unknown> {
+  return {
+    sourceId: source,
+    reason,
+    batchSize: AUTOPILOT_EMBED_BACKFILL_BATCH_SIZE,
+    maxChunks: AUTOPILOT_EMBED_BACKFILL_MAX_CHUNKS,
+  };
+}
+
+function isLegacyEmbedCatchUp(step: Remediation): boolean {
+  return step.id === 'onboard.embed_catch_up' || step.job === 'embed-catch-up';
 }
 
 /**

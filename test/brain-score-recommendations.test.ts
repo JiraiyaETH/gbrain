@@ -8,6 +8,7 @@ import {
   HOSTED_EMBED_KEY_CONFIG,
 } from '../src/core/brain-score-recommendations.ts';
 import type { BrainHealth } from '../src/core/types.ts';
+import type { RemediationStep } from '../src/core/remediation-step.ts';
 
 /**
  * v0.40.x — recipe-aware embedding-provider check (shared by doctor +
@@ -112,6 +113,49 @@ describe('computeRecommendations', () => {
     expect(embedRec.job).toBe('embed-backfill');
     expect(embedRec.params.sourceId).toBe('default');
     expect(embedRec.params.reason).toBe('autopilot:embed.stale');
+  });
+
+  test('embed.stale remediation is a bounded microbatch, not an unbounded backfill', () => {
+    const health = makeHealth({ missing_embeddings: 41, brain_score: 85 });
+    const recs = computeRecommendations(health, {
+      repoPath: '/brain',
+      sourceId: 'default',
+      embeddingProviderConfigured: true,
+    });
+    const embedRec = recs.find((r) => r.id === 'embed.stale')!;
+    expect(embedRec.job).toBe('embed-backfill');
+    expect(embedRec.params).toMatchObject({
+      sourceId: 'default',
+      reason: 'autopilot:embed.stale',
+      batchSize: 1,
+      maxChunks: 1,
+    });
+  });
+
+  test('onboard embed catch-up extras do not reintroduce unbounded embedding jobs', () => {
+    const health = makeHealth({ missing_embeddings: 41, brain_score: 85 });
+    const legacyOnboardEmbed: RemediationStep = {
+      id: 'onboard.embed_catch_up',
+      job: 'embed-catch-up',
+      params: { batchSize: 500 },
+      idempotency_key: 'legacy:onboard:embed-catch-up',
+      severity: 'medium',
+      est_seconds: 60,
+      est_usd_cost: 0.01,
+      depends_on: [],
+      rationale: 'legacy onboard catch-up',
+      status: 'remediable',
+    };
+
+    const recs = computeRecommendations(health, {
+      repoPath: '/brain',
+      sourceId: 'default',
+      embeddingProviderConfigured: true,
+    }, [legacyOnboardEmbed]);
+
+    const embedJobs = recs.filter((r) => r.job.includes('embed'));
+    expect(embedJobs.map((r) => r.job)).toEqual(['embed-backfill']);
+    expect(embedJobs[0]?.params).toMatchObject({ batchSize: 1, maxChunks: 1 });
   });
 
   test('missing embeddings + API key absent: NOT emitted (blocked surfaces separately)', () => {
