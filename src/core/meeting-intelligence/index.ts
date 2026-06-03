@@ -1002,6 +1002,7 @@ export function renderMeetingPage(
   const gate = buildEnrichmentGate(meeting);
   const rawProviderIds = opts.raw_provider_ids ?? [meeting.provider_meeting_id];
   const duplicates = opts.duplicates ?? [];
+  const sourceSlug = buildSourcePacketSlug(meeting);
   const compiledTruth = [
     `# ${redactSensitiveText(meeting.title)}`,
     '',
@@ -1010,11 +1011,23 @@ export function renderMeetingPage(
     '- Canonical owner: GBrain meeting intelligence',
     '- GBrain source intent: default',
     `- Provider meeting id: ${redactSensitiveText(meeting.provider_meeting_id)}`,
+    `- Source packet: [Fireflies Source Packet](../${sourceSlug}.md)`,
+    `- Started at: ${meeting.started_at}`,
+    meeting.duration_seconds !== undefined ? `- Duration seconds: ${meeting.duration_seconds}` : '- Duration seconds: unknown',
     `- Transcript checksum: ${meeting.transcript_checksum}`,
     `- Raw provider ids: ${rawProviderIds.map(redactSensitiveText).join(', ')}`,
     duplicates.length > 0
       ? `- Duplicate raw records collapsed: ${duplicates.length}`
       : '- Duplicate raw records collapsed: 0',
+    '',
+    '## Attendees',
+    ...formatMeetingParticipants(meeting),
+    '',
+    '## Provider Summary Hint',
+    ...formatProviderSummaryHint(meeting.generated.summary),
+    '',
+    '## Topics Hinted by Provider',
+    ...formatProviderTopics(meeting.generated.topics),
     '',
     '## Provider Hints Requiring Review',
     ...formatProviderHints(gate.review_queue),
@@ -1084,6 +1097,80 @@ function formatProviderHints(items: readonly ReviewQueueItem[]): string[] {
   if (items.length === 0) return ['- No generated provider action hints captured.'];
   return items.map((item) =>
     `- [${item.status}] ${item.label} (${item.blocked_reason})`);
+}
+
+function formatMeetingParticipants(meeting: NormalizedProviderMeeting): string[] {
+  const seen = new Set<string>();
+  const participants: MeetingParticipant[] = [];
+  const push = (participant: MeetingParticipant | undefined) => {
+    if (!participant) return;
+    const label = optionalString(participant.name);
+    if (!label) return;
+    const key = `${label}|${participant.email ?? ''}`.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    participants.push(participant.email ? { name: label, email: participant.email } : { name: label });
+  };
+
+  push(meeting.organizer);
+  for (const attendee of meeting.attendees) push(attendee);
+  for (const speaker of distinctTranscriptSpeakers(meeting.transcript)) push({ name: speaker });
+
+  if (participants.length === 0) return ['- No attendees captured in provider metadata or transcript speakers.'];
+  return participants.map(formatMeetingParticipant);
+}
+
+function distinctTranscriptSpeakers(transcript: readonly DiarizedTranscriptTurn[]): string[] {
+  const seen = new Set<string>();
+  const speakers: string[] = [];
+  for (const turn of transcript) {
+    const label = optionalString(turn.speaker);
+    if (!label) continue;
+    if (/^unknown[-_\s]?speaker$/i.test(label)) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    speakers.push(label);
+  }
+  return speakers;
+}
+
+function formatMeetingParticipant(participant: MeetingParticipant): string {
+  const label = redactSensitiveText(participant.name);
+  const suffix = participant.email ? ` (${redactSensitiveText(participant.email)})` : '';
+  if (shouldLinkParticipant(label)) {
+    return `- ${formatPersonPageLink(label)}${suffix}`;
+  }
+  return `- ${label}${suffix}`;
+}
+
+function shouldLinkParticipant(label: string): boolean {
+  if (!label || label.includes('@')) return false;
+  if (label.startsWith('<REDACTED:')) return false;
+  return slugifySegment(label).length > 0;
+}
+
+function formatPersonPageLink(label: string): string {
+  return `[${label}](../people/${slugifySegment(label)}.md)`;
+}
+
+function formatProviderSummaryHint(summary: string | undefined): string[] {
+  const redacted = optionalString(summary ? redactSensitiveText(summary) : undefined);
+  if (!redacted) return ['- No provider summary captured.'];
+  return [
+    `- ${redacted}`,
+    '- Boundary: provider-generated summary is a navigation aid, not durable truth until transcript or human notes support it.',
+  ];
+}
+
+function formatProviderTopics(topics: readonly string[]): string[] {
+  const cleaned = [...new Set(topics.map((topic) => optionalString(redactSensitiveText(topic))).filter(Boolean) as string[])];
+  if (cleaned.length === 0) return ['- No provider topics captured.'];
+  return cleaned.map((topic) => `- ${topic}`);
+}
+
+export function buildSourcePacketSlug(meeting: NormalizedProviderMeeting): string {
+  return buildMeetingSlug(meeting).replace(/^meetings\//, `sources/${meeting.provider}/`);
 }
 
 export function buildMeetingSlug(meeting: NormalizedProviderMeeting): string {

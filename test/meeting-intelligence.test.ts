@@ -128,6 +128,13 @@ describe('meeting intelligence foundation', () => {
     );
     expect(page.source_id).toBe('default');
     expect(page.markdown).toContain('gbrain_source_id: default');
+    expect(page.markdown).toContain('## Attendees');
+    expect(page.markdown).toContain('[alice-example](../people/alice-example.md)');
+    expect(page.markdown).toContain('[bob-example](../people/bob-example.md)');
+    expect(page.markdown).toContain('## Provider Summary Hint');
+    expect(page.markdown).toContain('provider-generated summary is a navigation aid');
+    expect(page.markdown).toContain('## Topics Hinted by Provider');
+    expect(page.markdown).toContain('acme-example renewal');
     expect(page.markdown).toContain('## Full Diarized Transcript');
     expect(page.markdown).toContain(
       '**alice-example** (00:00:00): Let\'s review the acme-example follow-up',
