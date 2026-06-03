@@ -1128,6 +1128,7 @@ HANDLER TYPES (built in)
       const { resolveGbrainCliPath } = await import('./autopilot.ts');
 
       const concurrency = parseInt(parseFlag(args, '--concurrency') ?? '2', 10);
+      const lockDuration = resolveWorkerLockDuration(args);
       const queueName = parseFlag(args, '--queue') ?? 'default';
       const maxCrashes = parseInt(parseFlag(args, '--max-crashes') ?? '10', 10);
       // --health-interval (supervisor): validate same as `jobs work` so NaN /
@@ -1204,6 +1205,7 @@ HANDLER TYPES (built in)
         pidFile,
         maxCrashes,
         healthInterval,
+        lockDurationMs: lockDuration,
         cliPath,
         allowShellJobs,
         json: jsonMode,

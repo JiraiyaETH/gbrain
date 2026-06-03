@@ -32,6 +32,8 @@ export interface EmbedStaleOpts {
   batchSize?: number;
   /** Max parallel slug-keys embedded inside a single batch. Default 20. */
   concurrency?: number;
+  /** Hard cap on stale chunks processed in this call. Omit for full catch-up. */
+  maxChunks?: number;
   /** Resume cursor from a prior run. Default: from start. */
   cursor?: StaleCursor;
   /** AbortSignal honored at three sites: batch claim, retry sleep, HTTP body. */
@@ -102,6 +104,9 @@ export async function embedStaleForSource(
 ): Promise<EmbedStaleResult> {
   const batchSize = opts.batchSize ?? 2000;
   const concurrency = opts.concurrency ?? 20;
+  const maxChunks = typeof opts.maxChunks === 'number' && opts.maxChunks > 0
+    ? Math.floor(opts.maxChunks)
+    : undefined;
   const signal = opts.signal;
   const embedFn = opts.embedFn ?? ((texts, fnOpts) =>
     embedBatchWithBackoff(texts, { abortSignal: fnOpts.abortSignal }));
@@ -135,9 +140,16 @@ export async function embedStaleForSource(
       result.aborted = true;
       return result;
     }
+    if (maxChunks !== undefined && result.chunksProcessed >= maxChunks) {
+      return result;
+    }
+
+    const fetchLimit = maxChunks === undefined
+      ? batchSize
+      : Math.min(batchSize, maxChunks - result.chunksProcessed);
 
     const batch = await engine.listStaleChunks({
-      batchSize,
+      batchSize: fetchLimit,
       afterPageId,
       afterChunkIndex,
       sourceId,
@@ -230,7 +242,7 @@ export async function embedStaleForSource(
     }
 
     // Short batch = end of stale set; advance and exit.
-    if (batch.length < batchSize) {
+    if (batch.length < fetchLimit) {
       result.done = true;
       return result;
     }

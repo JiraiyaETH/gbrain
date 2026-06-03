@@ -73,6 +73,8 @@ export interface SupervisorOpts {
   maxCrashes: number;
   /** Health check interval in ms. Default: 60000. */
   healthInterval: number;
+  /** Worker job lock duration in ms (passed to child). Default: 30000. */
+  lockDurationMs: number;
   /** Path to the gbrain CLI executable (MUST be a compiled binary; .ts sources cannot be spawned). */
   cliPath: string;
   /** Allow shell jobs on child worker. Default: false. When true, sets GBRAIN_ALLOW_SHELL_JOBS=1 on child env. */
@@ -108,10 +110,29 @@ const DEFAULTS: Omit<SupervisorOpts, 'cliPath'> = {
   pidFile: DEFAULT_PID_FILE,
   maxCrashes: 10,
   healthInterval: 60_000,
+  lockDurationMs: 30_000,
   allowShellJobs: false,
   json: false,
   maxRssMb: 2048,
 };
+
+export function buildSupervisorWorkerArgs(opts: {
+  concurrency: number;
+  queue: string;
+  lockDurationMs: number;
+  maxRssMb: number;
+}): string[] {
+  const workerArgs = [
+    'jobs', 'work',
+    '--concurrency', String(opts.concurrency),
+    '--queue', opts.queue,
+    '--lock-duration-ms', String(opts.lockDurationMs),
+  ];
+  if (opts.maxRssMb > 0) {
+    workerArgs.push('--max-rss', String(opts.maxRssMb));
+  }
+  return workerArgs;
+}
 
 /** Calculate backoff: 1s, 2s, 4s, 8s, 16s, 32s, 60s cap. */
 export function calculateBackoffMs(crashCount: number): number {
@@ -275,6 +296,7 @@ export class MinionSupervisor {
       concurrency: this.opts.concurrency,
       queue: this.opts.queue,
       max_crashes: this.opts.maxCrashes,
+      lock_duration_ms: this.opts.lockDurationMs,
     });
 
     // 6. Run the supervise loop (respawn on crash, bounded by maxCrashes).
@@ -415,14 +437,12 @@ export class MinionSupervisor {
    * so JSONL audit consumers see byte-compatible output.
    */
   private async runSuperviseLoop(): Promise<void> {
-    const workerArgs = [
-      'jobs', 'work',
-      '--concurrency', String(this.opts.concurrency),
-      '--queue', this.opts.queue,
-    ];
-    if (this.opts.maxRssMb > 0) {
-      workerArgs.push('--max-rss', String(this.opts.maxRssMb));
-    }
+    const workerArgs = buildSupervisorWorkerArgs({
+      concurrency: this.opts.concurrency,
+      queue: this.opts.queue,
+      lockDurationMs: this.opts.lockDurationMs,
+      maxRssMb: this.opts.maxRssMb,
+    });
 
     // Build child env. Explicit handling for GBRAIN_ALLOW_SHELL_JOBS:
     // inherit only when caller opts in, otherwise strip from the clone.

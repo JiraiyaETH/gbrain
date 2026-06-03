@@ -111,6 +111,23 @@ describe('embedStaleForSource', () => {
     expect(batchCount).toBeGreaterThanOrEqual(3);
   });
 
+  test('maxChunks stops after a bounded micro-batch and leaves remaining stale chunks', async () => {
+    await seedPageWithStaleChunks('a', 3);
+    await seedPageWithStaleChunks('b', 3);
+
+    const result = await embedStaleForSource(engine, 'default', {
+      embedFn: fakeEmbedFn,
+      batchSize: 2,
+      maxChunks: 3,
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.aborted).toBe(false);
+    expect(result.embedded).toBe(3);
+    expect(result.chunksProcessed).toBe(3);
+    expect(await engine.countStaleChunks({ sourceId: 'default' })).toBe(3);
+  });
+
   test('IRON-RULE: aborted mid-flight → aborted:true, partial progress preserved', async () => {
     await seedPageWithStaleChunks('a', 4);
     await seedPageWithStaleChunks('b', 4);

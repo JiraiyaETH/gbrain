@@ -45,6 +45,7 @@ const EMBED_BACKFILL_LOCK_TTL_MIN = 60;
 export interface EmbedBackfillJobData {
   sourceId: string;
   batchSize?: number;
+  maxChunks?: number;
   /** Audit string from the submitter (e.g. 'webhook', 'federation_flip'). */
   reason?: string;
 }
@@ -84,16 +85,20 @@ function parseParams(data: Record<string, unknown>): EmbedBackfillJobData {
     typeof data.batchSize === 'number' && data.batchSize > 0
       ? data.batchSize
       : undefined;
+  const maxChunks =
+    typeof data.maxChunks === 'number' && data.maxChunks > 0
+      ? Math.floor(data.maxChunks)
+      : undefined;
   const reason =
     typeof data.reason === 'string' ? data.reason : undefined;
-  return { sourceId, batchSize, reason };
+  return { sourceId, batchSize, maxChunks, reason };
 }
 
 export function makeEmbedBackfillHandler(engine: BrainEngine) {
   return async function embedBackfillHandler(
     job: MinionJobContext,
   ): Promise<EmbedBackfillResult> {
-    const { sourceId, batchSize } = parseParams(job.data);
+    const { sourceId, batchSize, maxChunks } = parseParams(job.data);
 
     // D2: per-source lock at handler entry. The submit-side cooldown (D19)
     // prevents most contention but this is the run-side safety net.
@@ -123,6 +128,7 @@ export function makeEmbedBackfillHandler(engine: BrainEngine) {
       const result = await withBudgetTracker(tracker, async () =>
         embedStaleForSource(engine, sourceId, {
           batchSize,
+          maxChunks,
           signal: job.signal,
           // v0.41.31: re-embed pages whose model signature drifted + stamp
           // provenance as chunks land.
