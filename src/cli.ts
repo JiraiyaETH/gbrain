@@ -2077,7 +2077,7 @@ LINKS
   graph-query <slug> [--type T]      Edge-based traversal with type/direction filters
         [--depth N] [--direction in|out|both]
   link-hygiene [--source-id ID]      Scan/downgrade inferred typed-link pollution
-        [--grep TEXT] [--limit N] [--apply --yes] [--json]
+        [--grep TEXT] [--reason CODE] [--limit N] [--apply --yes] [--json]
 
 TAGS
   tags <slug>                        List tags

@@ -34,6 +34,7 @@ export interface LinkHygieneIssue {
 export interface LinkHygieneOptions {
   sourceId?: string;
   grep?: string;
+  reason?: string;
   limit?: number;
   apply?: boolean;
   yes?: boolean;
@@ -62,7 +63,7 @@ function matchesGrep(row: ExistingLinkRow, grep?: string): boolean {
 
 export function collectInvalidGraphLinks(
   rows: ExistingLinkRow[],
-  opts: Pick<LinkHygieneOptions, 'grep' | 'limit'> = {},
+  opts: Pick<LinkHygieneOptions, 'grep' | 'reason' | 'limit'> = {},
 ): LinkHygieneIssue[] {
   const out: LinkHygieneIssue[] = [];
   for (const row of rows) {
@@ -86,6 +87,7 @@ export function collectInvalidGraphLinks(
     });
 
     if (decision.action !== 'downgrade_to_mentions') continue;
+    if (opts.reason && decision.reasonCode !== opts.reason) continue;
     out.push({
       from_slug: row.from_slug,
       from_source_id: row.from_source_id,
@@ -218,6 +220,7 @@ function parseArgs(args: string[]): { opts: LinkHygieneOptions; json: boolean } 
     else if (arg === '--yes') opts.yes = true;
     else if (arg === '--source-id' || arg === '--source') opts.sourceId = args[++i];
     else if (arg === '--grep') opts.grep = args[++i];
+    else if (arg === '--reason') opts.reason = args[++i];
     else if (arg === '--limit') {
       const n = Number.parseInt(args[++i] ?? '', 10);
       if (!Number.isFinite(n) || n < 1) throw new Error('--limit must be a positive integer');
@@ -233,8 +236,8 @@ function parseArgs(args: string[]): { opts: LinkHygieneOptions; json: boolean } 
 }
 
 function printHelp(): void {
-  console.log(`Usage: gbrain link-hygiene [--source-id ID] [--grep TEXT] [--limit N] [--json]
-       gbrain link-hygiene --apply --yes [--source-id ID] [--grep TEXT] [--limit N] [--json]
+  console.log(`Usage: gbrain link-hygiene [--source-id ID] [--grep TEXT] [--reason CODE] [--limit N] [--json]
+       gbrain link-hygiene --apply --yes [--source-id ID] [--grep TEXT] [--reason CODE] [--limit N] [--json]
 
 Scan existing graph rows against the current link ontology policy. Dry-run by
 default. --apply downgrades invalid inferred typed rows to weak mentions, while

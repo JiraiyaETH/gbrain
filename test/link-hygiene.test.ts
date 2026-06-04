@@ -67,4 +67,21 @@ describe('link hygiene scanner', () => {
 
     expect(issues).toEqual([]);
   });
+
+  test('filters issues by reason for narrow safe apply passes', () => {
+    const issues = collectInvalidGraphLinks([
+      row({ to_slug: 'projects/consortium/consortium', to_page_type: 'project', context: '## Topics - Consortium' }),
+      row({
+        from_slug: 'people/partner',
+        from_page_type: 'person',
+        to_slug: 'companies/acme',
+        to_page_type: 'company',
+        link_type: 'invested_in',
+        context: 'Auto-inferred investment sentence from old extraction.',
+      }),
+    ], { reason: 'attended_shape_downgraded' });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0].reason_code).toBe('attended_shape_downgraded');
+  });
 });
