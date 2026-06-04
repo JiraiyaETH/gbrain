@@ -491,7 +491,8 @@ export function extractTimelineFromContent(content: string, slug: string): Extra
 export function shouldExtractTimelineForPage(slug: string, content: string, title?: string): boolean {
   const lowerSlug = slug.toLowerCase();
   const basename = lowerSlug.split('/').pop() ?? lowerSlug;
-  if (basename === 'resolver') return false;
+  if (basename === 'resolver' || lowerSlug === 'schema') return false;
+  if (/^(inbox|sources|attachments|archive|test)\//.test(lowerSlug) || lowerSlug.includes('/.raw/')) return false;
   if (basename !== 'readme') return true;
   const header = `${title ?? ''}\n${content.slice(0, 1200)}`;
   return !/(^|\n)\s*(title:\s*.*resolver|#\s+.*resolver)\b/i.test(header);

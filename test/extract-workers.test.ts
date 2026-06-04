@@ -11,6 +11,7 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
+import { shouldExtractTimelineForPage } from '../src/commands/extract.ts';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const EXTRACT_SRC = readFileSync(
@@ -91,5 +92,22 @@ describe('extract.ts → workers wiring (T7)', () => {
     expect(EXTRACT_SRC).toMatch(
       /runExtractCore\(engine,\s*\{[\s\S]*?workers,[\s\S]*?\}\)/,
     );
+  });
+});
+
+describe('timeline extraction page gating', () => {
+  test('blocks raw/review/provenance surfaces from durable timeline rows', () => {
+    expect(shouldExtractTimelineForPage('inbox/raw-capture', '- **2026-06-04** | raw')).toBe(false);
+    expect(shouldExtractTimelineForPage('sources/fireflies/meeting-source', '- **2026-06-04** | source')).toBe(false);
+    expect(shouldExtractTimelineForPage('attachments/doc', '- **2026-06-04** | attachment')).toBe(false);
+    expect(shouldExtractTimelineForPage('archive/old-note', '- **2026-06-04** | archive')).toBe(false);
+    expect(shouldExtractTimelineForPage('test/fixture', '- **2026-06-04** | fixture')).toBe(false);
+    expect(shouldExtractTimelineForPage('schema', '- **2026-01-01** | example event')).toBe(false);
+    expect(shouldExtractTimelineForPage('projects/foo/.raw/source', '- **2026-06-04** | raw')).toBe(false);
+  });
+
+  test('keeps semantic project/entity pages timeline-extractable', () => {
+    expect(shouldExtractTimelineForPage('projects/consortium/consortium', '- **2026-06-04** | real event')).toBe(true);
+    expect(shouldExtractTimelineForPage('people/jiraiya', '- **2026-06-04** | real event')).toBe(true);
   });
 });

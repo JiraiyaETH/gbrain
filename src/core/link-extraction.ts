@@ -27,7 +27,7 @@ import type { PageType } from './types.ts';
  * OR updated_at > links_extracted_at`. It is an ISO-8601 string (NOT a number) —
  * the column is TIMESTAMPTZ and the predicate binds it as `::timestamptz`.
  */
-export const LINK_EXTRACTOR_VERSION_TS = '2026-06-04T06:20:00Z';
+export const LINK_EXTRACTOR_VERSION_TS = '2026-06-04T07:35:00Z';
 
 // ─── Entity references ──────────────────────────────────────────
 
@@ -377,6 +377,10 @@ export async function extractPageLinks(
   pageType: PageType,
   resolver: SlugResolver,
 ): Promise<PageLinksResult> {
+  if (!shouldExtractLinksForPage(slug)) {
+    return { candidates: [], unresolved: [] };
+  }
+
   const candidates: LinkCandidate[] = [];
 
   // 1. Markdown entity refs.
@@ -536,9 +540,11 @@ export function inferLinkType(pageType: PageType, context: string, globalContext
   // path-proximity helper, not by markdown extraction — but the type is
   // declared here so graph-query knows the edge name.
   if ((pageType as string) === 'image') return 'image_of';
-  if ((pageType as string) === 'meeting') return 'attended';
+  if ((pageType as string) === 'meeting') return targetSlug?.startsWith('people/') ? 'attended' : 'mentions';
   // Per-edge verb rules.
-  if (FOUNDED_RE.test(context)) return 'founded';
+  if (FOUNDED_RE.test(context)) {
+    return isPersonCompanyCandidate(pageType, targetSlug) || (!targetSlug && pageType === 'person') ? 'founded' : 'mentions';
+  }
   if (isPersonCompanyCandidate(pageType, targetSlug) && hasCreatorForEvidence(context)) return 'creator_for';
   if (isPersonCompanyCandidate(pageType, targetSlug) && WARM_PATH_RE.test(context)) return 'warm_path_to';
   if (ADVISES_RE.test(context)) return 'advises';
@@ -549,6 +555,13 @@ export function inferLinkType(pageType: PageType, context: string, globalContext
   void globalContext;
   void targetSlug;
   return 'mentions';
+}
+
+export function shouldExtractLinksForPage(slug: string): boolean {
+  // Inbox pages are triage/review surfaces. They should remain exact-readable
+  // and promotable, but raw captures must not create durable graph edges before
+  // an operator or promotion flow turns them into semantic pages.
+  return !slug.startsWith('inbox/');
 }
 
 // ─── Frontmatter link extraction (v0.13) ────────────────────────

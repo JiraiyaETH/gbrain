@@ -8,6 +8,7 @@ import {
   makeResolver,
   parseTimelineEntries,
   isAutoLinkEnabled,
+  shouldExtractLinksForPage,
   FRONTMATTER_LINK_MAP,
   type SlugResolver,
 } from '../src/core/link-extraction.ts';
@@ -181,13 +182,37 @@ describe('extractPageLinks', () => {
     const aliceLink = candidates.find(c => c.targetSlug === 'people/alice');
     expect(aliceLink!.linkType).toBe('attended');
   });
+
+  test('meeting page non-person references stay mentions, not attended', async () => {
+    const { candidates } = await extractPageLinks(
+      'meetings/x',
+      'Topics: [Consortium](projects/consortium/consortium), [Tailored](companies/tailored-studios).',
+      {}, 'meeting' as never, nullResolver,
+    );
+    expect(candidates.find(c => c.targetSlug === 'projects/consortium/consortium')!.linkType).toBe('mentions');
+    expect(candidates.find(c => c.targetSlug === 'companies/tailored-studios')!.linkType).toBe('mentions');
+  });
+
+  test('inbox pages do not emit graph links until promoted out of triage', async () => {
+    const { candidates } = await extractPageLinks(
+      'inbox/2026-06-04-capture',
+      'Raw triage note mentioning [Alice](people/alice) and [Acme](companies/acme).',
+      {}, 'note', nullResolver,
+    );
+    expect(candidates).toEqual([]);
+  });
 });
 
 // ─── inferLinkType ─────────────────────────────────────────────
 
 describe('inferLinkType', () => {
   test('meeting + person ref -> attended', () => {
-    expect(inferLinkType('meeting', 'Attendees: Alice')).toBe('attended');
+    expect(inferLinkType('meeting', 'Attendees: Alice', undefined, 'people/alice')).toBe('attended');
+  });
+
+  test('meeting + non-person ref -> mentions', () => {
+    expect(inferLinkType('meeting', 'Topics: Consortium', undefined, 'projects/consortium/consortium')).toBe('mentions');
+    expect(inferLinkType('meeting', 'See Also: Tailored Studios', undefined, 'companies/tailored-studios')).toBe('mentions');
   });
 
   test('CEO of -> works_at', () => {
@@ -204,6 +229,11 @@ describe('inferLinkType', () => {
 
   test('founded -> founded', () => {
     expect(inferLinkType('person', 'Alice founded NovaPay.')).toBe('founded');
+  });
+
+  test('founded language only creates founded on person-company edges', () => {
+    expect(inferLinkType('company', 'Founded by Grant Shears.', undefined, 'people/grant-shears')).toBe('mentions');
+    expect(inferLinkType('company', 'Waj said he co-founded Spreads in this meeting.', undefined, 'meetings/waj-call')).toBe('mentions');
   });
 
   test('co-founded -> founded', () => {
@@ -502,6 +532,17 @@ describe('isAutoLinkEnabled', () => {
   test('garbage value -> true (fail-safe to default)', async () => {
     const engine = makeFakeEngine(new Map([['auto_link', 'garbage']]));
     expect(await isAutoLinkEnabled(engine)).toBe(true);
+  });
+});
+
+describe('shouldExtractLinksForPage', () => {
+  test('blocks inbox triage pages from graph-link extraction', () => {
+    expect(shouldExtractLinksForPage('inbox/raw-capture')).toBe(false);
+  });
+
+  test('keeps source and durable semantic pages extractable', () => {
+    expect(shouldExtractLinksForPage('sources/fireflies/meeting-source')).toBe(true);
+    expect(shouldExtractLinksForPage('projects/consortium/consortium')).toBe(true);
   });
 });
 
