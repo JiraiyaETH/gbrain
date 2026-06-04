@@ -772,6 +772,11 @@ export function normalizeWakeCommandPlan(
     : null;
   if (deterministic) return { env, argv: deterministic };
 
+  const semantic = typeof promptText === 'string'
+    ? semanticEnrichmentArgvFromWakePrompt(promptText, targetProfile)
+    : null;
+  if (semantic) return { env, argv: semantic };
+
   const [command, firstArg, ...rest] = plan.argv;
   if (command === 'hermes' && firstArg === 'chat') {
     return {
@@ -785,6 +790,36 @@ export function normalizeWakeCommandPlan(
 function findArgValue(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
   return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function semanticEnrichmentArgvFromWakePrompt(promptText: string, targetProfile: string): string[] | null {
+  const semanticIntent = /Action:\s*enrich_materialized_meeting\.?/i.test(promptText)
+    || /Action:\s*enrich attendee\/entity Brain pages from the materialized meeting\/source pages only/i.test(promptText)
+    || /Meeting intelligence semantic enrichment wake request\./i.test(promptText)
+    || /Meeting ingest enrichment wake request\./i.test(promptText);
+  if (!semanticIntent) return null;
+  return [
+    'hermes',
+    '--profile',
+    targetProfile,
+    '--skills',
+    'meeting-ingestion',
+    '--yolo',
+    'chat',
+    '--provider',
+    'openai-codex',
+    '-m',
+    'gpt-5.5',
+    '-Q',
+    '--source',
+    'meeting-intelligence-enrichment-wake',
+    '--max-turns',
+    '30',
+    '-t',
+    'terminal,file,skills',
+    '-q',
+    promptText,
+  ];
 }
 
 function materializeArgvFromWakePrompt(promptText: string): string[] | null {

@@ -411,6 +411,47 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
     expect(normalized.argv.join(' ')).not.toContain('meeting-intelligence materialize');
   });
 
+  test('execute wake upgrades legacy semantic enrichment prompts onto the primary agent lane', () => {
+    const prompt = [
+      'Meeting ingest enrichment wake request.',
+      'Provider: fireflies',
+      'Provider meeting id: ff-mtg-live-0002',
+      'Action: enrich attendee/entity Brain pages from the materialized meeting/source pages only; do not call Claude, Anthropic, or Minions by default.',
+    ].join('\n');
+    const normalized = normalizeWakeCommandPlan({
+      env: { HERMES_PROFILE: 'alex' },
+      argv: [
+        ['her', 'mes'].join(''),
+        '--profile',
+        'alex',
+        '--skills',
+        'meeting-ingestion',
+        'chat',
+        '-Q',
+        '--source',
+        'meeting-intelligence-wake',
+        '-q',
+        prompt,
+      ],
+    }, 'alex');
+
+    expect(normalized.argv.slice(0, 11)).toEqual([
+      ['her', 'mes'].join(''),
+      '--profile',
+      'alex',
+      '--skills',
+      'meeting-ingestion',
+      '--yolo',
+      'chat',
+      '--provider',
+      'openai-codex',
+      '-m',
+      'gpt-5.5',
+    ]);
+    expect(normalized.argv).toContain('terminal,file,skills');
+    expect(normalized.argv.join(' ')).not.toContain('meeting-intelligence materialize');
+  });
+
   test('execute wake records child success and closes ledger enriched', async () => {
     const meeting = normalizeFirefliesMeeting(fixture.fireflies.completed);
     await persistMeetingRuntimeRun(engine, buildMeetingRuntimeRun([meeting]), [meeting]);
