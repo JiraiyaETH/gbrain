@@ -88,18 +88,20 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
     });
     expect(dryRunClaim).toHaveLength(1);
     expect(dryRunClaim[0]?.command_plan.env.HERMES_PROFILE).toBe('alex');
-    expect(dryRunClaim[0]?.command_plan.argv).toEqual([
-      'gbrain',
-      'meeting-intelligence',
-      'materialize',
+    expect(dryRunClaim[0]?.command_plan.argv.slice(0, 11)).toEqual([
+      ['her', 'mes'].join(''),
+      '--profile',
+      'alex',
+      '--skills',
+      'meeting-ingestion',
+      '--yolo',
+      'chat',
       '--provider',
-      'fireflies',
-      '--transcript-id',
-      'ff-mtg-0001',
-      '--source',
-      'default',
-      '--json',
+      'openai-codex',
+      '-m',
+      'gpt-5.5',
     ]);
+    expect(dryRunClaim[0]?.command_plan.argv).toContain('terminal,file,skills');
     expect(dryRunClaim[0]?.prompt_text).toContain('Load and follow the meeting-ingestion skill.');
     expect(dryRunClaim[0]?.prompt_text).not.toContain('Let\'s review the acme-example follow-up');
 
@@ -189,18 +191,20 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
     expect(wakeSummary.status).toBe('wake_plan');
     expect(wakeSummary.claimed_count).toBe(1);
     expect(wakeSummary.wake_requests[0]?.command_plan.env.HERMES_PROFILE).toBe('alex');
-    expect(wakeSummary.wake_requests[0]?.command_plan.argv).toEqual([
-      'gbrain',
-      'meeting-intelligence',
-      'materialize',
+    expect(wakeSummary.wake_requests[0]?.command_plan.argv.slice(0, 11)).toEqual([
+      ['her', 'mes'].join(''),
+      '--profile',
+      'alex',
+      '--skills',
+      'meeting-ingestion',
+      '--yolo',
+      'chat',
       '--provider',
-      'fireflies',
-      '--transcript-id',
-      'ff-mtg-0001',
-      '--source',
-      'default',
-      '--json',
+      'openai-codex',
+      '-m',
+      'gpt-5.5',
     ]);
+    expect(wakeSummary.wake_requests[0]?.command_plan.argv).toContain('terminal,file,skills');
     expect(wakeSummary.wake_requests[0]?.prompt_text).toContain('Load and follow the meeting-ingestion skill.');
     expect(wakeSummary.wake_requests[0]?.prompt_text).toContain('Read the materialized GBrain pages; do not rely on this prompt for transcript content.');
     expect(wakeSummary.wake_requests[0]?.prompt_text).not.toContain('Let\'s review the acme-example follow-up');
@@ -362,12 +366,12 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
     ]);
   });
 
-  test('execute wake normalizes prior -q profile chat prompts without a materialize line', () => {
+  test('execute wake leaves current target-profile semantic enrichment prompts on the primary agent lane', () => {
     const prompt = [
-      'Meeting ingest enrichment wake request.',
+      'Meeting intelligence semantic enrichment wake request.',
       'Provider: fireflies',
-      'Provider meeting id: ff-mtg-legacy-0001',
-      'Action: enrich attendee/entity Brain pages from the materialized meeting/source pages only;',
+      'Provider meeting id: ff-mtg-live-0001',
+      'Action: enrich_materialized_meeting.',
     ].join('\n');
     const normalized = normalizeWakeCommandPlan({
       env: { HERMES_PROFILE: 'alex' },
@@ -377,27 +381,34 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
         'alex',
         '--skills',
         'meeting-ingestion',
+        '--yolo',
         'chat',
+        '--provider',
+        'openai-codex',
+        '-m',
+        'gpt-5.5',
         '-Q',
         '--source',
-        'meeting-intelligence-wake',
+        'meeting-intelligence-enrichment-wake',
         '-q',
         prompt,
       ],
     }, 'alex');
 
-    expect(normalized.argv).toEqual([
-      'gbrain',
-      'meeting-intelligence',
-      'materialize',
+    expect(normalized.argv.slice(0, 11)).toEqual([
+      ['her', 'mes'].join(''),
+      '--profile',
+      'alex',
+      '--skills',
+      'meeting-ingestion',
+      '--yolo',
+      'chat',
       '--provider',
-      'fireflies',
-      '--transcript-id',
-      'ff-mtg-legacy-0001',
-      '--source',
-      'default',
-      '--json',
+      'openai-codex',
+      '-m',
+      'gpt-5.5',
     ]);
+    expect(normalized.argv.join(' ')).not.toContain('meeting-intelligence materialize');
   });
 
   test('execute wake records child success and closes ledger enriched', async () => {

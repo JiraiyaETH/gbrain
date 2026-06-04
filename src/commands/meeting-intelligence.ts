@@ -793,6 +793,10 @@ function materializeArgvFromWakePrompt(promptText: string): string[] | null {
   );
   if (explicit?.[1]) return explicit[1].trim().split(/\s+/);
 
+  const legacyMaterializeIntent = /Action:\s*fetch_transcript_by_ledger_provider_id_and_enrich/i.test(promptText)
+    || /Meeting ingest wake request\./i.test(promptText);
+  if (!legacyMaterializeIntent) return null;
+
   const provider = promptText.match(/(?:^|\n)Provider:\s*([^\n\s]+)/)?.[1]?.trim();
   const transcriptId = promptText.match(/(?:^|\n)Provider meeting id:\s*([^\n\s]+)/)?.[1]?.trim();
   if (!provider || !transcriptId) return null;

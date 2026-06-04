@@ -205,7 +205,7 @@ export interface AlexWakeRequestPlan {
   source_slug: string;
   transcript_checksum: string;
   source_checksum: string;
-  action: 'fetch_transcript_by_ledger_provider_id_and_enrich';
+  action: 'enrich_materialized_meeting';
   prompt_text: string;
   payload: {
     kind: 'meeting_ingest_wake_request';
@@ -214,7 +214,7 @@ export interface AlexWakeRequestPlan {
     page_slug: string;
     source_slug: string;
     transcript_checksum: string;
-    action: 'fetch_transcript_by_ledger_provider_id_and_enrich';
+    action: 'enrich_materialized_meeting';
     guardrails: string[];
   };
   command_plan: {
@@ -1265,39 +1265,51 @@ export function buildAlexWakeRequestPlan(
   ].join('|'));
   const providerMeetingId = redactSensitiveText(meeting.provider_meeting_id);
   const sourceSlug = page.slug.replace(/^meetings\//, `sources/${meeting.provider}/`);
-  const materializeArgv = [
-    'gbrain',
-    'meeting-intelligence',
-    'materialize',
-    '--provider',
-    meeting.provider,
-    '--transcript-id',
-    providerMeetingId,
-    '--source',
-    'default',
-    '--json',
-  ];
   const guardrails = [
     'Read the materialized GBrain pages; do not rely on this prompt for transcript content.',
     'Write durable meeting/source/person/company knowledge only to GBrain source_id=default.',
     'Treat generated provider summaries and action items as low-trust hints until transcript or human notes support them.',
     'Queue fuzzy identity, money/legal/commercial commitments, and unsupported action ownership for review instead of promoting them.',
     'Capture changed pages back to GBrain, read them back, and record receipts before closing the wake.',
+    'Do not call Claude, Anthropic, or Minions by default; this semantic enrichment wake is the Alex/GPT-5.5 lane.',
   ];
   const promptText = [
-    'Meeting ingest enrichment wake request.',
+    'Meeting intelligence semantic enrichment wake request.',
     'Load and follow the meeting-ingestion skill.',
+    'You are Alex running on GPT-5.5 via Jiraiya\'s subscription. This is the semantic enrichment stage, not the deterministic materializer stage.',
     `Provider: ${redactSensitiveText(meeting.provider)}`,
     `Provider meeting id: ${providerMeetingId}`,
     `Meeting page: ${page.slug}`,
     `Source packet: ${sourceSlug}`,
     `Transcript checksum: ${meeting.transcript_checksum}`,
-    `Materialize command: ${materializeArgv.join(' ')}`,
-    'Action: enrich attendee/entity Brain pages from the materialized meeting/source pages only; do not call Claude, Anthropic, or Minions by default.',
+    'Action: enrich_materialized_meeting.',
+    'Read the Meeting Page and Source Packet from GBrain default, then update durable people/company/project pages conservatively with transcript-backed deltas only.',
     'Extraction lenses: identity, origin/current location, family/language context, travel context, working style, content direction, commercial signals, follow-ups, review-only risks.',
     'Guardrails:',
     ...guardrails.map((item) => `- ${item}`),
   ].join('\n');
+  const argv = [
+    'hermes',
+    '--profile',
+    targetProfile,
+    '--skills',
+    'meeting-ingestion',
+    '--yolo',
+    'chat',
+    '--provider',
+    'openai-codex',
+    '-m',
+    'gpt-5.5',
+    '-Q',
+    '--source',
+    'meeting-intelligence-enrichment-wake',
+    '--max-turns',
+    '30',
+    '-t',
+    'terminal,file,skills',
+    '-q',
+    promptText,
+  ];
   return {
     wake_key: wakeKey,
     source_id: 'default',
@@ -1309,7 +1321,7 @@ export function buildAlexWakeRequestPlan(
     source_slug: sourceSlug,
     transcript_checksum: meeting.transcript_checksum,
     source_checksum: meeting.source_checksum,
-    action: 'fetch_transcript_by_ledger_provider_id_and_enrich',
+    action: 'enrich_materialized_meeting',
     prompt_text: promptText,
     payload: {
       kind: 'meeting_ingest_wake_request',
@@ -1318,12 +1330,12 @@ export function buildAlexWakeRequestPlan(
       page_slug: page.slug,
       source_slug: sourceSlug,
       transcript_checksum: meeting.transcript_checksum,
-      action: 'fetch_transcript_by_ledger_provider_id_and_enrich',
+      action: 'enrich_materialized_meeting',
       guardrails,
     },
     command_plan: {
       env: { HERMES_PROFILE: targetProfile, GBRAIN_HOME: DEFAULT_RUNTIME_HOME },
-      argv: materializeArgv,
+      argv,
     },
   };
 }

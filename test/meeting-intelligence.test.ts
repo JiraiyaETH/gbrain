@@ -317,33 +317,36 @@ describe('meeting intelligence foundation', () => {
     expect(runtime.enrichment_queue[0]?.reason).toContain('fallback_only');
     expect(runtime.alex_wake_requests[0]?.target_profile).toBe('alex');
     const wake = runtime.alex_wake_requests[0]!;
-    expect(wake.command_plan.argv).toEqual([
-      'gbrain',
-      'meeting-intelligence',
-      'materialize',
-      '--provider',
-      'fireflies',
-      '--transcript-id',
-      'ff-mtg-0001',
-      '--source',
-      'default',
-      '--json',
-    ]);
-    const forbiddenRuntimeWords = [
+    expect(wake.command_plan.argv.slice(0, 11)).toEqual([
       ['her', 'mes'].join(''),
+      '--profile',
+      'alex',
+      '--skills',
+      'meeting-ingestion',
+      '--yolo',
       'chat',
+      '--provider',
+      'openai-codex',
+      '-m',
+      'gpt-5.5',
+    ]);
+    expect(wake.command_plan.argv).toContain('terminal,file,skills');
+    const forbiddenRuntimeWords = [
       ['cla', 'ude'].join(''),
       ['anth', 'ropic'].join(''),
       ['min', 'ion'].join(''),
     ];
-    expect(wake.command_plan.argv.join(' ')).not.toMatch(new RegExp(forbiddenRuntimeWords.join('|'), 'i'));
-    expect(runtime.alex_wake_requests[0]?.action).toBe('fetch_transcript_by_ledger_provider_id_and_enrich');
+    const commandOnly = wake.command_plan.argv.slice(0, wake.command_plan.argv.indexOf('-q')).join(' ');
+    expect(commandOnly).not.toMatch(new RegExp(forbiddenRuntimeWords.join('|'), 'i'));
+    expect(commandOnly).not.toContain('meeting-intelligence materialize');
+    expect(runtime.alex_wake_requests[0]?.action).toBe('enrich_materialized_meeting');
     expect(wake.prompt_text).toContain('Load and follow the meeting-ingestion skill.');
     expect(wake.prompt_text).toContain('Provider meeting id: ff-mtg-0001');
     expect(wake.prompt_text).toContain('Meeting page: meetings/2026-05-20-acme-example-partner-review-fireflies-ff-mtg-0001');
     expect(wake.prompt_text).toContain('Source packet: sources/fireflies/2026-05-20-acme-example-partner-review-fireflies-ff-mtg-0001');
     expect(wake.prompt_text).toContain('Read the materialized GBrain pages; do not rely on this prompt for transcript content.');
-    expect(wake.prompt_text).toContain('Materialize command: gbrain meeting-intelligence materialize --provider fireflies --transcript-id ff-mtg-0001 --source default --json');
+    expect(wake.prompt_text).toContain('Action: enrich_materialized_meeting.');
+    expect(wake.prompt_text).not.toContain('Materialize command:');
     expect(wake.prompt_text).not.toContain('Let\'s review the acme-example follow-up');
     expect(wake.prompt_text).not.toContain('enterprise pricing by Friday');
     expect(runtime.review_receipts[0]?.status).toBe('review_queued');
