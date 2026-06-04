@@ -533,19 +533,50 @@ describe('runLockRenewalTick: reconnect-once dep (issue #1678)', () => {
     expect(reconnectCalls).toBe(0);
   });
 
-  test('reconnect is NOT called when the tick aborts at the deadline', async () => {
+  test('reconnect is NOT called when the tick aborts after the lock has already expired', async () => {
     let reconnectCalls = 0;
     const deps: LockRenewalDeps = {
       renewLock: async () => { throw new Error('write CONNECTION_ENDED'); },
       audit: freshAudit().sink,
-      // sinceLastSuccess = 30000 - 0 = 30000 >= deadline (30000-5000=25000) → abort
-      now: () => 30_000,
+      // sinceLastSuccess = 31000 - 0 = 31000 >= lockDuration; too late to rescue
+      now: () => 31_000,
       setTimeout: makeFakeTimer().setTimeout,
       reconnect: async () => { reconnectCalls++; },
     };
     const state = makeState({ lastSuccessfulRenewalAt: 0 });
     const result = await runLockRenewalTick(deps, state);
     expect(result).toEqual({ kind: 'should_abort', reason: 'lock-renewal-failed' });
-    expect(reconnectCalls).toBe(0); // pointless to reconnect when we're giving up the lock
+    expect(reconnectCalls).toBe(0); // pointless to reconnect after expiry
+  });
+
+  test('hung first renewal at the safety deadline reconnects and renews immediately instead of aborting', async () => {
+    const audit = freshAudit();
+    const timer = makeFakeTimer();
+    let renewCalls = 0;
+    let reconnectCalls = 0;
+    const deps: LockRenewalDeps = {
+      renewLock: () => {
+        renewCalls++;
+        if (renewCalls === 1) return new Promise<boolean>(() => { /* hung pooler write */ });
+        return Promise.resolve(true);
+      },
+      audit: audit.sink,
+      now: () => 25_000,
+      setTimeout: timer.setTimeout,
+      reconnect: async () => { reconnectCalls++; },
+    };
+    const state = makeState({ lastSuccessfulRenewalAt: 0 });
+
+    const tick = runLockRenewalTick(deps, state);
+    await new Promise((r) => setImmediate(r));
+    timer.runAll();
+
+    await expect(tick).resolves.toEqual({ kind: 'ok' });
+    expect(reconnectCalls).toBe(1);
+    expect(renewCalls).toBe(2);
+    expect(state.lastSuccessfulRenewalAt).toBe(25_000);
+    expect(state.consecutiveFailures).toBe(0);
+    expect(audit.log.failures).toHaveLength(1);
+    expect(audit.log.recoveries).toHaveLength(1);
   });
 });

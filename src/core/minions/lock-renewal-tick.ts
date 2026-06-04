@@ -220,16 +220,50 @@ export async function runLockRenewalTick(
 ): Promise<TickResult> {
   if (state.cancelled()) return { kind: 'cancelled' };
 
+  const withTimeout = <T>(promise: Promise<T>, label: string, timeoutMs: number): Promise<T> => {
+    let settled = false;
+    return new Promise<T>((resolve, reject) => {
+      deps.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      promise.then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        },
+        (err) => {
+          if (settled) return; // late rejection after timeout: consumed, not unhandled
+          settled = true;
+          reject(err);
+        },
+      );
+    });
+  };
+
+  const recordRecovery = () => {
+    if (state.consecutiveFailures > 0) {
+      try {
+        deps.audit.logSuccessAfterFailure(
+          state.jobId,
+          state.jobName,
+          state.consecutiveFailures,
+        );
+      } catch { /* audit best-effort */ }
+      state.consecutiveFailures = 0;
+    }
+    state.lastSuccessfulRenewalAt = deps.now();
+  };
+
   let renewed: boolean;
   try {
-    renewed = await Promise.race([
+    renewed = await withTimeout(
       deps.renewLock(state.jobId, state.lockToken, state.lockDurationMs),
-      new Promise<never>((_, reject) => {
-        deps.setTimeout(() => {
-          reject(new Error(`renewLock timed out after ${state.knobs.callTimeoutMs}ms`));
-        }, state.knobs.callTimeoutMs);
-      }),
-    ]);
+      'renewLock',
+      state.knobs.callTimeoutMs,
+    );
   } catch (err) {
     if (state.cancelled()) return { kind: 'cancelled' };
     state.consecutiveFailures += 1;
@@ -238,36 +272,46 @@ export async function runLockRenewalTick(
       deps.audit.logFailure(state.jobId, state.jobName, state.consecutiveFailures, err);
     } catch { /* audit best-effort */ }
 
-    const sinceLastSuccess = deps.now() - state.lastSuccessfulRenewalAt;
     const deadline = state.lockDurationMs - state.knobs.safetyMarginMs;
+    const remainingToExpiry = state.lockDurationMs - (deps.now() - state.lastSuccessfulRenewalAt);
+
+    // issue #1678 follow-up: the first renewal attempt starts halfway through
+    // the lease. With the default 30s lock, the old 10s renewLock timeout fired
+    // exactly at the 25s safety deadline, so the worker aborted after one hung
+    // pooler write instead of using the reconnect hook. If the lock has not yet
+    // expired, attempt a bounded reconnect + immediate token-fenced renewal now;
+    // waiting for the next interval would land at/after expiry.
+    if (deps.reconnect && remainingToExpiry > 0) {
+      const reconnect = deps.reconnect;
+      const recoveryBudgetMs = Math.max(
+        1,
+        Math.min(state.knobs.callTimeoutMs, Math.max(1, Math.floor(remainingToExpiry / 2))),
+      );
+      try {
+        await withTimeout(reconnect(), 'reconnect', recoveryBudgetMs);
+        if (state.cancelled()) return { kind: 'cancelled' };
+        const retryRenewed = await withTimeout(
+          deps.renewLock(state.jobId, state.lockToken, state.lockDurationMs),
+          'renewLock recovery',
+          recoveryBudgetMs,
+        );
+        if (state.cancelled()) return { kind: 'cancelled' };
+        if (!retryRenewed) return { kind: 'lock_lost' };
+        recordRecovery();
+        return { kind: 'ok' };
+      } catch {
+        // Best-effort rescue. If recovery cannot renew immediately, fall
+        // through to the original deadline decision below.
+        if (state.cancelled()) return { kind: 'cancelled' };
+      }
+    }
+
+    const sinceLastSuccess = deps.now() - state.lastSuccessfulRenewalAt;
     if (sinceLastSuccess >= deadline) {
       try {
         deps.audit.logGaveUp(state.jobId, state.jobName, state.consecutiveFailures, err);
       } catch { /* audit best-effort */ }
       return { kind: 'should_abort', reason: 'lock-renewal-failed' };
-    }
-
-    // issue #1678 (Codex #2): not yet at the deadline, so we'll retry on the
-    // next tick. If the engine can rebuild its pool, do it ONCE now (bounded
-    // by callTimeoutMs) so the next renewLock sees a live connection instead
-    // of throwing the same reaped-socket error until the deadline. Best-effort:
-    // a reconnect throw/timeout is swallowed (next tick retries) and must NEVER
-    // escape this catch — that would re-introduce the unhandledRejection class
-    // this module was built to close.
-    if (deps.reconnect) {
-      const reconnect = deps.reconnect;
-      try {
-        await Promise.race([
-          reconnect(),
-          new Promise<never>((_, reject) => {
-            deps.setTimeout(
-              () => reject(new Error(`reconnect timed out after ${state.knobs.callTimeoutMs}ms`)),
-              state.knobs.callTimeoutMs,
-            );
-          }),
-        ]);
-      } catch { /* reconnect best-effort; next tick retries against a fresh attempt */ }
-      if (state.cancelled()) return { kind: 'cancelled' };
     }
 
     return { kind: 'ok' }; // counter incremented; not yet at deadline
