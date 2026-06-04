@@ -149,6 +149,53 @@ export function logBatchRetry(
   );
 }
 
+/**
+ * Reconcile markdown-derived links for pages whose content was just re-read.
+ * `links` uniqueness includes link_type, so simply inserting the new candidate
+ * (`mentions`) would leave an old broad prior edge (`invested_in`) beside it.
+ * After current candidates have been inserted, prune stale markdown rows from
+ * the processed from-pages that are no longer produced by the extractor. Manual,
+ * frontmatter, and by-mention links are intentionally untouched.
+ */
+async function pruneStaleMarkdownLinksForProcessedPages(
+  engine: BrainEngine,
+  processedRefs: Array<{ slug: string; source_id: string }>,
+  desiredRows: LinkBatchInput[],
+): Promise<void> {
+  const desiredByFrom = new Map<string, Set<string>>();
+  const toSourceByPair = new Map<string, string>();
+  for (const row of desiredRows) {
+    if ((row.link_source ?? 'markdown') !== 'markdown') continue;
+    const fromSource = row.from_source_id ?? 'default';
+    const toSource = row.to_source_id ?? 'default';
+    const fromKey = `${fromSource}\u0000${row.from_slug}`;
+    const edgeKey = `${row.to_slug}\u0000${row.link_type ?? ''}`;
+    const set = desiredByFrom.get(fromKey) ?? new Set<string>();
+    set.add(edgeKey);
+    desiredByFrom.set(fromKey, set);
+    toSourceByPair.set(`${fromKey}\u0000${row.to_slug}`, toSource);
+  }
+
+  const seenRefs = new Set<string>();
+  for (const ref of processedRefs) {
+    const fromKey = `${ref.source_id}\u0000${ref.slug}`;
+    if (seenRefs.has(fromKey)) continue;
+    seenRefs.add(fromKey);
+    const desired = desiredByFrom.get(fromKey) ?? new Set<string>();
+    const existing = await engine.getLinks(ref.slug, { sourceId: ref.source_id });
+    for (const link of existing) {
+      if (link.link_source !== 'markdown') continue;
+      const edgeKey = `${link.to_slug}\u0000${link.link_type}`;
+      if (desired.has(edgeKey)) continue;
+      const toSourceId = toSourceByPair.get(`${fromKey}\u0000${link.to_slug}`) ?? ref.source_id;
+      await engine.removeLink(ref.slug, link.to_slug, link.link_type, 'markdown', {
+        fromSourceId: ref.source_id,
+        toSourceId,
+      });
+    }
+  }
+}
+
 // --- Types ---
 
 export interface ExtractedLink {
@@ -274,28 +321,53 @@ export function resolveSlug(fileDir: string, relTarget: string, allSlugs: Set<st
 }
 
 /**
- * Directory-based link-type inference for the fs-source path.
- *
- * FS-source operates without a BrainEngine. We have paths, not pages. This
- * helper looks at source + target directories and returns a type aligned
- * with the canonical `inferLinkType` in link-extraction.ts (calibrated
- * verb-based inference for db-source).
- *
- * v0.13: aligned type names with link-extraction.ts (was: 'mention' →
- * 'mentions', 'attendee' → 'attended'). Diverged historically; the v0_13_0
- * migration normalizes any legacy rows on existing brains.
+ * Directory-based link-type inference for structural fs-source cases.
+ * People/company markdown links are deliberately NOT typed from directory shape
+ * alone; those use local prose evidence through inferTypeForFileLink below.
  */
 function inferTypeByDir(fromDir: string, toDir: string, frontmatter?: Record<string, unknown>): string {
   const from = fromDir.split('/')[0];
   const to = toDir.split('/')[0];
   if (from === 'people' && to === 'companies') {
     if (Array.isArray(frontmatter?.founded)) return 'founded';
-    return 'works_at';
+    return 'mentions';
   }
   if (from === 'people' && to === 'deals') return 'involved_in';
   if (from === 'deals' && to === 'companies') return 'deal_for';
   if (from === 'meetings' && to === 'people') return 'attended';
   return 'mentions';
+}
+
+function pageTypeFromSlug(slug: string): PageType {
+  const topDir = slug.split('/')[0];
+  if (topDir === 'people') return 'person';
+  if (topDir === 'companies') return 'company';
+  if (topDir === 'deals' || topDir === 'deal') return 'deal';
+  if (topDir === 'meetings') return 'meeting' as never;
+  if (topDir === 'media') return 'media';
+  return 'concept';
+}
+
+function excerptAround(content: string, needle: string, width = 240): string {
+  const idx = needle ? content.indexOf(needle) : -1;
+  if (idx < 0) return needle || '';
+  const half = Math.floor(width / 2);
+  return content.slice(Math.max(0, idx - half), Math.min(content.length, idx + half)).replace(/\s+/g, ' ').trim();
+}
+
+function inferTypeForFileLink(
+  fromSlug: string,
+  toSlug: string,
+  content: string,
+  displayName: string,
+  frontmatter?: Record<string, unknown>,
+): string {
+  const fromTop = fromSlug.split('/')[0];
+  const toTop = toSlug.split('/')[0];
+  if (fromTop === 'deals' || fromTop === 'deal') return inferTypeByDir(fromSlug, toSlug, frontmatter);
+  if (fromTop === 'meetings' && toTop === 'people') return 'attended';
+  const context = excerptAround(content, displayName);
+  return inferLinkType(pageTypeFromSlug(fromSlug), context, content, toSlug);
 }
 
 /** Parse frontmatter using the project's gray-matter-based parser */
@@ -331,7 +403,7 @@ export async function extractLinksFromFile(
     if (resolved !== null) {
       links.push({
         from_slug: slug, to_slug: resolved,
-        link_type: inferTypeByDir(fileDir, dirname(resolved), fm),
+        link_type: inferTypeForFileLink(slug, resolved, content, name, fm),
         context: `markdown link: [${name}]`,
       });
     }
@@ -383,6 +455,7 @@ export async function extractLinksFromFile(
 
 /** Extract timeline entries from markdown content */
 export function extractTimelineFromContent(content: string, slug: string): ExtractedTimelineEntry[] {
+  if (!shouldExtractTimelineForPage(slug, content)) return [];
   const entries: ExtractedTimelineEntry[] = [];
 
   // Format 1: Bullet — - **YYYY-MM-DD** | Source — Summary
@@ -407,6 +480,21 @@ export function extractTimelineFromContent(content: string, slug: string): Extra
   }
 
   return entries;
+}
+
+/**
+ * Resolver/readme pages are routing guidance, not chronological evidence.
+ * They may contain dated changelog-like bullets, but extracting those into the
+ * structured timeline pollutes retrieval with governance archaeology. Semantic
+ * entity/project pages still emit timeline rows normally.
+ */
+export function shouldExtractTimelineForPage(slug: string, content: string, title?: string): boolean {
+  const lowerSlug = slug.toLowerCase();
+  const basename = lowerSlug.split('/').pop() ?? lowerSlug;
+  if (basename === 'resolver') return false;
+  if (basename !== 'readme') return true;
+  const header = `${title ?? ''}\n${content.slice(0, 1200)}`;
+  return !/(^|\n)\s*(title:\s*.*resolver|#\s+.*resolver)\b/i.test(header);
 }
 
 // --- Main command ---
@@ -1393,7 +1481,9 @@ async function extractTimelineFromDB(
     }
 
     const fullContent = page.compiled_truth + '\n' + page.timeline;
-    const entries = parseTimelineEntries(fullContent);
+    const entries = shouldExtractTimelineForPage(slug, fullContent, page.title)
+      ? parseTimelineEntries(fullContent)
+      : [];
 
     for (const entry of entries) {
       if (dryRunSeen) {
@@ -1537,7 +1627,10 @@ export async function extractStaleFromDB(
           });
         }
       }
-      for (const entry of parseTimelineEntries(fullContent)) {
+      const timelineEntries = shouldExtractTimelineForPage(page.slug, fullContent, page.title)
+        ? parseTimelineEntries(fullContent)
+        : [];
+      for (const entry of timelineEntries) {
         const timelineInput = { slug: page.slug, date: entry.date, summary: entry.summary, detail: entry.detail || '', source_id: page.source_id };
         timelineRows.push(timelineInput);
         if (reviewSamples && reviewSamples.timeline.length < REVIEW_SAMPLE_LIMIT) {
@@ -1580,6 +1673,7 @@ export async function extractStaleFromDB(
     for (let i = 0; i < linkRows.length; i += BATCH_SIZE) {
       linksCreated += await engine.addLinksBatch(linkRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' }); // gbrain-allow-direct-insert: gbrain extract --stale — canonical link reconciliation from markdown body
     }
+    await pruneStaleMarkdownLinksForProcessedPages(engine, processedRefs, linkRows);
     for (let i = 0; i < timelineRows.length; i += BATCH_SIZE) {
       timelineCreated += await engine.addTimelineEntriesBatch(timelineRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' });
     }

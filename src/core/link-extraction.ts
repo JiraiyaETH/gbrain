@@ -27,7 +27,7 @@ import type { PageType } from './types.ts';
  * OR updated_at > links_extracted_at`. It is an ISO-8601 string (NOT a number) —
  * the column is TIMESTAMPTZ and the predicate binds it as `::timestamptz`.
  */
-export const LINK_EXTRACTOR_VERSION_TS = '2026-05-31T00:00:00Z';
+export const LINK_EXTRACTOR_VERSION_TS = '2026-06-04T01:23:03Z';
 
 // ─── Entity references ──────────────────────────────────────────
 
@@ -502,43 +502,16 @@ const FOUNDED_RE = /\b(?:founded|co-?founded|started the company|incorporated|fo
 //     "security advisor to|at", "product advisor to|at", "industry advisor".
 const ADVISES_RE = /\b(?:advises|advised|advisor (?:to|at|for|of)|advisory (?:board|role|position|capacity|engagement|partnership|contract|relationship|work)|board advisor|on .{0,20} advisory board|joined .{0,20} advisory board|in an? advisory (?:capacity|role|position)|as an? (?:advisor|security advisor|technical advisor|strategic advisor|industry advisor|product advisor|board advisor|senior advisor)|(?:strategic|technical|security|product|industry|senior|board) advisor (?:to|at|for|of)|consults for|consulting role (?:at|with))\b/i;
 
-// Page-role detection: if the source page describes a partner/investor at
-// page level, that's a strong prior for outbound company refs being
-// invested_in even when per-edge context lacks explicit investment verbs.
-const PARTNER_ROLE_RE = /\b(?:partner at|partner of|venture partner|VC partner|invested early|investor at|investor in|portfolio|venture capital|early-stage investor|seed investor|fund [A-Z]|invests across|backs companies)\b/i;
-
-// Advisor role prior: fires when the page-level description indicates the
-// person IS an advisor (not just mentions advising). Broadened in v0.10.5
-// from "full-time/professional/advises multiple" to catch any page that
-// self-identifies the subject as an advisor.
-const ADVISOR_ROLE_RE = /\b(?:full-time advisor|professional advisor|advises (?:multiple|several|various)|is an? (?:advisor|security advisor|technical advisor|strategic advisor|industry advisor|product advisor|senior advisor)|took on advisory roles|(?:her|his|their) advisory (?:work|role|engagement|portfolio)|serves as (?:an )?advisor)\b/i;
-
-// Employee role prior (new in v0.10.5): fires when the page-level description
-// indicates the person IS an employee (senior/staff/lead engineer, director,
-// head, etc.) at some company. Biases outbound company refs on that page
-// toward works_at when per-edge verbs are absent (e.g. possessive phrasings
-// "her work on Delta's pipeline..." where the verb "works" doesn't appear
-// near the slug).
-//
-// Scope: only fires for person-page → company-page links. Companies' own
-// pages mentioning their employees use the page-role layer differently.
-const EMPLOYEE_ROLE_RE = /\b(?:is an? (?:senior|staff|principal|lead|backend|frontend|full-?stack|ML|data|security|DevOps|platform)? ?engineer at|is an? (?:senior|staff|principal|lead)? ?(?:developer|designer|product manager|engineering manager|director|VP) (?:at|of)|holds? the (?:CTO|CEO|CFO|COO|CMO|CRO|VP) (?:role|position|seat|title) at|is the (?:CTO|CEO|CFO|COO|CMO|CRO) of|employee at|on the team at|works on .{0,30} at)\b/i;
-
 /**
  * Infer link_type from page context. Deterministic regex heuristics, no LLM.
  *
- * Two layers of inference:
- *   1. Per-edge: ~240 char window around the slug mention. Looks for explicit
- *      verbs (FOUNDED_RE, INVESTED_RE, ADVISES_RE, WORKS_AT_RE).
- *   2. Page-role prior: when per-edge inference falls through to 'mentions',
- *      check if the SOURCE page describes the author as a partner/investor.
- *      If yes, bias outbound company refs toward 'invested_in'.
+ * Typed relationships are promoted only from the local edge window. Earlier
+ * versions also used page-level role priors ("this page is about a VC partner,
+ * therefore every company ref is an investment"), but live GBrain review showed
+ * that creates confident wrong edges for creator/marketing/campaign pages. When
+ * the edge context is merely adjacent, the correct graph fact is `mentions`.
  *
- * Precedence: founded > invested_in > advises > works_at > role prior > mentions.
- *
- * The role-prior layer is what closes the gap on partner bios where the prose
- * lists portfolio companies without repeating the investment verb each time
- * ("Her current board seats reflect her portfolio: [Co A], [Co B], [Co C]").
+ * Precedence: founded > invested_in > advises > works_at > mentions.
  */
 export function inferLinkType(pageType: PageType, context: string, globalContext?: string, targetSlug?: string): string {
   if (pageType === 'media') {
@@ -555,20 +528,11 @@ export function inferLinkType(pageType: PageType, context: string, globalContext
   if (INVESTED_RE.test(context)) return 'invested_in';
   if (ADVISES_RE.test(context)) return 'advises';
   if (WORKS_AT_RE.test(context)) return 'works_at';
-  // Page-role prior: only fires for person -> company links. Concept pages
-  // about VC topics naturally contain "venture capital" in their text, but
-  // their company refs are mentions, not investments. Partner pages mentioning
-  // other people (co-investors, friends) should also stay as mentions.
-  //
-  // Precedence within priors: investor > advisor > employee. Investors often
-  // also sit on boards ("board seat at portfolio company") which a naive
-  // employee/advisor match would mis-classify; keep investor first so those
-  // phrasings resolve correctly.
-  if (pageType === 'person' && globalContext && targetSlug?.startsWith('companies/')) {
-    if (PARTNER_ROLE_RE.test(globalContext)) return 'invested_in';
-    if (ADVISOR_ROLE_RE.test(globalContext)) return 'advises';
-    if (EMPLOYEE_ROLE_RE.test(globalContext)) return 'works_at';
-  }
+  // Intentionally unused: page-level role priors were removed in the
+  // 2026-06-04 extractor bump because they turned ambiguous company mentions
+  // into false typed relationships (for example creator/campaign pages).
+  void globalContext;
+  void targetSlug;
   return 'mentions';
 }
 

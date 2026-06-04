@@ -235,6 +235,14 @@ describe('inferLinkType', () => {
     expect(inferLinkType('person', 'Sequoia led the seed round for Vox.')).toBe('invested_in');
   });
 
+  test('creator/marketing campaign context is not investment evidence', async () => {
+    const content = 'Wals is a SignNow-backed content creator who worked with Tailored on [IO Net](companies/io-net) marketing campaigns.';
+    const { candidates } = await extractPageLinks('people/wals', content, {}, 'person', nullResolver);
+    const ioNet = candidates.find(c => c.targetSlug === 'companies/io-net');
+    expect(ioNet).toBeDefined();
+    expect(ioNet!.linkType).toBe('mentions');
+  });
+
   test('default -> mentions', () => {
     expect(inferLinkType('person', 'Random context with no relationship verbs.')).toBe('mentions');
   });
@@ -281,19 +289,18 @@ describe('inferLinkType', () => {
     expect(inferLinkType('person', 'His role at Delta was to unblock the pipeline team.')).toBe('works_at');
   });
 
-  test('v0.10.5 works_at: page-role employee prior for ambiguous context', () => {
-    // Per-edge context doesn't mention a work verb, but globalContext establishes
-    // the person IS a senior engineer at a company. The employee role prior
-    // should bias outbound company refs toward works_at.
+  test('ambiguous page-role employee prior stays mentions without direct edge evidence', () => {
+    // The extractor should not use broad page-level role text to type a
+    // different company edge. Typed edges require local/direct evidence.
     const globalContext = 'Adam Lopez is a senior engineer at Delta. His work is excellent.';
     const perEdgeContext = 'Adam is excellent.';  // no work verb in the window
-    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/delta-3')).toBe('works_at');
+    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/delta-3')).toBe('mentions');
   });
 
-  test('v0.10.5 works_at: page-role CTO-of prior', () => {
+  test('ambiguous page-role CTO prior stays mentions without direct edge evidence', () => {
     const globalContext = 'Beth is the CTO of Prism, shipping their platform.';
     const perEdgeContext = 'Beth is shipping.';  // no work verb near slug
-    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/prism-43')).toBe('works_at');
+    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/prism-43')).toBe('mentions');
   });
 
   // ─── v0.10.5: advises residuals (drive 41% → >85% on rich prose) ───
@@ -321,20 +328,20 @@ describe('inferLinkType', () => {
     expect(inferLinkType('person', 'Multi-year advisory partnership with Beta.')).toBe('advises');
   });
 
-  test('v0.10.5 advises: page-role "is an advisor" prior', () => {
-    // Per-edge window has no advisor verb (just possessive "her work"), but
-    // page-level establishes the subject IS an advisor. Prior should fire.
+  test('ambiguous page-role advisor prior stays mentions without direct edge evidence', () => {
+    // Per-edge window has no advisor verb. Page-level advisor identity is not
+    // enough to type every company reference as advises.
     const globalContext = 'Alice Davis is an advisor at Prism. Her work has been invaluable.';
     const perEdgeContext = 'Alice Davis has been invaluable.';  // no advise verb in window
-    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/prism-43')).toBe('advises');
+    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/prism-43')).toBe('mentions');
   });
 
-  test('v0.10.5 advises: "serves as advisor" page prior', () => {
+  test('ambiguous page-role advisor portfolio prior stays mentions without direct edge evidence', () => {
     // Avoid "portfolio" in global context since that trips PARTNER_ROLE_RE.
     // Real advisor pages rarely use "portfolio" (that's a partner word).
     const globalContext = 'Beth serves as advisor to three early-stage startups.';
     const perEdgeContext = 'Beth sees Acme regularly.';
-    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/acme')).toBe('advises');
+    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/acme')).toBe('mentions');
   });
 
   // ─── Regression guards: v0.10.5 expansions must not break tightened rules ───
@@ -349,20 +356,20 @@ describe('inferLinkType', () => {
     expect(inferLinkType('person', 'She sits on the board of Acme.')).toBe('mentions');
   });
 
-  test('v0.10.5 regression: "backs companies" still resolves to invested_in via partner prior', () => {
-    // Partner prior takes precedence over employee prior.
+  test('ambiguous partner prior stays mentions without direct investee evidence', () => {
+    // Partner identity alone is not enough to type every company reference as
+    // invested_in. The edge needs local/direct investment evidence.
     const globalContext = 'Wendy is a venture partner who backs companies at the seed stage. Her portfolio is diverse.';
     const perEdgeContext = 'Wendy recently discussed Cipher.';
-    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/cipher-13')).toBe('invested_in');
+    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/cipher-13')).toBe('mentions');
   });
 
-  test('v0.10.5 regression: partner + advisor co-mention stays invested_in for investee', () => {
-    // If someone is both a partner AND mentions advisory work, the outbound
-    // companies should lean toward invested_in (partner precedence). This
-    // protects against a common pattern where partners say "I also advise X".
+  test('partner + advisor co-mention stays mentions without direct target evidence', () => {
+    // Do not infer a specific relationship from multiple page-level roles when
+    // the edge context merely says "worked with".
     const globalContext = 'Jane is a partner at Accel. She also advises multiple startups.';
     const perEdgeContext = 'Jane has worked with Acme.';
-    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/acme')).toBe('invested_in');
+    expect(inferLinkType('person', perEdgeContext, globalContext, 'companies/acme')).toBe('mentions');
   });
 });
 

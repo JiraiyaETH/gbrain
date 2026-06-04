@@ -85,11 +85,35 @@ describe('extractLinksFromFile', () => {
     expect(links).toEqual([]);
   });
 
-  it('infers link type from directory structure', async () => {
+  it('keeps people -> company links as mentions without local relationship evidence', async () => {
     const content = 'See [Brex](../companies/brex.md).';
     const allSlugs = new Set(['people/pedro', 'companies/brex']);
     const links = await extractLinksFromFile(content, 'people/pedro.md', allSlugs);
+    expect(links[0].link_type).toBe('mentions');
+  });
+
+  it('uses local relationship evidence for people -> company links', async () => {
+    const content = 'Pedro is CEO of [Brex](../companies/brex.md).';
+    const allSlugs = new Set(['people/pedro', 'companies/brex']);
+    const links = await extractLinksFromFile(content, 'people/pedro.md', allSlugs);
     expect(links[0].link_type).toBe('works_at');
+  });
+
+  it('does not turn creator campaign work into investment evidence', async () => {
+    const content = 'Wals is a SignNow-backed content creator who worked with Tailored on [IO Net](../companies/io-net.md) marketing campaigns.';
+    const allSlugs = new Set(['people/wals', 'companies/io-net']);
+    const links = await extractLinksFromFile(content, 'people/wals.md', allSlugs);
+    expect(links[0].link_type).toBe('mentions');
+  });
+
+  it('keeps personal-domain backlinks to people pages', async () => {
+    const content = 'Dinner context belongs with [Jiraiya](../../people/jiraiya.md).';
+    const allSlugs = new Set(['food/alina/log', 'people/jiraiya']);
+    const links = await extractLinksFromFile(content, 'food/alina/log.md', allSlugs);
+    expect(links).toHaveLength(1);
+    expect(links[0].from_slug).toBe('food/alina/log');
+    expect(links[0].to_slug).toBe('people/jiraiya');
+    expect(links[0].link_type).toBe('mentions');
   });
 
   it('infers deal_for type for deals -> companies', async () => {
@@ -133,6 +157,18 @@ describe('extractTimelineFromContent', () => {
   it('handles em dash and en dash in bullet format', () => {
     const content = `- **2025-03-18** | Meeting – Discussed partnership`;
     const entries = extractTimelineFromContent(content, 'test');
+    expect(entries).toHaveLength(1);
+  });
+
+  it('skips resolver guidance pages', () => {
+    const content = `# Brain Resolver\n\n- **2026-06-04** | Guidance changed`;
+    const entries = extractTimelineFromContent(content, 'resolver');
+    expect(entries).toHaveLength(0);
+  });
+
+  it('does not suppress ordinary README pages that merely contain timeline rows', () => {
+    const content = `# Product Notes\n\n- **2026-06-04** | Release — Shipped the first milestone`;
+    const entries = extractTimelineFromContent(content, 'projects/example/readme');
     expect(entries).toHaveLength(1);
   });
 });

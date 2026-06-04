@@ -187,6 +187,42 @@ describe('gbrain extract --stale', () => {
     expect(await engine.countStalePagesForExtraction()).toBe(2);
   });
 
+  test('resolver guidance pages do not emit structured timeline rows', async () => {
+    await engine.putPage('resolver', {
+      type: 'concept',
+      title: 'Brain Resolver',
+      compiled_truth: '# Brain Resolver\n\n- **2026-06-04** | Read/write guidance changed.',
+      timeline: '',
+    });
+
+    const result = await extractStaleFromDB(engine, {
+      dryRun: true,
+      jsonMode: true,
+      includeFrontmatter: false,
+      catchUp: false,
+    });
+
+    expect(result.pagesProcessed).toBe(1);
+    expect(result.timelineCreated).toBe(0);
+    expect(result.reviewSamples?.timeline ?? []).toHaveLength(0);
+  });
+
+  test('stale extraction downgrades old markdown relationship types for same edge', async () => {
+    await engine.putPage('companies/io-net', companyPage('IO Net'));
+    await engine.putPage('people/wals', personPage(
+      'Wals',
+      'Wals is a SignNow-backed content creator who worked with Tailored on [IO Net](companies/io-net) marketing campaigns.',
+    ));
+    await engine.addLink('people/wals', 'companies/io-net', 'old broad role-prior edge', 'invested_in', 'markdown');
+    expect((await engine.getLinks('people/wals')).some(l => l.to_slug === 'companies/io-net' && l.link_type === 'invested_in')).toBe(true);
+
+    await runExtract(engine, ['--stale']);
+
+    const links = await engine.getLinks('people/wals');
+    expect(links.some(l => l.to_slug === 'companies/io-net' && l.link_type === 'mentions')).toBe(true);
+    expect(links.some(l => l.to_slug === 'companies/io-net' && l.link_type === 'invested_in')).toBe(false);
+  });
+
   test('CRITICAL (CDX-1): page edited after stamp is re-extracted', async () => {
     await engine.putPage('people/alice', personPage('Alice'));
     await engine.putPage('companies/acme', companyPage('Acme', 'No links yet.'));
@@ -254,10 +290,9 @@ describe('gbrain extract --stale', () => {
     await engine.executeRaw(`UPDATE pages SET updated_at = now() - interval '3 hours' WHERE slug = 'companies/acme'`);
 
     // Simulate an edit landing BETWEEN the list read (updated_at = now-3h) and
-    // the stamp: bump acme's updated_at to now-1h just before the real stamp.
-    // D4 stamps with the READ updated_at (now-3h), so now-1h > now-3h → acme
-    // stays stale (edit preserved). The OLD now()-stamp would set
-    // links_extracted_at = now > now-1h → acme marked fresh, edit silently lost.
+    // the stamp: bump acme's updated_at past the extractor version just before
+    // the real stamp. D4 stamps with the READ updated_at/version floor, so this
+    // later edit remains newer than the stamp and the page stays stale.
     const origStamp = engine.markPagesExtractedBatch.bind(engine);
     let hooked = false;
     (engine as unknown as { markPagesExtractedBatch: unknown }).markPagesExtractedBatch = async (
@@ -265,7 +300,7 @@ describe('gbrain extract --stale', () => {
     ) => {
       if (!hooked) {
         hooked = true;
-        await engine.executeRaw(`UPDATE pages SET updated_at = now() - interval '1 hour' WHERE slug = 'companies/acme'`);
+        await engine.executeRaw(`UPDATE pages SET updated_at = now() + interval '1 hour' WHERE slug = 'companies/acme'`);
       }
       return origStamp(refs, def);
     };
