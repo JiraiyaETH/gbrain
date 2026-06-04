@@ -128,6 +128,7 @@ type Remediation = RemediationStep;
 
 export const AUTOPILOT_EMBED_BACKFILL_BATCH_SIZE = 1;
 export const AUTOPILOT_EMBED_BACKFILL_MAX_CHUNKS = 1;
+export const AUTOPILOT_EMBED_BACKFILL_MAX_USD = 0.01;
 
 export interface RecommendationContext {
   /** Source id this remediation is scoped to (multi-source brains). */
@@ -275,6 +276,8 @@ export function computeRecommendations(
       stale: true,
       sourceId: source,
       catchUp: false,
+      dryRun: true,
+      qualityGate: 'operator_review',
     };
     out.push({
       id: 'extract.all',
@@ -336,6 +339,7 @@ function embedBackfillMicrobatchParams(source: string, reason: string): Record<s
     reason,
     batchSize: AUTOPILOT_EMBED_BACKFILL_BATCH_SIZE,
     maxChunks: AUTOPILOT_EMBED_BACKFILL_MAX_CHUNKS,
+    maxUsd: AUTOPILOT_EMBED_BACKFILL_MAX_USD,
   };
 }
 

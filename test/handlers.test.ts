@@ -74,6 +74,27 @@ describe('registerBuiltinHandlers', () => {
     })).rejects.toThrow('extract stale Minion job requires data.sourceId');
   });
 
+  test('extract stale handler preserves dry-run operator-review gate metadata', async () => {
+    const handler = (worker as any).handlers.get('extract');
+    expect(handler).toBeDefined();
+
+    const result = await handler({
+      data: {
+        stale: true,
+        sourceId: 'default',
+        dryRun: true,
+        qualityGate: 'operator_review',
+      },
+      signal: { aborted: false } as any,
+      job: { id: 23, name: 'extract' } as any,
+    });
+
+    expect(result.stale).toBe(true);
+    expect(result.sourceId).toBe('default');
+    expect(result.dryRun).toBe(true);
+    expect(result.qualityGate).toBe('operator_review');
+  });
+
   test('sync handler treats noEmbed as a deferred embed-backfill opt-out', async () => {
     const fs = await import('fs');
     const { execSync } = await import('child_process');

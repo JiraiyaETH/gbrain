@@ -7,7 +7,12 @@ import {
   selectDispatchableTargetedSteps,
   submitOrProposeAutopilotJob,
 } from '../src/commands/autopilot.ts';
+import {
+  AUTOPILOT_EMBED_BACKFILL_MAX_USD,
+  computeRecommendations,
+} from '../src/core/brain-score-recommendations.ts';
 import type { RemediationStep } from '../src/core/remediation-step.ts';
+import type { BrainHealth } from '../src/core/types.ts';
 
 function step(id: string, depends_on: string[] = []): RemediationStep {
   return {
@@ -21,6 +26,27 @@ function step(id: string, depends_on: string[] = []): RemediationStep {
     depends_on,
     rationale: id,
     status: 'remediable',
+  };
+}
+
+function health(overrides: Partial<BrainHealth>): BrainHealth {
+  return {
+    page_count: 10,
+    embed_coverage: 0.95,
+    stale_pages: 0,
+    orphan_pages: 0,
+    missing_embeddings: 0,
+    brain_score: 95,
+    dead_links: 0,
+    link_coverage: 1,
+    timeline_coverage: 1,
+    most_connected: [],
+    embed_coverage_score: 33,
+    link_density_score: 25,
+    timeline_coverage_score: 15,
+    no_orphans_score: 15,
+    no_dead_links_score: 10,
+    ...overrides,
   };
 }
 
@@ -160,5 +186,50 @@ describe('selectDispatchableTargetedSteps', () => {
     expect(result.kind).toBe('proposed');
     if (result.kind !== 'proposed') throw new Error('expected proposal result');
     expect(result.proposal).toEqual(proposal);
+  });
+
+  test('autopilot embed remediation carries a per-job micro-spend cap', () => {
+    const plan = computeRecommendations(
+      health({ missing_embeddings: 178, embed_coverage: 0.955, brain_score: 76 }),
+      {
+        sourceId: 'default',
+        repoPath: '/brain',
+        embeddingModel: 'openai:text-embedding-3-small',
+        embeddingProviderConfigured: true,
+      },
+    );
+
+    const embed = plan.find((r) => r.id === 'embed.stale');
+    expect(embed).toBeDefined();
+    expect(embed!.job).toBe('embed-backfill');
+    expect(embed!.params).toEqual({
+      sourceId: 'default',
+      reason: 'autopilot:embed.stale',
+      batchSize: 1,
+      maxChunks: 1,
+      maxUsd: AUTOPILOT_EMBED_BACKFILL_MAX_USD,
+    });
+    expect(Object.prototype.hasOwnProperty.call(embed!.params, 'maxUsd')).toBe(true);
+    expect(Number((embed!.params as Record<string, unknown>).maxUsd)).toBeGreaterThan(0);
+  });
+
+  test('autopilot stale extraction is dry-run gated for operator review', () => {
+    const plan = computeRecommendations(
+      health({ stale_pages: 2, brain_score: 76 }),
+      { sourceId: 'default', repoPath: '/brain', embeddingProviderConfigured: true },
+    );
+
+    const extract = plan.find((r) => r.id === 'extract.all');
+    expect(extract).toBeDefined();
+    expect(extract!.job).toBe('extract');
+    expect(extract!.params).toEqual({
+      stale: true,
+      sourceId: 'default',
+      catchUp: false,
+      dryRun: true,
+      qualityGate: 'operator_review',
+    });
+    expect((extract!.params as Record<string, unknown>).dryRun).toBe(true);
+    expect((extract!.params as Record<string, unknown>).qualityGate).toBe('operator_review');
   });
 });
