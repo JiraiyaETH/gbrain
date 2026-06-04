@@ -31,7 +31,7 @@ describe('getAutopilotStatusSnapshot', () => {
     const gbrainDir = join(root, '.gbrain');
     const lockPath = join(gbrainDir, 'autopilot.lock');
     try {
-      await withEnv({ GBRAIN_HOME: root }, async () => {
+      await withEnv({ GBRAIN_HOME: root, HOME: root }, async () => {
         mkdirSync(gbrainDir, { recursive: true });
         writeFileSync(lockPath, String(process.pid));
         const now = Date.now();
@@ -47,6 +47,36 @@ describe('getAutopilotStatusSnapshot', () => {
         expect(snapshot.lock.stale).toBe(true);
         expect(snapshot.lock.age_seconds).toBeGreaterThanOrEqual(660);
         expect(snapshot.installed).toBe(false);
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('surfaces observe/propose canary separately from the full daemon', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gbrain-autopilot-observe-status-'));
+    const gbrainDir = join(root, '.gbrain');
+    const launchAgentsDir = join(root, 'Library', 'LaunchAgents');
+    const plistPath = join(launchAgentsDir, 'com.gbrain.autopilot.observe-propose.plist');
+    const wrapperPath = join(gbrainDir, 'autopilot-observe-propose-run.sh');
+    const errPath = join(gbrainDir, 'autopilot-observe-propose.err');
+    try {
+      await withEnv({ GBRAIN_HOME: root, HOME: root }, async () => {
+        mkdirSync(gbrainDir, { recursive: true });
+        mkdirSync(launchAgentsDir, { recursive: true });
+        writeFileSync(plistPath, '<plist><dict></dict></plist>');
+        writeFileSync(wrapperPath, '#!/bin/bash\n');
+        writeFileSync(errPath, '{"event":"cycle","next_s":600}\n');
+
+        const snapshot = getAutopilotStatusSnapshot(Date.now());
+
+        expect(snapshot.installed).toBe(false);
+        expect(snapshot.observe_propose.installed).toBe(true);
+        expect(snapshot.observe_propose.label).toBe('com.gbrain.autopilot.observe-propose');
+        expect(snapshot.observe_propose.install_path).toBe(plistPath);
+        expect(snapshot.observe_propose.wrapper_path).toBe(wrapperPath);
+        expect(snapshot.observe_propose.log_path).toBe(errPath);
+        expect(snapshot.observe_propose.last_log).toContain('"event":"cycle"');
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -37,6 +37,7 @@
 
 import type { BrainEngine } from '../core/engine.ts';
 import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { gbrainPath, loadConfig, isThinClient } from '../core/config.ts';
 import { callRemoteTool, unpackToolResult } from '../core/mcp-client.ts';
 import {
@@ -100,6 +101,14 @@ export interface AutopilotStatus {
   lockfile_present: boolean;
   pid: number | null;
   running: boolean;
+  observe_propose_canary: {
+    installed: boolean;
+    label: string;
+    install_path: string | null;
+    wrapper_path: string;
+    log_path: string;
+    last_log: string | null;
+  };
 }
 
 export interface StatusReport {
@@ -268,6 +277,22 @@ function buildWorkerSummary(): WorkerSummary {
 function buildAutopilotStatus(): AutopilotStatus {
   const lockPath = gbrainPath('autopilot.lock');
   const lockfile_present = existsSync(lockPath);
+  const home = process.env.HOME || '';
+  const observeProposeLabel = 'com.gbrain.autopilot.observe-propose';
+  const observeProposePlist = join(home, 'Library', 'LaunchAgents', `${observeProposeLabel}.plist`);
+  const observeProposeWrapper = join(home, '.gbrain', 'autopilot-observe-propose-run.sh');
+  const observeProposeLog = join(home, '.gbrain', 'autopilot-observe-propose.err');
+  const observeProposeInstalled = existsSync(observeProposePlist) || existsSync(observeProposeWrapper);
+  let observeProposeLastLog: string | null = null;
+  try {
+    const lines = readFileSync(observeProposeLog, 'utf-8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    observeProposeLastLog = lines[lines.length - 1] ?? null;
+  } catch {
+    /* no observe/propose log yet */
+  }
   let pid: number | null = null;
   let running = false;
   if (lockfile_present) {
@@ -296,6 +321,14 @@ function buildAutopilotStatus(): AutopilotStatus {
     lockfile_present,
     pid,
     running,
+    observe_propose_canary: {
+      installed: observeProposeInstalled,
+      label: observeProposeLabel,
+      install_path: existsSync(observeProposePlist) ? observeProposePlist : null,
+      wrapper_path: observeProposeWrapper,
+      log_path: observeProposeLog,
+      last_log: observeProposeLastLog,
+    },
   };
 }
 
@@ -503,6 +536,12 @@ function renderHuman(report: StatusReport): string {
       } else {
         lines.push('  not running. Install with `gbrain autopilot --install`.');
       }
+      const canary = a.observe_propose_canary;
+      lines.push(
+        `  observe/propose canary: ${canary.installed ? 'installed' : 'not installed'} (${canary.label})`,
+      );
+      if (canary.install_path) lines.push(`    launchd: ${canary.install_path}`);
+      if (canary.last_log) lines.push(`    last proposal log: ${canary.last_log}`);
     }
     lines.push('');
   }

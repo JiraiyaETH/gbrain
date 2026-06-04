@@ -1400,6 +1400,14 @@ function uninstallDaemon() {
 export interface AutopilotStatusSnapshot {
   installed: boolean;
   last_log: string;
+  observe_propose: {
+    installed: boolean;
+    label: string;
+    install_path: string | null;
+    wrapper_path: string;
+    log_path: string;
+    last_log: string;
+  };
   lock: {
     path: string;
     exists: boolean;
@@ -1421,13 +1429,25 @@ function isPidAlive(pid: number): boolean {
 }
 
 export function getAutopilotStatusSnapshot(now: number = Date.now()): AutopilotStatusSnapshot {
-  const logFile = join(process.env.HOME || '', '.gbrain', 'autopilot.log');
+  const home = process.env.HOME || '';
+  const logFile = join(home, '.gbrain', 'autopilot.log');
+  const observeProposeLabel = 'com.gbrain.autopilot.observe-propose';
+  const observeProposePlist = plistPath('observe-propose');
+  const observeProposeWrapper = join(home, '.gbrain', 'autopilot-observe-propose-run.sh');
+  const observeProposeLog = join(home, '.gbrain', 'autopilot-observe-propose.err');
   let lastLine = '';
   try {
     const content = readFileSync(logFile, 'utf-8');
     const lines = content.trim().split('\n');
     lastLine = lines[lines.length - 1] || '';
   } catch { /* no log */ }
+
+  let observeProposeLastLine = '';
+  try {
+    const content = readFileSync(observeProposeLog, 'utf-8');
+    const lines = content.trim().split('\n');
+    observeProposeLastLine = lines[lines.length - 1] || '';
+  } catch { /* no observe/propose log */ }
 
   let installed = false;
   if (process.platform === 'darwin') {
@@ -1438,6 +1458,8 @@ export function getAutopilotStatusSnapshot(now: number = Date.now()): AutopilotS
       installed = crontab.includes('gbrain autopilot');
     } catch { /* no crontab */ }
   }
+
+  const observeProposeInstalled = existsSync(observeProposePlist) || existsSync(observeProposeWrapper);
 
   const lockPath = gbrainHomePath('autopilot.lock');
   const lock = {
@@ -1469,7 +1491,19 @@ export function getAutopilotStatusSnapshot(now: number = Date.now()): AutopilotS
     }
   }
 
-  return { installed, last_log: lastLine, lock };
+  return {
+    installed,
+    last_log: lastLine,
+    observe_propose: {
+      installed: observeProposeInstalled,
+      label: observeProposeLabel,
+      install_path: existsSync(observeProposePlist) ? observeProposePlist : null,
+      wrapper_path: observeProposeWrapper,
+      log_path: observeProposeLog,
+      last_log: observeProposeLastLine,
+    },
+    lock,
+  };
 }
 
 function showStatus(json: boolean) {
@@ -1479,6 +1513,9 @@ function showStatus(json: boolean) {
   } else {
     console.log(`Autopilot: ${snapshot.installed ? 'installed' : 'not installed'}`);
     if (snapshot.last_log) console.log(`Last log: ${snapshot.last_log}`);
+    console.log(`Observe/propose canary: ${snapshot.observe_propose.installed ? 'installed' : 'not installed'} (${snapshot.observe_propose.label})`);
+    if (snapshot.observe_propose.install_path) console.log(`Observe/propose launchd: ${snapshot.observe_propose.install_path}`);
+    if (snapshot.observe_propose.last_log) console.log(`Observe/propose last log: ${snapshot.observe_propose.last_log}`);
     if (snapshot.lock.exists) {
       const age = snapshot.lock.age_seconds === null ? 'unknown' : `${snapshot.lock.age_seconds}s`;
       const pid = snapshot.lock.pid === null ? 'unknown' : String(snapshot.lock.pid);
