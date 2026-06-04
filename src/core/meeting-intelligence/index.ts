@@ -924,11 +924,48 @@ export function resetMeetingLedgerForChangedTranscript(
 export function collapseProviderDuplicates(
   meetings: readonly NormalizedProviderMeeting[],
 ): CollapsedProviderMeeting[] {
-  const groups = new Map<string, Array<{ meeting: NormalizedProviderMeeting; index: number }>>();
-  meetings.forEach((meeting, index) => {
-    const group = groups.get(meeting.dedupe_key) ?? [];
-    group.push({ meeting, index });
-    groups.set(meeting.dedupe_key, group);
+  const indexedMeetings = meetings.map((meeting, index) => ({ meeting, index }));
+  const parents = indexedMeetings.map((_, index) => index);
+  const find = (index: number): number => {
+    const parent = parents[index];
+    if (parent === index || parent === undefined) return index;
+    const root = find(parent);
+    parents[index] = root;
+    return root;
+  };
+  const union = (left: number, right: number): void => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
+  };
+
+  const byDedupeKey = new Map<string, number>();
+  indexedMeetings.forEach((item, index) => {
+    const existing = byDedupeKey.get(item.meeting.dedupe_key);
+    if (existing === undefined) {
+      byDedupeKey.set(item.meeting.dedupe_key, index);
+    } else {
+      union(existing, index);
+    }
+  });
+
+  for (let i = 0; i < indexedMeetings.length; i += 1) {
+    for (let j = i + 1; j < indexedMeetings.length; j += 1) {
+      if (isParallelProviderBotDuplicate(
+        indexedMeetings[i]!.meeting,
+        indexedMeetings[j]!.meeting,
+      )) {
+        union(i, j);
+      }
+    }
+  }
+
+  const groups = new Map<number, Array<{ meeting: NormalizedProviderMeeting; index: number }>>();
+  indexedMeetings.forEach((item, index) => {
+    const root = find(index);
+    const group = groups.get(root) ?? [];
+    group.push(item);
+    groups.set(root, group);
   });
 
   return [...groups.values()].map((group) => {
@@ -965,7 +1002,9 @@ export function collapseProviderDuplicates(
       .slice(1)
       .map((item) => ({
         provider_meeting_id: item.meeting.provider_meeting_id,
-        reason: 'same_provider_meeting_link_date_and_title',
+        reason: canonical.dedupe_key === item.meeting.dedupe_key
+          ? 'same_provider_meeting_link_date_and_title'
+          : 'same_provider_parallel_bot_same_start_window',
       }));
     const duplicateProviderIds = [...new Set(duplicateProviderRecords
       .map((duplicate) => duplicate.provider_meeting_id))]
@@ -976,6 +1015,53 @@ export function collapseProviderDuplicates(
       duplicates: [...duplicateProviderRecords, ...superseded],
     };
   }).sort((a, b) => a.canonical.started_at.localeCompare(b.canonical.started_at));
+}
+
+function isParallelProviderBotDuplicate(
+  left: NormalizedProviderMeeting,
+  right: NormalizedProviderMeeting,
+): boolean {
+  if (left.provider !== right.provider) return false;
+  if (left.provider_meeting_id === right.provider_meeting_id) return false;
+  if (left.meeting_date !== right.meeting_date) return false;
+  const startDeltaMs = Math.abs(Date.parse(left.started_at) - Date.parse(right.started_at));
+  if (!Number.isFinite(startDeltaMs) || startDeltaMs > 180_000) return false;
+
+  const sameMeetingLink = Boolean(left.meeting_link && right.meeting_link
+    && normalizeDedupeLink(left.meeting_link) === normalizeDedupeLink(right.meeting_link));
+  const providerGeneratedUntitled = isProviderGeneratedUntitledTitle(left.title)
+    || isProviderGeneratedUntitledTitle(right.title);
+  if (!sameMeetingLink && !providerGeneratedUntitled) return false;
+
+  return transcriptOverlapCount(left.transcript, right.transcript) >= Math.min(
+    3,
+    Math.max(1, Math.min(left.transcript.length, right.transcript.length)),
+  );
+}
+
+function isProviderGeneratedUntitledTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return normalized === 'untitled meeting'
+    || normalized.endsWith(' - untitled')
+    || /@[^\s]+\s+-\s+\w{3},\s+\d{1,2}\s+\w{3}\s+\d{4}.+\s+-\s+untitled$/.test(normalized);
+}
+
+function transcriptOverlapCount(
+  left: readonly DiarizedTranscriptTurn[],
+  right: readonly DiarizedTranscriptTurn[],
+): number {
+  const leftTexts = new Set(left.map((turn) => normalizeTranscriptTextForOverlap(turn.text)).filter(Boolean));
+  let overlap = 0;
+  for (const turn of right) {
+    const text = normalizeTranscriptTextForOverlap(turn.text);
+    if (!text || !leftTexts.has(text)) continue;
+    overlap += 1;
+  }
+  return overlap;
+}
+
+function normalizeTranscriptTextForOverlap(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
 export function buildEnrichmentGate(meeting: NormalizedProviderMeeting): EnrichmentGate {

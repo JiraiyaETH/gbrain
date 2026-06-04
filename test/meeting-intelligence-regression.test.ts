@@ -93,6 +93,32 @@ describe('meeting intelligence regressions', () => {
     ]);
   });
 
+  test('parallel Fireflies bot records collapse even when one title is provider-generated untitled', () => {
+    const first = normalizeFirefliesMeeting(fixture.fireflies.completed);
+    const parallelBot = normalizeFirefliesMeeting({
+      ...(fixture.fireflies.completed as Record<string, unknown>),
+      id: 'ff-mtg-parallel-bot-0001',
+      transcript_id: 'ff-mtg-parallel-bot-0001',
+      title: 'alice@example.com - Wed, 20 May 2026 03:01:30 +00 - Untitled',
+      started_at: '2026-05-20T03:01:30.000Z',
+      date_recorded: '2026-05-20T03:01:30.000Z',
+      sentences: (fixture.fireflies.completed as { sentences: unknown[] }).sentences.slice(1),
+    });
+
+    const collapsed = collapseProviderDuplicates([parallelBot, first]);
+
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0]?.canonical.provider_meeting_id).toBe('ff-mtg-0001');
+    expect(collapsed[0]?.raw_provider_ids).toEqual([
+      'ff-mtg-0001',
+      'ff-mtg-parallel-bot-0001',
+    ]);
+    expect(collapsed[0]?.duplicates).toContainEqual({
+      provider_meeting_id: 'ff-mtg-parallel-bot-0001',
+      reason: 'same_provider_parallel_bot_same_start_window',
+    });
+  });
+
   test('rendered page and audit do not leak secret-like provider material', () => {
     const meeting = normalizeFirefliesMeeting(fixture.fireflies.completed);
     const page = renderMeetingPage(meeting);
