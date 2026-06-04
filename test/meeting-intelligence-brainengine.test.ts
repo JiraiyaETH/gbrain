@@ -88,12 +88,17 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
     });
     expect(dryRunClaim).toHaveLength(1);
     expect(dryRunClaim[0]?.command_plan.env.HERMES_PROFILE).toBe('alex');
-    expect(dryRunClaim[0]?.command_plan.argv.slice(0, 5)).toEqual([
-      ['her', 'mes'].join(''),
-      '--profile',
-      'alex',
-      '--skills',
-      'meeting-ingestion',
+    expect(dryRunClaim[0]?.command_plan.argv).toEqual([
+      'gbrain',
+      'meeting-intelligence',
+      'materialize',
+      '--provider',
+      'fireflies',
+      '--transcript-id',
+      'ff-mtg-0001',
+      '--source',
+      'default',
+      '--json',
     ]);
     expect(dryRunClaim[0]?.prompt_text).toContain('Load and follow the meeting-ingestion skill.');
     expect(dryRunClaim[0]?.prompt_text).not.toContain('Let\'s review the acme-example follow-up');
@@ -184,12 +189,17 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
     expect(wakeSummary.status).toBe('wake_plan');
     expect(wakeSummary.claimed_count).toBe(1);
     expect(wakeSummary.wake_requests[0]?.command_plan.env.HERMES_PROFILE).toBe('alex');
-    expect(wakeSummary.wake_requests[0]?.command_plan.argv.slice(0, 5)).toEqual([
-      ['her', 'mes'].join(''),
-      '--profile',
-      'alex',
-      '--skills',
-      'meeting-ingestion',
+    expect(wakeSummary.wake_requests[0]?.command_plan.argv).toEqual([
+      'gbrain',
+      'meeting-intelligence',
+      'materialize',
+      '--provider',
+      'fireflies',
+      '--transcript-id',
+      'ff-mtg-0001',
+      '--source',
+      'default',
+      '--json',
     ]);
     expect(wakeSummary.wake_requests[0]?.prompt_text).toContain('Load and follow the meeting-ingestion skill.');
     expect(wakeSummary.wake_requests[0]?.prompt_text).toContain('Read the materialized GBrain pages; do not rely on this prompt for transcript content.');
@@ -346,6 +356,44 @@ describe('meeting intelligence BrainEngine persistence and Alex wake bridge', ()
       'fireflies',
       '--transcript-id',
       'ff-mtg-0001',
+      '--source',
+      'default',
+      '--json',
+    ]);
+  });
+
+  test('execute wake normalizes prior -q profile chat prompts without a materialize line', () => {
+    const prompt = [
+      'Meeting ingest enrichment wake request.',
+      'Provider: fireflies',
+      'Provider meeting id: ff-mtg-legacy-0001',
+      'Action: enrich attendee/entity Brain pages from the materialized meeting/source pages only;',
+    ].join('\n');
+    const normalized = normalizeWakeCommandPlan({
+      env: { HERMES_PROFILE: 'alex' },
+      argv: [
+        ['her', 'mes'].join(''),
+        '--profile',
+        'alex',
+        '--skills',
+        'meeting-ingestion',
+        'chat',
+        '-Q',
+        '--source',
+        'meeting-intelligence-wake',
+        '-q',
+        prompt,
+      ],
+    }, 'alex');
+
+    expect(normalized.argv).toEqual([
+      'gbrain',
+      'meeting-intelligence',
+      'materialize',
+      '--provider',
+      'fireflies',
+      '--transcript-id',
+      'ff-mtg-legacy-0001',
       '--source',
       'default',
       '--json',

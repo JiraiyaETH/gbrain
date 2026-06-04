@@ -765,27 +765,47 @@ export function normalizeWakeCommandPlan(
   plan: { env: Record<string, string>; argv: string[] },
   targetProfile: string,
 ): { env: Record<string, string>; argv: string[] } {
-  const promptIndex = plan.argv.indexOf('--query');
-  const promptText = promptIndex >= 0 ? plan.argv[promptIndex + 1] : undefined;
-  const materializeMatch = typeof promptText === 'string'
-    ? promptText.match(/(?:^|\n)Materialize command:\s*(gbrain\s+meeting-intelligence\s+materialize\s+--provider\s+\S+\s+--transcript-id\s+\S+\s+--source\s+default\s+--json)(?:\n|$)/)
+  const env = { ...plan.env, HERMES_PROFILE: plan.env.HERMES_PROFILE ?? targetProfile };
+  const promptText = findArgValue(plan.argv, '--query') ?? findArgValue(plan.argv, '-q');
+  const deterministic = typeof promptText === 'string'
+    ? materializeArgvFromWakePrompt(promptText)
     : null;
-  if (materializeMatch?.[1]) {
-    return {
-      env: { ...plan.env, HERMES_PROFILE: plan.env.HERMES_PROFILE ?? targetProfile },
-      argv: materializeMatch[1].trim().split(/\s+/),
-    };
-  }
+  if (deterministic) return { env, argv: deterministic };
 
   const [command, firstArg, ...rest] = plan.argv;
   if (command === 'hermes' && firstArg === 'chat') {
     return {
-      env: { ...plan.env, HERMES_PROFILE: targetProfile },
+      env: { ...env, HERMES_PROFILE: targetProfile },
       argv: [command, '--profile', targetProfile, firstArg, ...rest],
     };
   }
-  return {
-    env: { ...plan.env, HERMES_PROFILE: plan.env.HERMES_PROFILE ?? targetProfile },
-    argv: plan.argv,
-  };
+  return { env, argv: plan.argv };
+}
+
+function findArgValue(argv: readonly string[], flag: string): string | undefined {
+  const index = argv.indexOf(flag);
+  return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function materializeArgvFromWakePrompt(promptText: string): string[] | null {
+  const explicit = promptText.match(
+    /(?:^|\n)Materialize command:\s*(gbrain\s+meeting-intelligence\s+materialize\s+--provider\s+\S+\s+--transcript-id\s+\S+\s+--source\s+default\s+--json)(?:\n|$)/,
+  );
+  if (explicit?.[1]) return explicit[1].trim().split(/\s+/);
+
+  const provider = promptText.match(/(?:^|\n)Provider:\s*([^\n\s]+)/)?.[1]?.trim();
+  const transcriptId = promptText.match(/(?:^|\n)Provider meeting id:\s*([^\n\s]+)/)?.[1]?.trim();
+  if (!provider || !transcriptId) return null;
+  return [
+    'gbrain',
+    'meeting-intelligence',
+    'materialize',
+    '--provider',
+    provider,
+    '--transcript-id',
+    transcriptId,
+    '--source',
+    'default',
+    '--json',
+  ];
 }

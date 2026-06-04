@@ -1265,6 +1265,18 @@ export function buildAlexWakeRequestPlan(
   ].join('|'));
   const providerMeetingId = redactSensitiveText(meeting.provider_meeting_id);
   const sourceSlug = page.slug.replace(/^meetings\//, `sources/${meeting.provider}/`);
+  const materializeArgv = [
+    'gbrain',
+    'meeting-intelligence',
+    'materialize',
+    '--provider',
+    meeting.provider,
+    '--transcript-id',
+    providerMeetingId,
+    '--source',
+    'default',
+    '--json',
+  ];
   const guardrails = [
     'Read the materialized GBrain pages; do not rely on this prompt for transcript content.',
     'Write durable meeting/source/person/company knowledge only to GBrain source_id=default.',
@@ -1280,24 +1292,12 @@ export function buildAlexWakeRequestPlan(
     `Meeting page: ${page.slug}`,
     `Source packet: ${sourceSlug}`,
     `Transcript checksum: ${meeting.transcript_checksum}`,
+    `Materialize command: ${materializeArgv.join(' ')}`,
     'Action: enrich attendee/entity Brain pages from the materialized meeting/source pages only; do not call Claude, Anthropic, or Minions by default.',
     'Extraction lenses: identity, origin/current location, family/language context, travel context, working style, content direction, commercial signals, follow-ups, review-only risks.',
     'Guardrails:',
     ...guardrails.map((item) => `- ${item}`),
   ].join('\n');
-  const argv = [
-    'hermes',
-    '--profile',
-    targetProfile,
-    '--skills',
-    'meeting-ingestion',
-    'chat',
-    '-Q',
-    '--source',
-    'meeting-intelligence-wake',
-    '-q',
-    promptText,
-  ];
   return {
     wake_key: wakeKey,
     source_id: 'default',
@@ -1322,8 +1322,8 @@ export function buildAlexWakeRequestPlan(
       guardrails,
     },
     command_plan: {
-      env: { HERMES_PROFILE: targetProfile },
-      argv,
+      env: { HERMES_PROFILE: targetProfile, GBRAIN_HOME: DEFAULT_RUNTIME_HOME },
+      argv: materializeArgv,
     },
   };
 }
