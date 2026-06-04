@@ -12,6 +12,7 @@ import {
   FRONTMATTER_LINK_MAP,
   type SlugResolver,
 } from '../src/core/link-extraction.ts';
+import { classifyLinkCandidate } from '../src/core/link-ontology.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 
 // v0.27.1 cherry-3: image-to-page path-proximity heuristic.
@@ -129,6 +130,24 @@ const allowAllResolver = {
 const nullResolver = { resolve: async () => null };
 
 describe('extractPageLinks', () => {
+  test('annotates candidates with ontology review metadata', async () => {
+    const { candidates } = await extractPageLinks(
+      'people/wals',
+      'Wals is a SignNow-backed content creator who worked with Tailored on [IO Net](companies/io-net) marketing campaigns.',
+      {},
+      'person',
+      nullResolver,
+    );
+    const ioNet = candidates.find(c => c.targetSlug === 'companies/io-net');
+    expect(ioNet).toMatchObject({
+      linkType: 'creator_for',
+      reasonCode: 'creator_campaign_context',
+      authorityTier: 'medium',
+      queryExpansionAllowed: true,
+    });
+    expect(ioNet?.evidenceSnippet).toContain('SignNow-backed content creator');
+  });
+
   test('returns LinkCandidate[] with inferred types', async () => {
     const { candidates } = await extractPageLinks(
       'docs/x',
@@ -200,6 +219,61 @@ describe('extractPageLinks', () => {
       {}, 'note', nullResolver,
     );
     expect(candidates).toEqual([]);
+  });
+});
+
+describe('link ontology policy', () => {
+  test('downgrades unsafe inferred investor edges to weak non-query mentions', () => {
+    const decision = classifyLinkCandidate({
+      fromSlug: 'people/wals',
+      fromPageType: 'person',
+      toSlug: 'companies/io-net',
+      proposedType: 'invested_in',
+      context: 'Wals is a creator near IO Net campaign evidence, not an investor.',
+      linkSource: 'markdown',
+    });
+    expect(decision).toMatchObject({
+      linkType: 'mentions',
+      reasonCode: 'unsafe_investor_inference_downgraded',
+      authorityTier: 'weak',
+      queryExpansionAllowed: false,
+    });
+  });
+
+  test('preserves explicit frontmatter investor edges as explicit authority', () => {
+    const decision = classifyLinkCandidate({
+      fromSlug: 'people/investor-example',
+      fromPageType: 'person',
+      toSlug: 'companies/acme-example',
+      proposedType: 'invested_in',
+      context: 'frontmatter: investors',
+      linkSource: 'frontmatter',
+      originField: 'investors',
+    });
+    expect(decision).toMatchObject({
+      linkType: 'invested_in',
+      reasonCode: 'explicit_frontmatter_edge',
+      authorityTier: 'explicit',
+      queryExpansionAllowed: true,
+    });
+  });
+
+  test('marks typed-NER mention-source edges as non-expanding even when the verb is strong', () => {
+    const decision = classifyLinkCandidate({
+      fromSlug: 'people/founder-example',
+      fromPageType: 'person',
+      toSlug: 'companies/acme-example',
+      proposedType: 'works_at',
+      context: 'Founder Example works at Acme Example.',
+      linkSource: 'mentions',
+      linkKind: 'typed_ner',
+    });
+    expect(decision).toMatchObject({
+      linkType: 'works_at',
+      reasonCode: 'work_affiliation_context',
+      authorityTier: 'strong',
+      queryExpansionAllowed: false,
+    });
   });
 });
 
@@ -684,6 +758,30 @@ describe('extractFrontmatterLinks — field-map coverage', () => {
     expect(candidates).toHaveLength(1);
     expect(candidates[0].fromSlug).toBe('people/pedro');
     expect(unresolved).toHaveLength(0);
+  });
+
+  test('missing/null frontmatter is treated as empty, not a crash', async () => {
+    const nullResult = await extractFrontmatterLinks(
+      'meetings/x', 'meeting' as never, null as never, resolver,
+    );
+    const undefinedResult = await extractFrontmatterLinks(
+      'meetings/x', 'meeting' as never, undefined as never, resolver,
+    );
+
+    expect(nullResult).toEqual({ candidates: [], unresolved: [] });
+    expect(undefinedResult).toEqual({ candidates: [], unresolved: [] });
+  });
+
+  test('non-object frontmatter is treated as empty, not field-indexable data', async () => {
+    const scalarResult = await extractFrontmatterLinks(
+      'meetings/x', 'meeting' as never, 'attendees: Pedro' as never, resolver,
+    );
+    const arrayResult = await extractFrontmatterLinks(
+      'meetings/x', 'meeting' as never, ['Pedro'] as never, resolver,
+    );
+
+    expect(scalarResult).toEqual({ candidates: [], unresolved: [] });
+    expect(arrayResult).toEqual({ candidates: [], unresolved: [] });
   });
 
   test('array of objects: uses .name, carries role into context', async () => {

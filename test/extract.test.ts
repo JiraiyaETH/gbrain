@@ -99,11 +99,12 @@ describe('extractLinksFromFile', () => {
     expect(links[0].link_type).toBe('works_at');
   });
 
-  it('does not turn creator campaign work into investment evidence', async () => {
+  it('turns creator campaign work into creator_for, not investment evidence', async () => {
     const content = 'Wals is a SignNow-backed content creator who worked with Tailored on [IO Net](../companies/io-net.md) marketing campaigns.';
     const allSlugs = new Set(['people/wals', 'companies/io-net']);
     const links = await extractLinksFromFile(content, 'people/wals.md', allSlugs);
-    expect(links[0].link_type).toBe('mentions');
+    expect(links[0].link_type).toBe('creator_for');
+    expect(links[0].link_type).not.toBe('invested_in');
   });
 
   it('keeps personal-domain backlinks to people pages', async () => {

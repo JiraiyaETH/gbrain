@@ -166,8 +166,8 @@ describe('gbrain extract --stale', () => {
   });
 
   test('--dry-run previews justified candidate counts and writes nothing', async () => {
-    await engine.putPage('people/alice', personPage('Alice'));
-    await engine.putPage('companies/acme', companyPage('Acme', '[Alice](people/alice) joined [Acme](companies/acme).'));
+    await engine.putPage('people/alice', personPage('Alice', 'Alice works at [Acme](companies/acme).'));
+    await engine.putPage('companies/acme', companyPage('Acme'));
 
     const result = await extractStaleFromDB(engine, {
       dryRun: true,
@@ -177,14 +177,37 @@ describe('gbrain extract --stale', () => {
     });
 
     expect(result.pagesProcessed).toBe(2);
-    expect(result.linksCreated).toBe(2);
+    expect(result.linksCreated).toBe(1);
+    const acmeSample = result.reviewSamples?.links.find(l => l.to_slug === 'companies/acme');
+    expect(acmeSample).toMatchObject({
+      reason_code: 'work_affiliation_context',
+      authority_tier: 'strong',
+      query_expansion_allowed: true,
+    });
+    expect(acmeSample?.evidence_snippet).toContain('works at');
     expect(result.timelineCreated).toBe(0);
     expect(result.staleRemaining).toBe(2);
     expect(await engine.getLinks('companies/acme')).toHaveLength(0);
-    expect(await stampOf('people/alice')).toBeNull();
-    expect(await stampOf('companies/acme')).toBeNull();
+    expect(await engine.getLinks('people/alice')).toHaveLength(0);
     // Still stale after dry-run.
     expect(await engine.countStalePagesForExtraction()).toBe(2);
+  });
+
+  test('plain dry-run stdout includes ontology review metadata for operator review', async () => {
+    await engine.putPage('people/alice', personPage('Alice', 'Alice works at [Acme](companies/acme).'));
+    await engine.putPage('companies/acme', companyPage('Acme'));
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (message?: unknown, ...rest: unknown[]) => {
+      logs.push([message, ...rest].map(String).join(' '));
+    };
+    try {
+      await runExtract(engine, ['--stale', '--dry-run']);
+    } finally {
+      console.log = originalLog;
+    }
+    expect(logs.some(line => line.includes('Review sample links:'))).toBe(true);
+    expect(logs.some(line => line.includes('reason=work_affiliation_context') && line.includes('query-expand=yes'))).toBe(true);
   });
 
   test('resolver guidance pages do not emit structured timeline rows', async () => {
@@ -219,7 +242,7 @@ describe('gbrain extract --stale', () => {
     await runExtract(engine, ['--stale']);
 
     const links = await engine.getLinks('people/wals');
-    expect(links.some(l => l.to_slug === 'companies/io-net' && l.link_type === 'mentions')).toBe(true);
+    expect(links.some(l => l.to_slug === 'companies/io-net' && l.link_type === 'creator_for')).toBe(true);
     expect(links.some(l => l.to_slug === 'companies/io-net' && l.link_type === 'invested_in')).toBe(false);
   });
 

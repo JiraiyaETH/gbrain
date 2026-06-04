@@ -20,6 +20,7 @@ import type { LinkBatchInput } from './engine.ts';
 import { buildGazetteer, findMentionedEntities, type Gazetteer } from './by-mention.ts';
 import { inferLinkTypeFromPack } from './schema-pack/link-inference.ts';
 import { loadActivePackBestEffort } from './schema-pack/best-effort.ts';
+import { classifyLinkCandidate } from './link-ontology.ts';
 
 export interface ExtractNerOpts {
   /** When true: enumerate but don't write. */
@@ -174,14 +175,25 @@ export async function extractNerLinks(
       const context = getContextWindow(body, m.offset, m.name.length);
       const verb = inferNerLinkType(pack.manifest, targetType, context);
       if (!verb) continue;
+      const policy = classifyLinkCandidate({
+        fromSlug: slug,
+        fromPageType: page.type,
+        toSlug: m.slug,
+        toPageType: targetType,
+        proposedType: verb,
+        context,
+        linkSource: 'mentions',
+        linkKind: 'typed_ner',
+      });
+      if (policy.linkType === 'mentions' && !policy.queryExpansionAllowed) continue;
 
       batch.push({
         from_slug: slug,
         to_slug: m.slug,
-        link_type: verb,
+        link_type: policy.linkType,
         link_source: 'mentions',
         link_kind: 'typed_ner',
-        context: m.name,
+        context: policy.evidenceSnippet || m.name,
         from_source_id: source_id,
         to_source_id: m.source_id,
       });

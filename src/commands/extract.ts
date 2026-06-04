@@ -1550,7 +1550,16 @@ export async function extractStaleFromDB(
   pagesProcessed: number;
   staleRemaining: number;
   reviewSamples?: {
-    links: Array<{ from_slug: string; to_slug: string; link_type: string; context?: string }>;
+    links: Array<{
+      from_slug: string;
+      to_slug: string;
+      link_type: string;
+      context?: string;
+      reason_code?: string;
+      evidence_snippet?: string;
+      authority_tier?: string;
+      query_expansion_allowed?: boolean;
+    }>;
     timeline: Array<{ slug: string; date: string; summary: string }>;
   };
 }> {
@@ -1590,7 +1599,16 @@ export async function extractStaleFromDB(
   const startMs = Date.now();
   let afterPageId = 0;
   let linksCreated = 0, timelineCreated = 0, pagesProcessed = 0;
-  const reviewSamples = dryRun ? { links: [] as Array<{ from_slug: string; to_slug: string; link_type: string; context?: string }>, timeline: [] as Array<{ slug: string; date: string; summary: string }> } : undefined;
+  const reviewSamples = dryRun ? { links: [] as Array<{
+    from_slug: string;
+    to_slug: string;
+    link_type: string;
+    context?: string;
+    reason_code?: string;
+    evidence_snippet?: string;
+    authority_tier?: string;
+    query_expansion_allowed?: boolean;
+  }>, timeline: [] as Array<{ slug: string; date: string; summary: string }> } : undefined;
   const REVIEW_SAMPLE_LIMIT = 25;
   let budgetHit = false;
 
@@ -1625,6 +1643,10 @@ export async function extractStaleFromDB(
             to_slug: linkInput.to_slug,
             link_type: linkInput.link_type,
             context: linkInput.context,
+            reason_code: c.reasonCode,
+            evidence_snippet: c.evidenceSnippet,
+            authority_tier: c.authorityTier,
+            query_expansion_allowed: c.queryExpansionAllowed,
           });
         }
       }
@@ -1697,6 +1719,13 @@ export async function extractStaleFromDB(
   if (!jsonMode) {
     if (dryRun) {
       console.log(`Extract --stale dry run: would create ${linksCreated} link(s) + ${timelineCreated} timeline entr(ies) from ${pagesProcessed} page(s); ${staleRemaining} page(s) remain stale until apply.`);
+      if (reviewSamples?.links.length) {
+        console.log('Review sample links:');
+        for (const sample of reviewSamples.links.slice(0, 5)) {
+          const expansion = sample.query_expansion_allowed ? 'query-expand=yes' : 'query-expand=no';
+          console.log(`- ${sample.from_slug} -> ${sample.to_slug} [${sample.link_type}] ${sample.authority_tier ?? 'unknown'} ${expansion} reason=${sample.reason_code ?? 'unknown'} evidence="${sample.evidence_snippet ?? sample.context ?? ''}"`);
+        }
+      }
     } else {
       console.log(`Extract --stale: ${linksCreated} link(s) + ${timelineCreated} timeline entr(ies) from ${pagesProcessed} page(s).`);
     }

@@ -99,6 +99,20 @@ describe('NamedThingBench fixture privacy guard', () => {
       expect(m[2]).toContain('example');
     }
   });
+
+  test('Consortium graph fixture is parseable and stays placeholder-only', async () => {
+    const { readFileSync } = await import('fs');
+    const { join } = await import('path');
+    const raw = readFileSync(join(import.meta.dir, 'fixtures/retrieval-quality/consortium-graph-example.jsonl'), 'utf8').toLowerCase();
+    const qs = parseQuestionsJsonl(raw);
+    expect(qs.some(q => q.family === 'graph-relationship')).toBe(true);
+    expect(qs.some(q => q.family === 'hard-negative')).toBe(true);
+    const slugs = [...raw.matchAll(/"(projects|people|meetings|companies)\/([a-z0-9-]+)"/g)];
+    expect(slugs.length).toBeGreaterThan(0);
+    for (const m of slugs) {
+      expect(m[2]).toContain('example');
+    }
+  });
 });
 
 describe('parseQuestionsJsonl', () => {

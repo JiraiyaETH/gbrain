@@ -3009,6 +3009,7 @@ export class PostgresEngine implements BrainEngine {
       JOIN targets t ON t.id = l.to_page_id
       WHERE l.from_page_id = ANY(${pageIds}::int[])
         AND l.to_page_id   = ANY(${pageIds}::int[])
+        AND l.link_source IS DISTINCT FROM 'mentions'
       GROUP BY l.to_page_id
       HAVING COUNT(DISTINCT l.from_page_id) >= 1
     `;

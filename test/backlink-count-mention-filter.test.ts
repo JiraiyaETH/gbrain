@@ -180,3 +180,53 @@ describe('getBacklinkCounts — D12 mention filter', () => {
     expect(counts.get('does/not/exist')).toBe(0);
   });
 });
+
+describe('getAdjacencyBoosts — mention filter parity', () => {
+  test('mention-source links do not create graph adjacency boosts', async () => {
+    await seedTarget('people/target-example');
+    await seedSource('notes/plain-mention-example', 1);
+    const rows = await engine.executeRaw<{ slug: string; id: number }>(
+      `SELECT slug, id FROM pages WHERE slug IN ($1, $2)`,
+      ['people/target-example', 'notes/plain-mention-example'],
+    );
+    const ids = new Map(rows.map(r => [r.slug, r.id]));
+    await engine.addLinksBatch([{
+      from_slug: 'notes/plain-mention-example',
+      to_slug: 'people/target-example',
+      link_type: 'mentions',
+      link_source: 'mentions',
+      context: '',
+    }]);
+
+    const boosts = await engine.getAdjacencyBoosts([
+      ids.get('notes/plain-mention-example')!,
+      ids.get('people/target-example')!,
+    ]);
+
+    expect(boosts.get(ids.get('people/target-example')!)?.hits ?? 0).toBe(0);
+  });
+
+  test('markdown-source links still create graph adjacency boosts', async () => {
+    await seedTarget('people/intentional-example');
+    await seedSource('notes/intentional-link-example', 1);
+    const rows = await engine.executeRaw<{ slug: string; id: number }>(
+      `SELECT slug, id FROM pages WHERE slug IN ($1, $2)`,
+      ['people/intentional-example', 'notes/intentional-link-example'],
+    );
+    const ids = new Map(rows.map(r => [r.slug, r.id]));
+    await engine.addLinksBatch([{
+      from_slug: 'notes/intentional-link-example',
+      to_slug: 'people/intentional-example',
+      link_type: 'mentions',
+      link_source: 'markdown',
+      context: '',
+    }]);
+
+    const boosts = await engine.getAdjacencyBoosts([
+      ids.get('notes/intentional-link-example')!,
+      ids.get('people/intentional-example')!,
+    ]);
+
+    expect(boosts.get(ids.get('people/intentional-example')!)?.hits).toBe(1);
+  });
+});

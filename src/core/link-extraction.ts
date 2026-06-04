@@ -13,6 +13,7 @@
 
 import type { BrainEngine } from './engine.ts';
 import type { PageType } from './types.ts';
+import { classifyLinkCandidate, type LinkAuthorityTier } from './link-ontology.ts';
 
 /**
  * v0.42.7 — link-extraction version stamp. Bump this ISO timestamp whenever the
@@ -27,7 +28,7 @@ import type { PageType } from './types.ts';
  * OR updated_at > links_extracted_at`. It is an ISO-8601 string (NOT a number) —
  * the column is TIMESTAMPTZ and the predicate binds it as `::timestamptz`.
  */
-export const LINK_EXTRACTOR_VERSION_TS = '2026-06-04T07:35:00Z';
+export const LINK_EXTRACTOR_VERSION_TS = '2026-06-04T08:45:00Z';
 
 // ─── Entity references ──────────────────────────────────────────
 
@@ -339,6 +340,14 @@ export interface LinkCandidate {
   originSlug?: string;
   /** Frontmatter field name (e.g. 'key_people'), for debug + unresolved report. */
   originField?: string;
+  /** Ontology policy reason code used for operator review. */
+  reasonCode?: string;
+  /** Evidence snippet used by the ontology policy. */
+  evidenceSnippet?: string;
+  /** Authority tier assigned by the ontology policy. */
+  authorityTier?: LinkAuthorityTier;
+  /** Whether this edge should be allowed to drive query expansion/boosting. */
+  queryExpansionAllowed?: boolean;
 }
 
 /**
@@ -426,11 +435,31 @@ export async function extractPageLinks(
   const fm = await extractFrontmatterLinks(slug, pageType, frontmatter, resolver);
   candidates.push(...fm.candidates);
 
+  const policyCandidates = candidates.map(c => {
+    const policy = classifyLinkCandidate({
+      fromSlug: c.fromSlug ?? slug,
+      fromPageType: pageType,
+      toSlug: c.targetSlug,
+      proposedType: c.linkType,
+      context: c.context,
+      linkSource: c.linkSource,
+      originField: c.originField,
+    });
+    return {
+      ...c,
+      linkType: policy.linkType,
+      reasonCode: policy.reasonCode,
+      evidenceSnippet: policy.evidenceSnippet,
+      authorityTier: policy.authorityTier,
+      queryExpansionAllowed: policy.queryExpansionAllowed,
+    };
+  });
+
   // Within-page dedup: same (fromSlug, targetSlug, linkType, linkSource)
   // collapses to one entry. First occurrence wins.
   const seen = new Set<string>();
   const result: LinkCandidate[] = [];
-  for (const c of candidates) {
+  for (const c of policyCandidates) {
     const key = `${c.fromSlug ?? ''}\u0000${c.targetSlug}\u0000${c.linkType}\u0000${c.linkSource ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -767,16 +796,20 @@ export interface FrontmatterExtractResult {
 export async function extractFrontmatterLinks(
   slug: string,
   pageType: PageType,
-  frontmatter: Record<string, unknown>,
+  frontmatter: unknown,
   resolver: SlugResolver,
 ): Promise<FrontmatterExtractResult> {
   const candidates: LinkCandidate[] = [];
   const unresolved: UnresolvedFrontmatterRef[] = [];
+  const frontmatterRecord: Record<string, unknown> =
+    frontmatter != null && typeof frontmatter === 'object' && !Array.isArray(frontmatter)
+      ? frontmatter as Record<string, unknown>
+      : {};
 
   for (const mapping of FRONTMATTER_LINK_MAP) {
     if (mapping.pageType && mapping.pageType !== pageType) continue;
     for (const field of mapping.fields) {
-      const value = frontmatter[field];
+      const value = frontmatterRecord[field];
       if (value == null) continue;
       const entries = Array.isArray(value) ? value : [value];
 

@@ -1,0 +1,4 @@
+{"family":"graph-relationship","query":"who is connected to the consortium example project?","relevant":["projects/consortium-example"]}
+{"family":"graph-relationship","query":"which creators worked with the io net example campaign?","relevant":["people/creator-example","companies/io-net-example"]}
+{"family":"graph-relationship","query":"who attended the waj call example?","relevant":["people/attendee-example","meetings/waj-call-example"]}
+{"family":"hard-negative","query":"who invested in the consortium example project?","forbidden":["people/creator-example","companies/io-net-example"]}
