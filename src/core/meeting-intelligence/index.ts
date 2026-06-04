@@ -85,7 +85,7 @@ export interface TranscriptIdempotencyResult {
 }
 
 export interface ReviewQueueItem {
-  kind: 'generated_action_item';
+  kind: 'generated_action_item' | 'generated_summary_date_conflict';
   label: string;
   status: 'review_queued';
   promotion: 'none';
@@ -979,19 +979,66 @@ export function collapseProviderDuplicates(
 }
 
 export function buildEnrichmentGate(meeting: NormalizedProviderMeeting): EnrichmentGate {
+  const providerSummaryDateConflicts = detectProviderSummaryDateConflicts(meeting);
   return {
-    review_queue: meeting.generated.action_items.map((item) => ({
-      kind: 'generated_action_item',
-      label: redactSensitiveText(item),
-      status: 'review_queued',
-      promotion: 'none',
-      blocked_reason:
-        'generated_provider_hint_without_transcript_or_human_note_evidence',
-      evidence_basis: 'generated_provider_hint',
-    })),
+    review_queue: [
+      ...meeting.generated.action_items.map((item) => ({
+        kind: 'generated_action_item' as const,
+        label: redactSensitiveText(item),
+        status: 'review_queued' as const,
+        promotion: 'none' as const,
+        blocked_reason:
+          'generated_provider_hint_without_transcript_or_human_note_evidence',
+        evidence_basis: 'generated_provider_hint' as const,
+      })),
+      ...providerSummaryDateConflicts.map((conflict) => ({
+        kind: 'generated_summary_date_conflict' as const,
+        label: conflict,
+        status: 'review_queued' as const,
+        promotion: 'none' as const,
+        blocked_reason:
+          'generated_provider_summary_date_conflicts_with_meeting_context',
+        evidence_basis: 'generated_provider_hint' as const,
+      })),
+    ],
     assigned_actions: [],
     durable_facts: [],
   };
+}
+
+function detectProviderSummaryDateConflicts(meeting: NormalizedProviderMeeting): string[] {
+  const summary = optionalString(meeting.generated.summary);
+  if (!summary) return [];
+  const meetingMonthIndex = new Date(`${meeting.meeting_date}T00:00:00.000Z`).getUTCMonth();
+  if (!Number.isFinite(meetingMonthIndex) || meetingMonthIndex < 0) return [];
+
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  const monthLookup = new Map(monthNames.flatMap((name, idx) => [
+    [name.toLowerCase(), idx],
+    [name.slice(0, 3).toLowerCase(), idx],
+  ]));
+  const seen = new Set<string>();
+  const conflicts: string[] = [];
+  const dateMention = /\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/gi;
+  for (const match of summary.matchAll(dateMention)) {
+    const monthRaw = match[1]?.replace(/\.$/, '').toLowerCase();
+    const dayRaw = match[2];
+    const monthIndex = monthRaw ? monthLookup.get(monthRaw === 'sept' ? 'sep' : monthRaw) : undefined;
+    const day = dayRaw ? Number(dayRaw) : NaN;
+    if (monthIndex === undefined || !Number.isInteger(day) || day < 1 || day > 31) continue;
+    if (monthIndex === meetingMonthIndex) continue;
+    const label = `${monthNames[monthIndex]} ${day}`;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    conflicts.push(label);
+  }
+  if (conflicts.length === 0) return [];
+  return [
+    `Provider date-quality review: generated summary mentions ${conflicts.join(', ')}, which conflicts with meeting date ${meeting.meeting_date}; keep timing claims review-only until transcript or human notes reconcile them.`,
+  ];
 }
 
 export function renderMeetingPage(
@@ -1024,7 +1071,7 @@ export function renderMeetingPage(
     ...formatMeetingParticipants(meeting),
     '',
     '## Provider Summary Hint',
-    ...formatProviderSummaryHint(meeting.generated.summary),
+    ...formatProviderSummaryHint(meeting.generated.summary, gate.review_queue),
     '',
     '## Topics Hinted by Provider',
     ...formatProviderTopics(meeting.generated.topics),
@@ -1154,12 +1201,17 @@ function formatPersonPageLink(label: string): string {
   return `[${label}](../people/${slugifySegment(label)}.md)`;
 }
 
-function formatProviderSummaryHint(summary: string | undefined): string[] {
+function formatProviderSummaryHint(
+  summary: string | undefined,
+  reviewQueue: readonly ReviewQueueItem[] = [],
+): string[] {
   const redacted = optionalString(summary ? redactSensitiveText(summary) : undefined);
   if (!redacted) return ['- No provider summary captured.'];
+  const dateConflict = reviewQueue.find((item) => item.kind === 'generated_summary_date_conflict');
   return [
     `- ${redacted}`,
     '- Boundary: provider-generated summary is a navigation aid, not durable truth until transcript or human notes support it.',
+    ...(dateConflict ? [`- ${dateConflict.label}`] : []),
   ];
 }
 

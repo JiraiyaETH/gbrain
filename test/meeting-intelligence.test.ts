@@ -173,6 +173,54 @@ describe('meeting intelligence foundation', () => {
     expect(gate.review_queue[0]?.blocked_reason).toContain('generated_provider_hint');
   });
 
+  test('flags provider-generated summary dates that conflict with meeting month context', () => {
+    const meeting = normalizeFirefliesMeeting({
+      ...fixture.fireflies.completed as Record<string, unknown>,
+      started_at: '2026-06-03T09:30:00.000Z',
+      date_recorded: '2026-06-03T09:30:00.000Z',
+      summary: {
+        short_summary:
+          'The launch reveal is planned for March 9th, with trading on March 12th after NASDAQ opens.',
+        action_items: [],
+        topics_discussed: ['Sunrise launch'],
+      },
+    });
+
+    const gate = buildEnrichmentGate(meeting);
+    const page = renderMeetingPage(meeting);
+
+    expect(gate.review_queue).toContainEqual(expect.objectContaining({
+      kind: 'generated_summary_date_conflict',
+      promotion: 'none',
+      evidence_basis: 'generated_provider_hint',
+    }));
+    expect(page.markdown).toContain('Provider date-quality review');
+    expect(page.markdown).toContain('March 9');
+    expect(page.markdown).toContain('meeting date 2026-06-03');
+  });
+
+  test('allows same-month future dates in provider summary because meetings can discuss upcoming launches', () => {
+    const meeting = normalizeFirefliesMeeting({
+      ...fixture.fireflies.completed as Record<string, unknown>,
+      started_at: '2026-06-03T09:30:00.000Z',
+      date_recorded: '2026-06-03T09:30:00.000Z',
+      summary: {
+        short_summary:
+          'The launch reveal is planned for June 9, with trading on June 12 after NASDAQ opens.',
+        action_items: [],
+        topics_discussed: ['Sunrise launch'],
+      },
+    });
+
+    const gate = buildEnrichmentGate(meeting);
+    const page = renderMeetingPage(meeting);
+
+    expect(gate.review_queue).not.toContainEqual(expect.objectContaining({
+      kind: 'generated_summary_date_conflict',
+    }));
+    expect(page.markdown).not.toContain('Provider date-quality review');
+  });
+
   test('redacts signed URLs, token-looking strings, connection strings, and payment-looking strings', () => {
     const input = [
       'https://recordings.example.com/a?X-Amz-Signature=fixture-signature&token=fixture-token',
