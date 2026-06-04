@@ -1453,20 +1453,23 @@ export async function extractStaleFromDB(
     sourceIdFilter?: string;
     catchUp: boolean;
   },
-): Promise<{ linksCreated: number; timelineCreated: number; pagesProcessed: number; staleRemaining: number }> {
+): Promise<{
+  linksCreated: number;
+  timelineCreated: number;
+  pagesProcessed: number;
+  staleRemaining: number;
+  reviewSamples?: {
+    links: Array<{ from_slug: string; to_slug: string; link_type: string; context?: string }>;
+    timeline: Array<{ slug: string; date: string; summary: string }>;
+  };
+}> {
   const { dryRun, jsonMode, includeFrontmatter, sourceIdFilter, catchUp } = opts;
   const versionTs = LINK_EXTRACTOR_VERSION_TS;
 
-  // Pre-flight count — cheap indexed COUNT. dry-run reports and returns.
+  // Pre-flight count — cheap indexed COUNT. Dry-run now previews candidate
+  // edges/timeline rows from the exact stale pages but never writes or stamps;
+  // that gives operators evidence before apply instead of a blind count.
   const totalStale = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs });
-  if (dryRun) {
-    if (jsonMode) {
-      process.stdout.write(JSON.stringify({ action: 'extract_stale_dry_run', stale_pages: totalStale }) + '\n');
-    } else {
-      console.log(`(dry run) ${totalStale} page(s) need link/timeline extraction. Run without --dry-run to extract.`);
-    }
-    return { linksCreated: 0, timelineCreated: 0, pagesProcessed: 0, staleRemaining: totalStale };
-  }
   if (totalStale === 0) {
     if (!jsonMode) console.log('No stale pages — extraction is up to date.');
     return { linksCreated: 0, timelineCreated: 0, pagesProcessed: 0, staleRemaining: 0 };
@@ -1496,6 +1499,8 @@ export async function extractStaleFromDB(
   const startMs = Date.now();
   let afterPageId = 0;
   let linksCreated = 0, timelineCreated = 0, pagesProcessed = 0;
+  const reviewSamples = dryRun ? { links: [] as Array<{ from_slug: string; to_slug: string; link_type: string; context?: string }>, timeline: [] as Array<{ slug: string; date: string; summary: string }> } : undefined;
+  const REVIEW_SAMPLE_LIMIT = 25;
   let budgetHit = false;
 
   for (;;) {
@@ -1516,15 +1521,28 @@ export async function extractStaleFromDB(
       for (const c of extracted.candidates) {
         const r = resolveCandidateSources(c, page.slug, page.source_id, allSlugs, slugToSources);
         if (!r) continue;
-        linkRows.push({
+        const linkInput = {
           from_slug: r.fromSlug, to_slug: c.targetSlug, link_type: c.linkType,
           context: c.context, link_source: c.linkSource, origin_slug: c.originSlug,
           origin_field: c.originField, from_source_id: r.fromSourceId,
           to_source_id: r.toSourceId, origin_source_id: page.source_id,
-        });
+        };
+        linkRows.push(linkInput);
+        if (reviewSamples && reviewSamples.links.length < REVIEW_SAMPLE_LIMIT) {
+          reviewSamples.links.push({
+            from_slug: linkInput.from_slug,
+            to_slug: linkInput.to_slug,
+            link_type: linkInput.link_type,
+            context: linkInput.context,
+          });
+        }
       }
       for (const entry of parseTimelineEntries(fullContent)) {
-        timelineRows.push({ slug: page.slug, date: entry.date, summary: entry.summary, detail: entry.detail || '', source_id: page.source_id });
+        const timelineInput = { slug: page.slug, date: entry.date, summary: entry.summary, detail: entry.detail || '', source_id: page.source_id };
+        timelineRows.push(timelineInput);
+        if (reviewSamples && reviewSamples.timeline.length < REVIEW_SAMPLE_LIMIT) {
+          reviewSamples.timeline.push({ slug: timelineInput.slug, date: timelineInput.date, summary: timelineInput.summary });
+        }
       }
       // EVERY processed page is stamped (incl. zero-link pages). D4 race fix:
       // stamp with the row's READ updated_at, NOT now() — a concurrent edit
@@ -1541,6 +1559,18 @@ export async function extractStaleFromDB(
         ? versionTs
         : readUpdatedAt;
       processedRefs.push({ slug: page.slug, source_id: page.source_id, extractedAt });
+    }
+
+    // Dry-run previews the same extracted candidates but deliberately does not
+    // write links/timeline rows and does not stamp pages fresh.
+    if (dryRun) {
+      linksCreated += linkRows.length;
+      timelineCreated += timelineRows.length;
+      pagesProcessed += rows.length;
+      progress.tick(rows.length);
+      afterPageId = rows[rows.length - 1]!.id;
+      if (!catchUp && Date.now() - startMs > STALE_TIME_BUDGET_MS) { budgetHit = true; break; }
+      continue;
     }
 
     // Flush NON-swallowing (CDX-4): a throw here propagates out of the sweep so
@@ -1565,20 +1595,28 @@ export async function extractStaleFromDB(
   }
 
   progress.finish();
-  const staleRemaining = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs });
+  const staleRemaining = dryRun
+    ? totalStale
+    : await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs });
 
   if (!jsonMode) {
-    console.log(`Extract --stale: ${linksCreated} link(s) + ${timelineCreated} timeline entr(ies) from ${pagesProcessed} page(s).`);
+    if (dryRun) {
+      console.log(`Extract --stale dry run: would create ${linksCreated} link(s) + ${timelineCreated} timeline entr(ies) from ${pagesProcessed} page(s); ${staleRemaining} page(s) remain stale until apply.`);
+    } else {
+      console.log(`Extract --stale: ${linksCreated} link(s) + ${timelineCreated} timeline entr(ies) from ${pagesProcessed} page(s).`);
+    }
     if (budgetHit && staleRemaining > 0) {
       console.log(`Time budget reached — ${staleRemaining} page(s) still stale. Re-run 'gbrain extract --stale' (or pass --catch-up) to continue.`);
     }
   } else {
     process.stdout.write(JSON.stringify({
-      action: 'extract_stale_done', links_created: linksCreated, timeline_created: timelineCreated,
+      action: dryRun ? 'extract_stale_dry_run' : 'extract_stale_done',
+      links_created: linksCreated, timeline_created: timelineCreated,
       pages_processed: pagesProcessed, stale_remaining: staleRemaining, budget_hit: budgetHit,
+      ...(reviewSamples ? { review_samples: reviewSamples } : {}),
     }) + '\n');
   }
-  return { linksCreated, timelineCreated, pagesProcessed, staleRemaining };
+  return { linksCreated, timelineCreated, pagesProcessed, staleRemaining, ...(reviewSamples ? { reviewSamples } : {}) };
 }
 
 /**

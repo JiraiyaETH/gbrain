@@ -1486,7 +1486,13 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
         sourceIdFilter: sourceId,
         catchUp: !!job.data.catchUp,
       });
-      return { ...result, stale: true, sourceId };
+      return {
+        ...result,
+        stale: true,
+        sourceId,
+        dryRun: !!job.data.dryRun,
+        qualityGate: typeof job.data.qualityGate === 'string' ? job.data.qualityGate : undefined,
+      };
     }
     const mode = (typeof job.data.mode === 'string' && ['links', 'timeline', 'all'].includes(job.data.mode))
       ? (job.data.mode as 'links' | 'timeline' | 'all')

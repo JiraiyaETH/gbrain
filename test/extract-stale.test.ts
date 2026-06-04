@@ -15,7 +15,7 @@
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
-import { runExtract } from '../src/commands/extract.ts';
+import { runExtract, extractStaleFromDB } from '../src/commands/extract.ts';
 import { LINK_EXTRACTOR_VERSION_TS } from '../src/core/link-extraction.ts';
 import type { PageInput } from '../src/core/types.ts';
 
@@ -165,12 +165,21 @@ describe('gbrain extract --stale', () => {
     expect(stamp1).not.toBeNull();
   });
 
-  test('--dry-run reports count and writes nothing', async () => {
+  test('--dry-run previews justified candidate counts and writes nothing', async () => {
     await engine.putPage('people/alice', personPage('Alice'));
     await engine.putPage('companies/acme', companyPage('Acme', '[Alice](people/alice) joined [Acme](companies/acme).'));
 
-    await runExtract(engine, ['--stale', '--dry-run']);
+    const result = await extractStaleFromDB(engine, {
+      dryRun: true,
+      jsonMode: true,
+      includeFrontmatter: false,
+      catchUp: false,
+    });
 
+    expect(result.pagesProcessed).toBe(2);
+    expect(result.linksCreated).toBe(2);
+    expect(result.timelineCreated).toBe(0);
+    expect(result.staleRemaining).toBe(2);
     expect(await engine.getLinks('companies/acme')).toHaveLength(0);
     expect(await stampOf('people/alice')).toBeNull();
     expect(await stampOf('companies/acme')).toBeNull();

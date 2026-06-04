@@ -46,6 +46,8 @@ export interface EmbedBackfillJobData {
   sourceId: string;
   batchSize?: number;
   maxChunks?: number;
+  /** Optional per-job ceiling. The handler uses the stricter of this and config. */
+  maxUsd?: number;
   /** Audit string from the submitter (e.g. 'webhook', 'federation_flip'). */
   reason?: string;
 }
@@ -75,6 +77,15 @@ async function readMaxUsd(engine: BrainEngine): Promise<number> {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_USD_PER_JOB;
 }
 
+/** Resolve the actual per-run spend ceiling. Job-local maxUsd can only tighten config. */
+export async function resolveEmbedBackfillMaxUsd(engine: BrainEngine, jobMaxUsd?: number): Promise<number> {
+  const configured = await readMaxUsd(engine);
+  if (typeof jobMaxUsd !== 'number' || !Number.isFinite(jobMaxUsd) || jobMaxUsd <= 0) {
+    return configured;
+  }
+  return Math.min(configured, jobMaxUsd);
+}
+
 /** Validate + extract typed job params. Throws on malformed input. */
 function parseParams(data: Record<string, unknown>): EmbedBackfillJobData {
   const sourceId = data.sourceId;
@@ -89,16 +100,20 @@ function parseParams(data: Record<string, unknown>): EmbedBackfillJobData {
     typeof data.maxChunks === 'number' && data.maxChunks > 0
       ? Math.floor(data.maxChunks)
       : undefined;
+  const maxUsd =
+    typeof data.maxUsd === 'number' && Number.isFinite(data.maxUsd) && data.maxUsd > 0
+      ? data.maxUsd
+      : undefined;
   const reason =
     typeof data.reason === 'string' ? data.reason : undefined;
-  return { sourceId, batchSize, maxChunks, reason };
+  return { sourceId, batchSize, maxChunks, maxUsd, reason };
 }
 
 export function makeEmbedBackfillHandler(engine: BrainEngine) {
   return async function embedBackfillHandler(
     job: MinionJobContext,
   ): Promise<EmbedBackfillResult> {
-    const { sourceId, batchSize, maxChunks } = parseParams(job.data);
+    const { sourceId, batchSize, maxChunks, maxUsd } = parseParams(job.data);
 
     // D2: per-source lock at handler entry. The submit-side cooldown (D19)
     // prevents most contention but this is the run-side safety net.
@@ -118,7 +133,7 @@ export function makeEmbedBackfillHandler(engine: BrainEngine) {
     // D6: budget-tracked execution. Gateway calls inside withBudgetTracker
     // auto-compose via AsyncLocalStorage; if pricing pushes cumulative spend
     // past the cap, gateway throws BudgetExhausted BEFORE the next API call.
-    const capUsd = await readMaxUsd(engine);
+    const capUsd = await resolveEmbedBackfillMaxUsd(engine, maxUsd);
     const tracker = new BudgetTracker({
       maxCostUsd: capUsd,
       label: `embed-backfill:${sourceId}`,

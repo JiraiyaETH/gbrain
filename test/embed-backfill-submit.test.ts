@@ -18,6 +18,7 @@ import {
   SPEND_CAP_CONFIG_KEY,
 } from '../src/core/embed-backfill-submit.ts';
 import { MinionQueue } from '../src/core/minions/queue.ts';
+import { resolveEmbedBackfillMaxUsd } from '../src/core/minions/handlers/embed-backfill.ts';
 
 let engine: PGLiteEngine;
 
@@ -170,5 +171,15 @@ describe('submitEmbedBackfill — source isolation', () => {
     // Submit for 'other' — should NOT be blocked
     const result = await submitEmbedBackfill(engine, 'other', { reason: 'unit' });
     expect(result.status).toBe('submitted');
+  });
+});
+
+describe('embed-backfill handler — per-job cap', () => {
+  test('uses the stricter of config cap and job maxUsd', async () => {
+    await engine.setConfig('embed.backfill_max_usd', '10');
+
+    await expect(resolveEmbedBackfillMaxUsd(engine, 0.01)).resolves.toBe(0.01);
+    await expect(resolveEmbedBackfillMaxUsd(engine, 25)).resolves.toBe(10);
+    await expect(resolveEmbedBackfillMaxUsd(engine, undefined)).resolves.toBe(10);
   });
 });
