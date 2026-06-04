@@ -22,6 +22,30 @@ export interface LinkPolicyDecision {
   queryExpansionAllowed: boolean;
 }
 
+export type ExistingGraphLinkAction = 'keep' | 'downgrade_to_mentions';
+
+export interface ExistingGraphLinkInput {
+  fromSlug: string;
+  fromPageType?: PageType | string;
+  toSlug: string;
+  toPageType?: PageType | string;
+  linkType: string;
+  context?: string;
+  linkSource?: string | null;
+  linkKind?: string | null;
+  originField?: string | null;
+}
+
+export interface ExistingGraphLinkDecision {
+  action: ExistingGraphLinkAction;
+  currentType: string;
+  recommendedType: string;
+  reasonCode: string;
+  evidenceSnippet: string;
+  authorityTier: LinkAuthorityTier;
+  queryExpansionAllowed: boolean;
+}
+
 function evidenceSnippet(context?: string): string {
   return (context ?? '').replace(/\s+/g, ' ').trim().slice(0, 240);
 }
@@ -118,4 +142,74 @@ export function classifyLinkCandidate(input: LinkPolicyInput): LinkPolicyDecisio
   }
 
   return decision(input, 'mentions', 'weak_mention', 'weak', false);
+}
+
+const EXISTING_GRAPH_POLICY_TYPES = new Set([
+  'invested_in',
+  'led_round',
+  'attended',
+  'creator_for',
+  'warm_path_to',
+  'founded',
+  'works_at',
+  'advises',
+]);
+
+/**
+ * Apply the same ontology matrix to graph rows that already exist.
+ *
+ * Existing rows need a conservative posture: explicit manual/frontmatter edges
+ * are preserved, while old inferred typed edges are treated as if the current
+ * extractor proposed them today. If the current policy would downgrade the row,
+ * the cleanup lane should replace that typed edge with a weak `mentions` edge
+ * rather than deleting connectivity outright.
+ */
+export function classifyExistingGraphLink(input: ExistingGraphLinkInput): ExistingGraphLinkDecision {
+  const currentType = input.linkType || 'mentions';
+  if (currentType === 'mentions') {
+    return {
+      action: 'keep',
+      currentType,
+      recommendedType: 'mentions',
+      reasonCode: 'existing_weak_mention',
+      evidenceSnippet: evidenceSnippet(input.context),
+      authorityTier: 'weak',
+      queryExpansionAllowed: false,
+    };
+  }
+
+  if (!EXISTING_GRAPH_POLICY_TYPES.has(currentType)) {
+    return {
+      action: 'keep',
+      currentType,
+      recommendedType: currentType,
+      reasonCode: 'existing_unmanaged_typed_edge',
+      evidenceSnippet: evidenceSnippet(input.context),
+      authorityTier: 'medium',
+      queryExpansionAllowed: true,
+    };
+  }
+
+  const source = input.linkSource ?? 'markdown';
+  const policy = classifyLinkCandidate({
+    fromSlug: input.fromSlug,
+    fromPageType: input.fromPageType,
+    toSlug: input.toSlug,
+    toPageType: input.toPageType,
+    proposedType: currentType,
+    context: input.context,
+    linkSource: source,
+    linkKind: input.linkKind,
+    originField: input.originField ?? undefined,
+  });
+
+  return {
+    action: policy.linkType === currentType ? 'keep' : 'downgrade_to_mentions',
+    currentType,
+    recommendedType: policy.linkType,
+    reasonCode: policy.reasonCode,
+    evidenceSnippet: policy.evidenceSnippet,
+    authorityTier: policy.authorityTier,
+    queryExpansionAllowed: policy.queryExpansionAllowed,
+  };
 }

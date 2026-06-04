@@ -12,7 +12,7 @@ import {
   FRONTMATTER_LINK_MAP,
   type SlugResolver,
 } from '../src/core/link-extraction.ts';
-import { classifyLinkCandidate } from '../src/core/link-ontology.ts';
+import { classifyExistingGraphLink, classifyLinkCandidate } from '../src/core/link-ontology.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 
 // v0.27.1 cherry-3: image-to-page path-proximity heuristic.
@@ -273,6 +273,46 @@ describe('link ontology policy', () => {
       reasonCode: 'work_affiliation_context',
       authorityTier: 'strong',
       queryExpansionAllowed: false,
+    });
+  });
+
+  test('flags old inferred attended edges to non-person pages for downgrade cleanup', () => {
+    const decision = classifyExistingGraphLink({
+      fromSlug: 'meetings/consortium-sync',
+      fromPageType: 'meeting',
+      toSlug: 'projects/consortium/consortium',
+      toPageType: 'project',
+      linkType: 'attended',
+      linkSource: 'markdown',
+      context: '## Topics - Consortium - TAP program',
+    });
+
+    expect(decision).toMatchObject({
+      action: 'downgrade_to_mentions',
+      currentType: 'attended',
+      recommendedType: 'mentions',
+      reasonCode: 'attended_shape_downgraded',
+      queryExpansionAllowed: false,
+    });
+  });
+
+  test('keeps valid old inferred attended edges to people', () => {
+    const decision = classifyExistingGraphLink({
+      fromSlug: 'meetings/consortium-sync',
+      fromPageType: 'meeting',
+      toSlug: 'people/walter',
+      toPageType: 'person',
+      linkType: 'attended',
+      linkSource: 'markdown',
+      context: '## Attendees - Walter',
+    });
+
+    expect(decision).toMatchObject({
+      action: 'keep',
+      currentType: 'attended',
+      recommendedType: 'attended',
+      reasonCode: 'meeting_attendee_context',
+      queryExpansionAllowed: true,
     });
   });
 });

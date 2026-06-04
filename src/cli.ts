@@ -37,7 +37,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'reinit-pglite', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'orphans', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'connect', 'skillopt', 'quarantine', 'meeting-intelligence', 'calendar-projection']);
+const CLI_ONLY = new Set(['init', 'reinit-pglite', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'link-hygiene', 'jobs', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'orphans', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'connect', 'skillopt', 'quarantine', 'meeting-intelligence', 'calendar-projection']);
 // CLI-only commands whose handlers print their own --help text. These are
 // excluded from the generic short-circuit so detailed per-command and
 // per-subcommand usage stays reachable.
@@ -48,6 +48,7 @@ const CLI_ONLY_SELF_HELP = new Set([
   'integrations', 'friction',
   'frontmatter', 'check-resolvable',
   'models',
+  'link-hygiene',
   'cache',
   'brainstorm', 'lsd',
   // v0.41.20.0 skillopt's detailed HELP constant lives in
@@ -1499,6 +1500,11 @@ async function handleCliOnly(command: string, args: string[]) {
         await runGraphQuery(engine, args);
         break;
       }
+      case 'link-hygiene': {
+        const { runLinkHygieneCli } = await import('./commands/link-hygiene.ts');
+        await runLinkHygieneCli(engine, args);
+        break;
+      }
       case 'reconcile-links': {
         // v0.20.0 Cathedral II Layer 8 D3: batch-recompute doc↔impl edges
         // for any markdown page that cites code files. Idempotent; safe to
@@ -2070,6 +2076,8 @@ LINKS
   graph <slug> [--depth N]           Traverse link graph (returns nodes)
   graph-query <slug> [--type T]      Edge-based traversal with type/direction filters
         [--depth N] [--direction in|out|both]
+  link-hygiene [--source-id ID]      Scan/downgrade inferred typed-link pollution
+        [--grep TEXT] [--limit N] [--apply --yes] [--json]
 
 TAGS
   tags <slug>                        List tags
