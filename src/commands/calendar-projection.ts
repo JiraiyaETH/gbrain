@@ -58,7 +58,8 @@ export async function runCalendarProjectionCli(
       collector: CALENDAR_COLLECTOR,
       source_id: 'default',
       source_prefix: CALENDAR_SOURCE_PREFIX,
-      legacy_openclaw_projection_owner: 'tombstone_after_gbrain_native_proof',
+      legacy_openclaw_projection_owner: 'retired_tombstoned',
+      calendar_sync_owner: 'gbrain-runtime/scripts/calendar-sync-refresh.py',
     };
     if (opts.engine) {
       try {

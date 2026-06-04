@@ -42,3 +42,7 @@ test/fixtures/pglite-snapshot.version
 
 # Private brain reports — never check these in (per CLAUDE.md privacy rule)
 reports/network-intelligence/
+
+# Runtime-owned local state (Calendar snapshots/agenda/heartbeats, copied
+# permissioned EventKit app bundle, and other non-source operational state).
+var/

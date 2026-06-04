@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Calendar Projection host wrapper.
+"""Calendar Projection wrapper.
 
-Neutral boundary for cron/collector integration:
+Projection-only compatibility boundary:
 collector snapshot -> gbrain-runtime Calendar Projection -> exact calendar commit -> no-embed/no-extract sync.
+
+Full Calendar sync/collection is owned by scripts/calendar-sync-refresh.py. This
+wrapper remains useful for explicit snapshot replay and projection tests.
 
 This wrapper intentionally logs only counts, paths, and commit ids; it never prints
 raw event bodies or rendered markdown.
@@ -20,7 +23,7 @@ from typing import Any
 
 DEFAULT_RUNTIME_ROOT = Path('/Users/jarvis/gbrain-runtime')
 DEFAULT_BRAIN_ROOT = Path('/Users/jarvis/gbrain/main')
-DEFAULT_SNAPSHOT = Path('/Users/jarvis/.openclaw-jarvis-v2/ops/calendar.json')
+DEFAULT_SNAPSHOT = Path('/Users/jarvis/gbrain-runtime/var/calendar/calendar.json')
 DEFAULT_GBRAIN = Path('/Users/jarvis/.local/bin/gbrain-supabase-mcp')
 
 
