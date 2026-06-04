@@ -198,8 +198,8 @@ describe('inferLinkType', () => {
     expect(inferLinkType('person', 'Bob, VP at Stripe, said.')).toBe('works_at');
   });
 
-  test('invested in -> invested_in', () => {
-    expect(inferLinkType('person', 'YC invested in Acme.')).toBe('invested_in');
+  test('investment language is not auto-promoted by default extraction', () => {
+    expect(inferLinkType('person', 'YC invested in Acme.')).toBe('mentions');
   });
 
   test('founded -> founded', () => {
@@ -227,20 +227,29 @@ describe('inferLinkType', () => {
     expect(inferLinkType('person', 'Joined the advisory board at Beta Health.')).toBe('advises');
   });
 
-  test('investment narrative variants -> invested_in', () => {
-    expect(inferLinkType('person', 'Wendy led the Series A for Cipher Labs.')).toBe('invested_in');
-    expect(inferLinkType('person', 'Bob is an early investor in Acme.')).toBe('invested_in');
-    expect(inferLinkType('person', 'She invests in fintech startups.')).toBe('invested_in');
-    expect(inferLinkType('person', 'Acme is a portfolio company of Founders Fund.')).toBe('invested_in');
-    expect(inferLinkType('person', 'Sequoia led the seed round for Vox.')).toBe('invested_in');
+  test('investment narrative variants stay mentions in default extraction', () => {
+    expect(inferLinkType('person', 'Wendy led the Series A for Cipher Labs.')).toBe('mentions');
+    expect(inferLinkType('person', 'Bob is an early investor in Acme.')).toBe('mentions');
+    expect(inferLinkType('person', 'She invests in fintech startups.')).toBe('mentions');
+    expect(inferLinkType('person', 'Acme is a portfolio company of Founders Fund.')).toBe('mentions');
+    expect(inferLinkType('person', 'Sequoia led the seed round for Vox.')).toBe('mentions');
   });
 
-  test('creator/marketing campaign context is not investment evidence', async () => {
+  test('creator/marketing campaign context becomes creator_for, not investment', async () => {
     const content = 'Wals is a SignNow-backed content creator who worked with Tailored on [IO Net](companies/io-net) marketing campaigns.';
     const { candidates } = await extractPageLinks('people/wals', content, {}, 'person', nullResolver);
     const ioNet = candidates.find(c => c.targetSlug === 'companies/io-net');
     expect(ioNet).toBeDefined();
-    expect(ioNet!.linkType).toBe('mentions');
+    expect(ioNet!.linkType).toBe('creator_for');
+  });
+
+  test('creator language without campaign/program evidence stays mentions', () => {
+    expect(inferLinkType('person', 'Wals is a creator who mentioned IO Net.', undefined, 'companies/io-net')).toBe('mentions');
+  });
+
+  test('warm path context becomes warm_path_to for person-company edges', () => {
+    expect(inferLinkType('person', 'Alice can make a warm intro to Acme.', undefined, 'companies/acme')).toBe('warm_path_to');
+    expect(inferLinkType('person', 'Bob knows the growth lead at Stripe.', undefined, 'companies/stripe')).toBe('warm_path_to');
   });
 
   test('default -> mentions', () => {

@@ -11,8 +11,9 @@
  *
  * Override via env: GBRAIN_SOURCE_BOOST="originals/:1.8,openclaw/chat/:0.3"
  * Hard-exclude via env: GBRAIN_SEARCH_EXCLUDE="scratch/,private/"
- * Raw `sources/` packets are excluded by default and should be discovered
- * through provenance/citation drilldown or explicit include_slug_prefixes.
+ * Raw `sources/` packets and unresolved `inbox/` triage pages are excluded
+ * by default and should be discovered through provenance/citation drilldown,
+ * explicit review flows, or explicit include_slug_prefixes.
  */
 
 export const DEFAULT_SOURCE_BOOSTS: Record<string, number> = {
@@ -57,6 +58,7 @@ export const DEFAULT_HARD_EXCLUDES: string[] = [
   'attachments/',
   '.raw/',
   'sources/',
+  'inbox/',
 ];
 
 /**

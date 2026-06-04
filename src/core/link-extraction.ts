@@ -27,7 +27,7 @@ import type { PageType } from './types.ts';
  * OR updated_at > links_extracted_at`. It is an ISO-8601 string (NOT a number) —
  * the column is TIMESTAMPTZ and the predicate binds it as `::timestamptz`.
  */
-export const LINK_EXTRACTOR_VERSION_TS = '2026-06-04T01:23:03Z';
+export const LINK_EXTRACTOR_VERSION_TS = '2026-06-04T06:20:00Z';
 
 // ─── Entity references ──────────────────────────────────────────
 
@@ -453,8 +453,9 @@ function excerpt(s: string, idx: number, width: number): string {
 // LLMs use far more verb forms than the original regexes covered.
 //
 // Key issues fixed:
-//   - INVESTED_RE missed "led the seed", "led the Series A", "early investor",
-//     "invests in" (present), "investing in" (gerund), "portfolio company".
+//   - Investor-style regex inference was removed from the default lane because
+//     local review showed it creates confident false positives on creator,
+//     campaign, and generic company co-mentions.
 //   - ADVISES_RE matched generic "board member" / "sits on the board" which
 //     also describes investors holding board seats. Tightened to require
 //     explicit "advisor"/"advise" rooting.
@@ -474,13 +475,6 @@ function excerpt(s: string, idx: number, width: number): string {
 //   - Role noun forms: "role at", "tenure as", "stint as", "position at".
 //   - Promoted/staff-engineer forms: "promoted to (staff|senior|principal) engineer at".
 const WORKS_AT_RE = /\b(?:CEO of|CTO of|COO of|CFO of|CMO of|CRO of|VP at|VP of|VPs? Engineering|VPs? Product|works at|worked at|working at|employed by|employed at|joined as|joined the team|engineer at|engineer for|director at|director of|head of|heads up .{0,20} at|leads engineering|leads product|leads the .{0,20} (?:team|org) at|manages engineering at|manages product at|running (?:engineering|product|design) at|currently at|previously at|previously worked at|spent .* (?:years|months) at|stint at|stint as|tenure at|tenure as|role at|position at|(?:senior|staff|principal|lead|backend|frontend|full-?stack|ML|data|security) engineer at|promoted to (?:senior|staff|principal|lead) .{0,20} at|(?:his|her|their|my) time at)\b/i;
-
-// Investment context. Order patterns from most-specific to least to keep
-// regex efficient. Includes funding-round verbs ("led the seed", "led X's
-// Series A"), narrative verbs ("invests in", "investing in"), historical
-// ("early investor in", "first check"), and portfolio framing ("portfolio
-// company", "portfolio includes").
-const INVESTED_RE = /\b(?:invested in|invests in|investing in|invest in|investment in|investments in|backed by|funding from|funded by|raised from|led the (?:seed|Series|round|investment|round)|led .{0,30}(?:Series [A-Z]|seed|round|investment)|participated in (?:the )?(?:seed|Series|round)|wrote (?:a |the )?check|first check|early investor|portfolio (?:company|includes)|board seat (?:at|in|on)|term sheet for)\b/i;
 
 // Founded patterns. Includes the noun-form "founder of" / "founders include"
 // because that's how real prose identifies founders ("Carol Wilson is the
@@ -502,6 +496,24 @@ const FOUNDED_RE = /\b(?:founded|co-?founded|started the company|incorporated|fo
 //     "security advisor to|at", "product advisor to|at", "industry advisor".
 const ADVISES_RE = /\b(?:advises|advised|advisor (?:to|at|for|of)|advisory (?:board|role|position|capacity|engagement|partnership|contract|relationship|work)|board advisor|on .{0,20} advisory board|joined .{0,20} advisory board|in an? advisory (?:capacity|role|position)|as an? (?:advisor|security advisor|technical advisor|strategic advisor|industry advisor|product advisor|board advisor|senior advisor)|(?:strategic|technical|security|product|industry|senior|board) advisor (?:to|at|for|of)|consults for|consulting role (?:at|with))\b/i;
 
+// Local business-graph policy: creator/KOL edges need BOTH creator identity
+// and campaign/program/deliverable evidence. Generic "worked with" is too weak.
+const CREATOR_IDENTITY_RE = /\b(?:creator|KOL|influencer|content creator|ambassador)\b/i;
+const CREATOR_EVIDENCE_RE = /\b(?:campaigns?|programs?|roster|SignNow|deliverables?|content push|launch|retainer|marketing|created content for|creator for|sponsored|promoted)\b/i;
+
+// Operational access/path edges into companies. This is not a social graph edge;
+// it only fires for person→company candidates where the context itself says
+// there is an intro/path/known-contact route.
+const WARM_PATH_RE = /\b(?:warm intro|warm path|intro(?:duce|duction)? to|can connect|path into|connection at|knows (?:someone|somebody|the .{0,30}) at|relationship at)\b/i;
+
+function isPersonCompanyCandidate(pageType: PageType, targetSlug?: string): boolean {
+  return pageType === 'person' && !!targetSlug?.startsWith('companies/');
+}
+
+function hasCreatorForEvidence(context: string): boolean {
+  return CREATOR_IDENTITY_RE.test(context) && CREATOR_EVIDENCE_RE.test(context);
+}
+
 /**
  * Infer link_type from page context. Deterministic regex heuristics, no LLM.
  *
@@ -511,7 +523,9 @@ const ADVISES_RE = /\b(?:advises|advised|advisor (?:to|at|for|of)|advisory (?:bo
  * that creates confident wrong edges for creator/marketing/campaign pages. When
  * the edge context is merely adjacent, the correct graph fact is `mentions`.
  *
- * Precedence: founded > invested_in > advises > works_at > mentions.
+ * Precedence: founded > creator_for/warm_path_to > advises > works_at > mentions.
+ * Investor-style edges are not inferred in the default extraction lane; explicit
+ * frontmatter/schema-pack investor fields may still emit them.
  */
 export function inferLinkType(pageType: PageType, context: string, globalContext?: string, targetSlug?: string): string {
   if (pageType === 'media') {
@@ -525,7 +539,8 @@ export function inferLinkType(pageType: PageType, context: string, globalContext
   if ((pageType as string) === 'meeting') return 'attended';
   // Per-edge verb rules.
   if (FOUNDED_RE.test(context)) return 'founded';
-  if (INVESTED_RE.test(context)) return 'invested_in';
+  if (isPersonCompanyCandidate(pageType, targetSlug) && hasCreatorForEvidence(context)) return 'creator_for';
+  if (isPersonCompanyCandidate(pageType, targetSlug) && WARM_PATH_RE.test(context)) return 'warm_path_to';
   if (ADVISES_RE.test(context)) return 'advises';
   if (WORKS_AT_RE.test(context)) return 'works_at';
   // Intentionally unused: page-level role priors were removed in the

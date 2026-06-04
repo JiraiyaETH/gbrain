@@ -230,6 +230,7 @@ describe('resolveHardExcludes', () => {
     const r = resolveHardExcludes(undefined, undefined, undefined);
     for (const p of DEFAULT_HARD_EXCLUDES) expect(r).toContain(p);
     expect(r).toContain('sources/');
+    expect(r).toContain('inbox/');
   });
 
   test('caller exclude_slug_prefixes adds to the union', () => {
@@ -253,6 +254,12 @@ describe('resolveHardExcludes', () => {
   test('include subtracts from env-supplied excludes too', () => {
     const r = resolveHardExcludes(undefined, ['envdir/'], 'envdir/');
     expect(r).not.toContain('envdir/');
+  });
+
+  test('include_slug_prefixes opts inbox back in for explicit triage review', () => {
+    const r = resolveHardExcludes(undefined, ['inbox/'], undefined);
+    expect(r).not.toContain('inbox/');
+    expect(r).toContain('sources/');
   });
 });
 
