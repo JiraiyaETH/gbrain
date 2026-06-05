@@ -954,7 +954,7 @@ async function handleCliOnly(command: string, args: string[]) {
   }
   if (command === 'meeting-intelligence') {
     const { runMeetingIntelligenceCli } = await import('./commands/meeting-intelligence.ts');
-    const engineCommands = new Set(['watch', 'wake', 'materialize', 'repair']);
+    const engineCommands = new Set(['watch', 'wake', 'materialize', 'notify', 'repair']);
     if (engineCommands.has(args[0] ?? '')) {
       const engine = await connectEngine();
       try {

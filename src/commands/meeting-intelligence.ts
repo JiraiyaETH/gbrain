@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import type { BrainEngine } from '../core/engine.ts';
+import type { Link, Page } from '../core/types.ts';
 import { importFromContent } from '../core/import-file.ts';
 import { serializeMarkdown } from '../core/markdown.ts';
 import { slugifySegment } from '../core/sync.ts';
@@ -14,6 +15,7 @@ import {
   loadMeetingLedgers,
   persistMeetingRuntimeRun,
   recordMeetingWakeExecutionResults,
+  isMeetingPageCanonicallyEnriched,
   redactSensitiveText,
   renderMeetingPage,
   resolveMeetingRuntimePaths,
@@ -31,6 +33,7 @@ Commands:
   watch        Poll/ingest completed provider meetings into BrainEngine ledger + Alex wake rows
   wake         Claim pending Alex wake rows and print/execute isolated Hermes command plans
   materialize  Write source packet + full meeting page from a stored provider record
+  notify       Emit verified enrichment notifications from GBrain receipts
   repair       Plan stale ledger/wake repair actions
   paths        Print neutral runtime authority/table defaults
 
@@ -72,6 +75,11 @@ Materialize options:
   --source default        Required canonical source (default: default)
   --json                  Print JSON summary
 
+Notify options:
+  --notified-ledger PATH  JSONL ledger of already-emitted meeting notifications
+  --limit N               Max verified receipts to inspect (default: 10)
+  --json                  Print JSON summary
+
 Repair options:
   --limit N               Max ledgers to inspect (default: 100)
   --stale-after-ms N      Staleness threshold (default: 6h)
@@ -102,6 +110,7 @@ interface ParsedArgs {
   retryClaimed: boolean;
   retryFailed: boolean;
   timeoutMs: number;
+  notifiedLedger?: string;
 }
 
 interface MeetingIntelligenceCliOpts {
@@ -164,6 +173,10 @@ export async function runMeetingIntelligenceCli(
   if (command === 'materialize') {
     if (!opts.engine) return missingEngine(stderr, command);
     return runMaterializeCommand(parsed, opts.engine, stdout, stderr);
+  }
+  if (command === 'notify') {
+    if (!opts.engine) return missingEngine(stderr, command);
+    return runNotifyCommand(parsed, opts.engine, stdout, stderr);
   }
   if (command === 'repair') {
     if (!opts.engine) return missingEngine(stderr, command);
@@ -329,11 +342,11 @@ async function runWakeCommand(
     retry_claimed: parsed.retryClaimed,
     retry_failed: parsed.retryFailed,
   });
-  const executions = parsed.execute && !parsed.dryRun
+  let executions = parsed.execute && !parsed.dryRun
     ? executeWakePlans(claimed, parsed.timeoutMs)
     : [];
   if (executions.length > 0) {
-    await recordMeetingWakeExecutionResults(engine, executions);
+    executions = await recordMeetingWakeExecutionResults(engine, executions);
   }
   const failed = executions.some((result) => !result.ok);
   const summary = {
@@ -581,6 +594,260 @@ function parseStoredJson<T>(value: unknown): T {
   return typeof value === 'string' ? JSON.parse(value) as T : value as T;
 }
 
+interface VerifiedMeetingNotification {
+  meeting_slug: string;
+  title: string;
+  provider: string;
+  provider_meeting_id: string;
+  details: VerifiedMeetingNotificationDetails;
+  text: string;
+}
+
+interface PageRefSummary {
+  label: string;
+  slug: string;
+}
+
+interface VerifiedMeetingNotificationDetails {
+  created_pages: PageRefSummary[];
+  updated_pages: PageRefSummary[];
+  current_pages: PageRefSummary[];
+  graph_links: string[];
+  durable_facts_promoted: number | null;
+  operational_signal: string | null;
+}
+
+async function runNotifyCommand(
+  parsed: ParsedArgs,
+  engine: BrainEngine,
+  stdout: (text: string) => void,
+  stderr: (text: string) => void,
+): Promise<number> {
+  if (!parsed.notifiedLedger) {
+    stderr('meeting-intelligence notify requires --notified-ledger <path>');
+    return 2;
+  }
+  await ensureMeetingIntelligenceSchema(engine);
+  const notifiedLedger = resolve(parsed.notifiedLedger);
+  const notified = loadNotifiedMeetingSlugs(notifiedLedger);
+  const rows = await engine.executeRaw<{
+    meeting_slug: string | null;
+    provider: string;
+    provider_meeting_id: string;
+    title: string | null;
+    receipt_created_at: string;
+  }>(
+    `SELECT l.page_slug AS meeting_slug, l.provider, l.provider_meeting_id, p.title, r.created_at::text AS receipt_created_at
+       FROM meeting_receipts r
+       JOIN meeting_ledger l ON l.id = r.ledger_id
+       LEFT JOIN meeting_provider_records p
+         ON p.source_id = l.source_id
+        AND p.provider = l.provider
+        AND p.provider_meeting_id = l.provider_meeting_id
+      WHERE r.source_id = 'default'
+        AND r.kind = 'enrichment_done'
+        AND l.state = 'enriched'
+      ORDER BY r.created_at ASC
+      LIMIT $1`,
+    [parsed.limit],
+  );
+
+  const notifications: VerifiedMeetingNotification[] = [];
+  const ledgerRows: Record<string, unknown>[] = [];
+  for (const row of rows) {
+    const meetingSlug = row.meeting_slug;
+    if (!meetingSlug || notified.has(meetingSlug)) continue;
+    const page = await engine.getPage(meetingSlug, { sourceId: 'default' });
+    if (!isMeetingPageCanonicallyEnriched(page)) continue;
+    const title = row.title || page?.title || meetingSlug;
+    const details = await buildVerifiedMeetingNotificationDetails(engine, page!, meetingSlug, row.receipt_created_at);
+    const text = renderVerifiedMeetingNotification(title, meetingSlug, details);
+    notifications.push({
+      meeting_slug: meetingSlug,
+      title,
+      provider: row.provider,
+      provider_meeting_id: redactSensitiveText(row.provider_meeting_id),
+      details,
+      text,
+    });
+    ledgerRows.push({
+      ts: new Date().toISOString(),
+      meeting_slug: meetingSlug,
+      provider: row.provider,
+      provider_meeting_id: redactSensitiveText(row.provider_meeting_id),
+      source_id: 'default',
+    });
+  }
+
+  if (ledgerRows.length > 0) {
+    mkdirSync(dirname(notifiedLedger), { recursive: true });
+    appendFileSync(notifiedLedger, ledgerRows.map((row) => JSON.stringify(row)).join('\n') + '\n', 'utf8');
+  }
+
+  const summary = {
+    status: 'notify_complete',
+    source_id: 'default',
+    inspected_count: rows.length,
+    emitted_count: notifications.length,
+    notifications,
+    notified_ledger: notifiedLedger,
+  };
+  printSummary(summary, parsed.json, stdout, notifications.map((item) => item.text));
+  return 0;
+}
+
+function loadNotifiedMeetingSlugs(path: string): Set<string> {
+  const notified = new Set<string>();
+  if (!existsSync(path)) return notified;
+  const content = readFileSync(path, 'utf8');
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line) as Record<string, unknown>;
+      if (typeof row.meeting_slug === 'string' && row.meeting_slug) notified.add(row.meeting_slug);
+    } catch {
+      // Ignore malformed old ledger rows; they should not block fresh verified receipts.
+    }
+  }
+  return notified;
+}
+
+async function buildVerifiedMeetingNotificationDetails(
+  engine: BrainEngine,
+  page: Page,
+  meetingSlug: string,
+  receiptCreatedAt: string,
+): Promise<VerifiedMeetingNotificationDetails> {
+  const pageContent = `${page.compiled_truth}\n${page.timeline}`;
+  const updatedOrCreated = parseLinkedPageRefsFromLine(pageContent, 'Updated pages');
+  const currentPages = parseLinkedPageRefsFromLine(pageContent, 'Existing page already current');
+  const receiptDate = new Date(receiptCreatedAt);
+  const createdPages: PageRefSummary[] = [];
+  const updatedPages: PageRefSummary[] = [];
+  for (const ref of updatedOrCreated) {
+    const target = await engine.getPage(ref.slug, { sourceId: 'default' });
+    if (target && isCreatedDuringEnrichmentWindow(target, receiptDate)) {
+      createdPages.push(ref);
+    } else {
+      updatedPages.push(ref);
+    }
+  }
+
+  const links = await engine.getLinks(meetingSlug, { sourceId: 'default' });
+  return {
+    created_pages: createdPages,
+    updated_pages: updatedPages,
+    current_pages: currentPages,
+    graph_links: summarizeGraphLinks(meetingSlug, links),
+    durable_facts_promoted: parseDurableFactsPromoted(pageContent),
+    operational_signal: parseOperationalSignal(pageContent),
+  };
+}
+
+function renderVerifiedMeetingNotification(
+  title: string,
+  meetingSlug: string,
+  details: VerifiedMeetingNotificationDetails,
+): string {
+  const facts = details.durable_facts_promoted === null
+    ? 'durable facts promoted'
+    : `${details.durable_facts_promoted} durable fact${details.durable_facts_promoted === 1 ? '' : 's'} promoted`;
+  const lines = [
+    '**Meeting Intelligence Watch**',
+    '',
+    `Fireflies picked up and enriched **${title}**.`,
+    '',
+    `Brain changed: ${facts}.`,
+  ];
+
+  const created = formatPageRefs(details.created_pages);
+  const updated = formatPageRefs(details.updated_pages);
+  const current = formatPageRefs(details.current_pages);
+  if (created) lines.push(`- Created: ${created}`);
+  if (updated) lines.push(`- Updated: ${updated}`);
+  if (current) lines.push(`- Already current: ${current}`);
+
+  if (details.graph_links.length > 0) {
+    lines.push('', 'Graph linked:');
+    for (const link of details.graph_links.slice(0, 6)) {
+      lines.push(`- ${link}`);
+    }
+    if (details.graph_links.length > 6) {
+      lines.push(`- +${details.graph_links.length - 6} more in Brain`);
+    }
+  }
+
+  lines.push(
+    '',
+    `Link: ${meetingSlug}`,
+  );
+  return lines.join('\n');
+}
+
+function parseLinkedPageRefsFromLine(content: string, label: string): PageRefSummary[] {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = content.match(new RegExp(`^- ${escaped}:\\s*(.+)$`, 'm'));
+  if (!match) return [];
+  return parseMarkdownPageRefs(match[1] ?? '');
+}
+
+function parseMarkdownPageRefs(text: string): PageRefSummary[] {
+  const refs: PageRefSummary[] = [];
+  const seen = new Set<string>();
+  const re = /\[([^\]]+)\]\(([^)]+)\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    const slug = markdownLinkTargetToSlug(match[2] ?? '');
+    if (!slug || seen.has(slug)) continue;
+    refs.push({ label: match[1] ?? slug, slug });
+    seen.add(slug);
+  }
+  return refs;
+}
+
+function markdownLinkTargetToSlug(target: string): string | null {
+  const clean = target.replace(/^\.\.\//, '').replace(/^\.\//, '').replace(/\.md(?:#.*)?$/, '').trim();
+  if (!clean || clean.startsWith('http://') || clean.startsWith('https://')) return null;
+  return clean;
+}
+
+function isCreatedDuringEnrichmentWindow(page: Page, receiptDate: Date): boolean {
+  const created = page.created_at instanceof Date ? page.created_at : new Date(page.created_at);
+  if (Number.isNaN(created.getTime()) || Number.isNaN(receiptDate.getTime())) return false;
+  const deltaMs = receiptDate.getTime() - created.getTime();
+  return deltaMs >= 0 && deltaMs <= 2 * 60 * 60 * 1000;
+}
+
+function summarizeGraphLinks(meetingSlug: string, links: Link[]): string[] {
+  const summaries: string[] = [];
+  const seen = new Set<string>();
+  for (const link of links) {
+    if (link.from_slug !== meetingSlug) continue;
+    const summary = `${link.from_slug} → ${link.to_slug}${link.link_type ? ` (${link.link_type})` : ''}`;
+    if (seen.has(summary)) continue;
+    summaries.push(summary);
+    seen.add(summary);
+  }
+  return summaries;
+}
+
+function parseDurableFactsPromoted(content: string): number | null {
+  const matches = [...content.matchAll(/^- Durable facts promoted:\s*(\d+)\s*$/gm)];
+  const last = matches.at(-1);
+  return last ? Number(last[1]) : null;
+}
+
+function parseOperationalSignal(content: string): string | null {
+  const boundary = content.match(/^- Promotion boundary:\s*(.+)$/m);
+  if (boundary?.[1]) return boundary[1].trim();
+  const fact = content.match(/^## Durable Facts Promoted\s*\n+-\s+(.+)$/m);
+  return fact?.[1]?.trim() ?? null;
+}
+
+function formatPageRefs(refs: PageRefSummary[]): string {
+  return refs.map((ref) => `${ref.label} (${ref.slug})`).join(', ');
+}
+
 async function runRepairCommand(
   parsed: ParsedArgs,
   engine: BrainEngine,
@@ -641,6 +908,7 @@ function parseArgs(args: string[]): ParsedArgs | { help: true } {
     if (arg === '--transcript-id') { parsed.transcriptId = requireValue(args[++i], '--transcript-id'); continue; }
     if (arg === '--stale-after-ms') { parsed.staleAfterMs = positiveInt(args[++i], '--stale-after-ms'); continue; }
     if (arg === '--timeout-ms') { parsed.timeoutMs = positiveInt(args[++i], '--timeout-ms'); continue; }
+    if (arg === '--notified-ledger') { parsed.notifiedLedger = requireValue(args[++i], '--notified-ledger'); continue; }
   }
   return parsed;
 }

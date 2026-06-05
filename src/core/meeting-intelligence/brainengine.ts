@@ -1,4 +1,5 @@
 import type { BrainEngine } from '../engine.ts';
+import type { Page } from '../types.ts';
 import type {
   AlexWakeRequestPlan,
   MeetingLedger,
@@ -288,19 +289,24 @@ export async function claimMeetingWakeRequests(
 export async function recordMeetingWakeExecutionResults(
   engine: BrainEngine,
   results: readonly MeetingWakeExecutionResult[],
-): Promise<void> {
+): Promise<MeetingWakeExecutionResult[]> {
   await ensureMeetingIntelligenceSchema(engine);
+  const recorded: MeetingWakeExecutionResult[] = [];
   for (const result of results) {
-    const nextStatus = result.ok ? 'done' : 'failed';
-    const errorText = result.ok ? null : (result.error_text ?? (result.timed_out ? 'wake execution timed out' : 'wake execution failed'));
+    const verified = result.ok
+      ? await verifyWakeCanonicalEnrichmentReadback(engine, result)
+      : result;
+    recorded.push(verified);
+    const nextStatus = verified.ok ? 'done' : 'failed';
+    const errorText = verified.ok ? null : (verified.error_text ?? (verified.timed_out ? 'wake execution timed out' : 'wake execution failed'));
     await engine.executeRaw(
       `UPDATE meeting_wake_requests
          SET status = $2, completed_at = CASE WHEN $2 = 'done' THEN now() ELSE completed_at END,
              error_text = $3, updated_at = now()
        WHERE id = $1 AND status = 'claimed'`,
-      [result.wake_request_id, nextStatus, errorText],
+      [verified.wake_request_id, nextStatus, errorText],
     );
-    if (result.ok) {
+    if (verified.ok) {
       await engine.executeRaw(
         `UPDATE meeting_ledger
            SET state = 'enriched', updated_at = now(),
@@ -308,7 +314,7 @@ export async function recordMeetingWakeExecutionResults(
          WHERE id = (
            SELECT ledger_id FROM meeting_wake_requests WHERE id = $2
          ) AND state = 'alex_running'`,
-        [JSON.stringify([{ from: 'alex_running', to: 'enriched', reason: 'wake_execution_completed', at: new Date().toISOString() }]), result.wake_request_id],
+        [JSON.stringify([{ from: 'alex_running', to: 'enriched', reason: 'canonical_enrichment_readback_verified', at: new Date().toISOString() }]), verified.wake_request_id],
       );
       await engine.executeRaw(
         `INSERT INTO meeting_receipts
@@ -317,7 +323,7 @@ export async function recordMeetingWakeExecutionResults(
            FROM meeting_wake_requests
           WHERE id = $1
          ON CONFLICT (source_id, receipt_key) DO NOTHING`,
-        [result.wake_request_id, `enrichment_done:wake:${result.wake_request_id}`, JSON.stringify({ wake_request_id: result.wake_request_id, status: result.status, signal: result.signal })],
+        [verified.wake_request_id, `enrichment_done:wake:${verified.wake_request_id}`, JSON.stringify({ wake_request_id: verified.wake_request_id, status: verified.status, signal: verified.signal, canonical_readback: true })],
       );
       continue;
     }
@@ -328,7 +334,7 @@ export async function recordMeetingWakeExecutionResults(
        WHERE id = (
          SELECT ledger_id FROM meeting_wake_requests WHERE id = $2
        ) AND state = 'alex_running'`,
-      [JSON.stringify([{ from: 'alex_running', to: 'alex_failed', reason: errorText, at: new Date().toISOString() }]), result.wake_request_id],
+      [JSON.stringify([{ from: 'alex_running', to: 'alex_failed', reason: errorText, at: new Date().toISOString() }]), verified.wake_request_id],
     );
     await engine.executeRaw(
       `INSERT INTO meeting_receipts
@@ -337,9 +343,51 @@ export async function recordMeetingWakeExecutionResults(
          FROM meeting_wake_requests
         WHERE id = $1
        ON CONFLICT (source_id, receipt_key) DO NOTHING`,
-      [result.wake_request_id, `alex_failed:wake:${result.wake_request_id}`, JSON.stringify({ wake_request_id: result.wake_request_id, error_text: errorText, status: result.status, signal: result.signal, timed_out: result.timed_out === true })],
+      [verified.wake_request_id, `alex_failed:wake:${verified.wake_request_id}`, JSON.stringify({ wake_request_id: verified.wake_request_id, error_text: errorText, status: verified.status, signal: verified.signal, timed_out: verified.timed_out === true })],
     );
   }
+  return recorded;
+}
+
+export function isMeetingPageCanonicallyEnriched(page: Page | null | undefined): boolean {
+  if (!page || page.source_id !== 'default') return false;
+  const state = page.frontmatter?.meeting_intelligence_state;
+  if (state === 'enriched' || state === 'enrichment_done') return true;
+  const body = `${page.compiled_truth ?? ''}\n${page.timeline ?? ''}`;
+  return /Semantic enrichment state:\s*completed/i.test(body);
+}
+
+async function verifyWakeCanonicalEnrichmentReadback(
+  engine: BrainEngine,
+  result: MeetingWakeExecutionResult,
+): Promise<MeetingWakeExecutionResult> {
+  const rows = await engine.executeRaw<{ payload_json: unknown; page_slug?: string | null }>(
+    `SELECT w.payload_json, l.page_slug
+       FROM meeting_wake_requests w
+       LEFT JOIN meeting_ledger l ON l.id = w.ledger_id
+      WHERE w.id = $1
+      LIMIT 1`,
+    [result.wake_request_id],
+  );
+  const row = rows[0];
+  const payload = row ? parseJson<Partial<AlexWakeRequestPlan>>(row.payload_json) : undefined;
+  const pageSlug = payload?.page_slug ?? row?.page_slug;
+  if (!pageSlug) {
+    return {
+      ...result,
+      ok: false,
+      error_text: 'canonical enrichment readback failed: wake row has no meeting page slug',
+    };
+  }
+  const page = await engine.getPage(pageSlug, { sourceId: 'default' });
+  if (!isMeetingPageCanonicallyEnriched(page)) {
+    return {
+      ...result,
+      ok: false,
+      error_text: `canonical enrichment readback failed for ${pageSlug}: meeting page is missing or still not enriched`,
+    };
+  }
+  return result;
 }
 
 async function upsertProviderRecord(engine: BrainEngine, meeting: NormalizedProviderMeeting): Promise<void> {

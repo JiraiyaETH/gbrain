@@ -459,7 +459,10 @@ export function extractTimelineFromContent(content: string, slug: string): Extra
   const entries: ExtractedTimelineEntry[] = [];
 
   // Format 1: Bullet — - **YYYY-MM-DD** | Source — Summary
-  const bulletPattern = /^-\s+\*\*(\d{4}-\d{2}-\d{2})\*\*\s*\|\s*(.+?)\s*[—–-]\s*(.+)$/gm;
+  // Require whitespace on both sides of the dash separator so hyphenated
+  // markdown link targets like ../meetings/2026-06-02-foo.md are not split
+  // into bogus source/summary timeline rows.
+  const bulletPattern = /^-\s+\*\*(\d{4}-\d{2}-\d{2})\*\*\s*\|\s*(.+?)\s+[—–-]\s+(.+)$/gm;
   let match;
   while ((match = bulletPattern.exec(content)) !== null) {
     entries.push({ slug, date: match[1], source: match[2].trim(), summary: match[3].trim() });

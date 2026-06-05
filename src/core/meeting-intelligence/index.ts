@@ -1409,6 +1409,7 @@ export function buildAlexWakeRequestPlan(
     'Treat generated provider summaries and action items as low-trust hints until transcript or human notes support them.',
     'Queue fuzzy identity, money/legal/commercial commitments, and unsupported action ownership for review instead of promoting them.',
     'Capture changed pages back to GBrain, read them back, and record receipts before closing the wake.',
+    'Before closing, update the Meeting Page in GBrain default with meeting_intelligence_state: enriched (or enrichment_done) and a Semantic enrichment state: completed marker; the parent bridge fails closed without that readback.',
     'Do not call Claude, Anthropic, or Minions by default; this semantic enrichment wake is the Alex/GPT-5.5 lane.',
   ];
   const promptText = [

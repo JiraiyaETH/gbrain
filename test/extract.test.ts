@@ -161,6 +161,12 @@ describe('extractTimelineFromContent', () => {
     expect(entries).toHaveLength(1);
   });
 
+  it('does not split hyphenated markdown link paths as source separators', () => {
+    const content = `- **2026-06-02** | In [Emperor Osmo <> Jiraiya](../meetings/2026-06-02-emperor-osmo-jiraiya.md), Jiraiya framed Tailored expansion.`;
+    const entries = extractTimelineFromContent(content, 'people/jiraiya');
+    expect(entries).toHaveLength(0);
+  });
+
   it('skips resolver guidance pages', () => {
     const content = `# Brain Resolver\n\n- **2026-06-04** | Guidance changed`;
     const entries = extractTimelineFromContent(content, 'resolver');
