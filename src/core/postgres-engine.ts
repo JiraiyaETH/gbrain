@@ -97,6 +97,8 @@ export class PostgresEngine implements BrainEngine {
   private _savedConfig: (EngineConfig & { poolSize?: number; parentConnectionManager?: ConnectionManager }) | null = null;
   /** Whether a reconnect is in progress (prevents concurrent reconnects). */
   private _reconnecting = false;
+  /** Shared reconnect promise so concurrent retry sites wait for the rebuilt pool. */
+  private _reconnectPromise: Promise<void> | null = null;
   /**
    * Tracks which connection path this engine is using so disconnect() is
    * idempotent. 'instance' = own _sql pool (poolSize was set);
@@ -4938,18 +4940,61 @@ export class PostgresEngine implements BrainEngine {
 
   /**
    * Reconnect the engine by tearing down the current pool and creating a fresh one.
-   * No-ops if no saved config (module-singleton mode) or if already reconnecting.
+   * No-ops if no saved config; concurrent reconnect callers await the same rebuild.
    */
   async reconnect(): Promise<void> {
-    if (!this._savedConfig || this._reconnecting) return;
+    if (!this._savedConfig) return;
+    if (this._reconnectPromise) return this._reconnectPromise;
+
     this._reconnecting = true;
+    this._reconnectPromise = (async () => {
+      const config = this._savedConfig;
+      if (!config) return;
+
+      // Recovery reconnect must not call disconnect(): postgres.end() without
+      // a timeout waits for in-flight queries to drain, which deadlocks the
+      // exact failure path we are trying to recover from (a terminal write timed
+      // out while its underlying postgres.js query is still pending). Detach
+      // first so new callers see "No database connection" as retryable, then
+      // force-close the old pool with postgres.js's bounded end timeout.
+      const oldSql = this._sql;
+      const oldConnectionManager = this.connectionManager;
+      this._sql = null;
+      this.connectionManager = null;
+
+      if (oldConnectionManager) {
+        let timedOut = false;
+        try {
+          await Promise.race([
+            oldConnectionManager.disconnect(),
+            new Promise<void>((resolve) => setTimeout(() => { timedOut = true; resolve(); }, 1_000)),
+          ]);
+          if (timedOut) {
+            console.warn('[postgres] reconnect: connection-manager close timed out after 1000ms; rebuilding pool anyway');
+          }
+        } catch {
+          // best-effort; stale pools are superseded by the fresh connect below
+        }
+      }
+
+      if (oldSql) {
+        try {
+          await oldSql.end({ timeout: 1 });
+        } catch {
+          // best-effort — the pool may already be dead or destroyed
+        }
+      } else if (this._connectionStyle === 'module') {
+        try { await db.disconnect(); } catch { /* best-effort */ }
+      }
+
+      await this.connect(config);
+    })();
+
     try {
-      // Tear down old pool (best-effort — it may already be dead)
-      try { await this.disconnect(); } catch { /* swallow */ }
-      // Create fresh pool
-      await this.connect(this._savedConfig);
+      await this._reconnectPromise;
     } finally {
       this._reconnecting = false;
+      this._reconnectPromise = null;
     }
   }
 

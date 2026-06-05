@@ -746,7 +746,7 @@ export class MinionQueue {
    * stranding the parent in waiting-children forever.
    */
   async completeJob(id: number, lockToken: string, result?: Record<string, unknown>): Promise<MinionJob | null> {
-    return this.engine.transaction(async (tx) => {
+    return this.lockRetry(() => this.engine.transaction(async (tx) => {
       // Peek at parent_job_id before the UPDATE so we can lock the parent row
       // FIRST. Without this SELECT FOR UPDATE, two siblings completing
       // concurrently each see the other as still active (pre-commit snapshot
@@ -836,7 +836,7 @@ export class MinionQueue {
       }
 
       return completed;
-    });
+    }));
   }
 
   /**

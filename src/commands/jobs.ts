@@ -11,6 +11,7 @@ import type { MinionJob, MinionJobStatus } from '../core/minions/types.ts';
 import { loadConfig, isThinClient } from '../core/config.ts';
 import { callRemoteTool, unpackToolResult } from '../core/mcp-client.ts';
 import { getSourceLocalPath, resolveBrainRepoPath } from '../core/source-resolver.ts';
+import { isRetryableConnError } from '../core/retry.ts';
 import { dirname, join, resolve as resolvePath } from 'path';
 
 function parseFlag(args: string[], flag: string): string | undefined {
@@ -474,16 +475,67 @@ HANDLER TYPES (built in)
         // Run worker for one job then stop
         const startTime = Date.now();
         const workerPromise = worker.start();
-        // Poll until this job completes
-        const pollInterval = setInterval(async () => {
-          const updated = await queue.getJob(job.id);
-          if (updated && ['completed', 'failed', 'dead', 'cancelled'].includes(updated.status)) {
-            worker.stop();
-            clearInterval(pollInterval);
+        // Poll until this job completes. Use recursive setTimeout rather than a
+        // hot setInterval: under PgBouncer outages, 200ms retry loops multiply
+        // connection pressure and can starve the job's own terminal write.
+        let pollErrorCount = 0;
+        let pollInFlight = false;
+        let pollStopped = false;
+        let pollDelayMs = 200;
+        let pollTimer: ReturnType<typeof setTimeout> | null = null;
+        const reconnect = (engine as { reconnect?: () => Promise<void> }).reconnect;
+        const schedulePoll = (delayMs: number) => {
+          if (pollStopped) return;
+          pollTimer = setTimeout(runPoll, delayMs);
+        };
+        const runPoll = () => {
+          if (pollStopped) return;
+          if (pollInFlight) {
+            schedulePoll(pollDelayMs);
+            return;
           }
-        }, 200);
+          pollInFlight = true;
+          void (async () => {
+            const updated = await queue.getJob(job.id);
+            pollErrorCount = 0;
+            pollDelayMs = 200;
+            if (updated && ['completed', 'failed', 'dead', 'cancelled'].includes(updated.status)) {
+              pollStopped = true;
+              worker.stop();
+              if (pollTimer) clearTimeout(pollTimer);
+              return;
+            }
+            schedulePoll(pollDelayMs);
+          })().catch(async (err) => {
+            if (isRetryableConnError(err)) {
+              pollErrorCount += 1;
+              pollDelayMs = Math.min(5_000, Math.max(1_000, pollDelayMs * 2));
+              if (pollErrorCount === 1 || pollErrorCount % 10 === 0) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.warn(`[jobs --follow] status poll connection blip (${pollErrorCount}); backing off to ${pollDelayMs}ms: ${msg}`);
+                if (reconnect) {
+                  try { await reconnect.call(engine); }
+                  catch (reconnectErr) {
+                    const reconnectMsg = reconnectErr instanceof Error ? reconnectErr.message : String(reconnectErr);
+                    console.warn(`[jobs --follow] reconnect after poll blip failed: ${reconnectMsg}`);
+                  }
+                }
+              }
+              schedulePoll(pollDelayMs);
+              return;
+            }
+            pollStopped = true;
+            worker.stop();
+            const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+            console.error(`[jobs --follow] status poll failed: ${msg}`);
+          }).finally(() => {
+            pollInFlight = false;
+          });
+        };
+        schedulePoll(pollDelayMs);
         await workerPromise;
-        clearInterval(pollInterval);
+        pollStopped = true;
+        if (pollTimer) clearTimeout(pollTimer);
 
         const final = await queue.getJob(job.id);
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);

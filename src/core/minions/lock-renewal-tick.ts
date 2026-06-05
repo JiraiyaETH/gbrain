@@ -56,7 +56,7 @@ export interface LockRenewalKnobs {
   maxFailuresForAudit: number;
   /**
    * Per-renewLock-call timeout enforced via `Promise.race`.
-   * Env: `GBRAIN_LOCK_RENEWAL_CALL_TIMEOUT_MS`. Default: `lockDuration / 3`.
+   * Env: `GBRAIN_LOCK_RENEWAL_CALL_TIMEOUT_MS`. Default: `min(lockDuration / 3, 10s)`.
    * Bounds the "hung renewLock wedges the re-entrancy guard forever" vector.
    */
   callTimeoutMs: number;
@@ -95,7 +95,7 @@ export function resolveLockRenewalKnobs(
   lockDurationMs: number,
 ): LockRenewalKnobs {
   const defaultMaxFailures = 3;
-  const defaultCallTimeout = Math.max(1, Math.floor(lockDurationMs / 3));
+  const defaultCallTimeout = Math.max(1, Math.min(10_000, Math.floor(lockDurationMs / 3)));
   const defaultSafetyMargin = Math.max(1, Math.floor(lockDurationMs / 6));
 
   return {

@@ -49,6 +49,55 @@ export const INFRASTRUCTURE_ABORT_REASONS = new Set<string>([
   'lock-renewal-failed',
   'lock-lost',
 ]);
+
+export class JobTerminalWriteTimeoutError extends Error {
+  constructor(label: string, timeoutMs: number) {
+    super(`${label} timed out after ${timeoutMs}ms`);
+    this.name = 'JobTerminalWriteTimeoutError';
+  }
+}
+
+export function resolveJobTerminalWriteTimeoutMs(env: Record<string, string | undefined>): number {
+  // Keep this above the shared bulk-retry recovery window (~12s worst-case).
+  // Too-low operator/test overrides (8s caused job #135 to embed successfully
+  // but strand the terminal status flip) turn transient pooler recovery into a
+  // false timeout storm.
+  const floorMs = 20_000;
+  const raw = env.GBRAIN_JOB_TERMINAL_WRITE_TIMEOUT_MS;
+  if (raw === undefined || raw === '') return floorMs;
+  if (!/^\d+$/.test(raw.trim())) return floorMs;
+  const n = Number(raw.trim());
+  return Number.isFinite(n) && Number.isInteger(n) && n >= floorMs ? n : floorMs;
+}
+
+export function isTerminalWriteRetryable(err: unknown): boolean {
+  return err instanceof JobTerminalWriteTimeoutError || isRetryableConnError(err);
+}
+
+async function awaitTerminalJobWrite<T>(promise: Promise<T>, label: string, timeoutMs: number): Promise<T> {
+  let settled = false;
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new JobTerminalWriteTimeoutError(label, timeoutMs));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        if (settled) return; // late rejection after timeout: consumed, not unhandled
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { evaluateQuietHours, type QuietHoursConfig } from './quiet-hours.ts';
@@ -294,28 +343,37 @@ export class MinionWorker extends EventEmitter {
     // Stall + timeout detection on interval. Order matters: handleStalled FIRST
     // so a stalled job (lock_until expired) gets requeued before handleTimeouts'
     // `lock_until > now()` guard would skip it. Stall → retry, timeout → dead.
-    const stalledTimer = setInterval(async () => {
-      try {
-        const { requeued, dead } = await this.queue.handleStalled();
-        if (requeued.length > 0) console.log(`Stall detector: requeued ${requeued.length} jobs`);
-        if (dead.length > 0) console.log(`Stall detector: dead-lettered ${dead.length} jobs`);
-      } catch (e) {
-        console.error('Stall detection error:', e instanceof Error ? e.message : String(e));
-      }
-      try {
-        const timedOut = await this.queue.handleTimeouts();
-        if (timedOut.length > 0) console.log(`Timeout detector: dead-lettered ${timedOut.length} jobs (timeout exceeded)`);
-      } catch (e) {
-        console.error('Timeout detection error:', e instanceof Error ? e.message : String(e));
-      }
-      try {
-        const wallClockTimedOut = await this.queue.handleWallClockTimeouts(this.opts.lockDuration);
-        if (wallClockTimedOut.length > 0) {
-          console.log(`Wall-clock detector: dead-lettered ${wallClockTimedOut.length} jobs (wall-clock timeout exceeded)`);
+    // Never allow overlapping sweeps: when PgBouncer hangs, stacked detector
+    // callbacks multiply pooler pressure and can starve the active job itself.
+    let stalledSweepInFlight = false;
+    const stalledTimer = setInterval(() => {
+      if (stalledSweepInFlight) return;
+      stalledSweepInFlight = true;
+      void (async () => {
+        try {
+          const { requeued, dead } = await this.queue.handleStalled();
+          if (requeued.length > 0) console.log(`Stall detector: requeued ${requeued.length} jobs`);
+          if (dead.length > 0) console.log(`Stall detector: dead-lettered ${dead.length} jobs`);
+        } catch (e) {
+          console.error('Stall detection error:', e instanceof Error ? e.message : String(e));
         }
-      } catch (e) {
-        console.error('Wall-clock timeout detection error:', e instanceof Error ? e.message : String(e));
-      }
+        try {
+          const timedOut = await this.queue.handleTimeouts();
+          if (timedOut.length > 0) console.log(`Timeout detector: dead-lettered ${timedOut.length} jobs (timeout exceeded)`);
+        } catch (e) {
+          console.error('Timeout detection error:', e instanceof Error ? e.message : String(e));
+        }
+        try {
+          const wallClockTimedOut = await this.queue.handleWallClockTimeouts(this.opts.lockDuration);
+          if (wallClockTimedOut.length > 0) {
+            console.log(`Wall-clock detector: dead-lettered ${wallClockTimedOut.length} jobs (wall-clock timeout exceeded)`);
+          }
+        } catch (e) {
+          console.error('Wall-clock timeout detection error:', e instanceof Error ? e.message : String(e));
+        }
+      })().finally(() => {
+        stalledSweepInFlight = false;
+      });
     }, this.opts.stalledInterval);
 
     // Periodic RSS watchdog — closes the production-freeze regression where
@@ -956,14 +1014,40 @@ export class MinionWorker extends EventEmitter {
 
       clearInterval(lockTimer);
 
-      // Complete the job (token-fenced)
-      const completed = await this.queue.completeJob(
-        job.id,
-        lockToken,
-        result != null ? (typeof result === 'object' ? result as Record<string, unknown> : { value: result }) : undefined,
-      );
+      // Complete the job (token-fenced). A PgBouncer socket can be reaped right
+      // after handler work succeeds; retry this status flip once after a pool
+      // rebuild because completeJob is token-fenced/idempotent from the worker's
+      // perspective. If the first attempt committed but the client lost the
+      // response, the retry may return null; readback below treats an already
+      // completed row as success.
+      const terminalWriteTimeoutMs = resolveJobTerminalWriteTimeoutMs(process.env);
+      const terminalResult = result != null
+        ? (typeof result === 'object' ? result as Record<string, unknown> : { value: result })
+        : undefined;
+      let completed: MinionJob | null;
+      try {
+        completed = await awaitTerminalJobWrite(
+          this.queue.completeJob(job.id, lockToken, terminalResult),
+          'completeJob',
+          terminalWriteTimeoutMs,
+        );
+      } catch (err) {
+        if (!isTerminalWriteRetryable(err)) throw err;
+        const reconnect = (this.engine as { reconnect?: () => Promise<void> }).reconnect;
+        if (!reconnect) throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`Job ${job.id} completion hit connection blip; reconnecting and retrying: ${msg}`);
+        await reconnect.call(this.engine);
+        completed = await awaitTerminalJobWrite(
+          this.queue.completeJob(job.id, lockToken, terminalResult),
+          'completeJob retry',
+          terminalWriteTimeoutMs,
+        );
+      }
 
       if (!completed) {
+        const readback = await this.queue.getJob(job.id).catch(() => null);
+        if (readback?.status === 'completed') return;
         console.warn(`Job ${job.id} completion dropped (lock token mismatch, job was reclaimed)`);
         return;
       }

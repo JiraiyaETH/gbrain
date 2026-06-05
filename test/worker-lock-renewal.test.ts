@@ -412,6 +412,13 @@ describe('resolveLockRenewalKnobs', () => {
     expect(knobs.safetyMarginMs).toBe(5_000);
   });
 
+  test('case 12a2 — long lock durations keep renewLock call timeout capped', () => {
+    const knobs = resolveLockRenewalKnobs({}, 300_000);
+    expect(knobs.maxFailuresForAudit).toBe(3);
+    expect(knobs.callTimeoutMs).toBe(10_000);
+    expect(knobs.safetyMarginMs).toBe(50_000);
+  });
+
   test('case 12b — valid env values parse cleanly', () => {
     const knobs = resolveLockRenewalKnobs({
       GBRAIN_LOCK_RENEWAL_MAX_FAILURES: '5',
