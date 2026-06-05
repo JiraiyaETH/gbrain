@@ -16,6 +16,7 @@
  * helper layer; the handler just routes through.
  */
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
+import { readFileSync } from 'fs';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { makeEmbedBackfillHandler } from '../src/core/minions/handlers/embed-backfill.ts';
 import { tryAcquireDbLock } from '../src/core/db-lock.ts';
@@ -78,6 +79,21 @@ describe('embed-backfill handler — happy path', () => {
   test('throws when sourceId is empty string', async () => {
     const handler = makeEmbedBackfillHandler(engine);
     await expect(handler(fakeJob({ sourceId: '' }))).rejects.toThrow(/sourceId is required/);
+  });
+});
+
+describe('embed-backfill handler — progress receipts', () => {
+  test('fire-and-forget updateProgress is caught so pooler blips cannot crash worker', () => {
+    const source = readFileSync(
+      new URL('../src/core/minions/handlers/embed-backfill.ts', import.meta.url),
+      'utf8',
+    );
+    const progressCall = source.slice(
+      source.indexOf('void job.updateProgress'),
+      source.indexOf('}),', source.indexOf('void job.updateProgress')) + 3,
+    );
+    expect(progressCall).toContain('.catch((err) =>');
+    expect(progressCall).toContain('progress update skipped');
   });
 });
 

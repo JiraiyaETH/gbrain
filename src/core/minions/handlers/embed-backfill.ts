@@ -149,13 +149,19 @@ export function makeEmbedBackfillHandler(engine: BrainEngine) {
           // provenance as chunks land.
           embeddingSignature: currentEmbeddingSignature(),
           onProgress: ({ embedded, chunksProcessed, cursor }) => {
-            // Fire-and-forget; updateProgress returns a Promise but the
-            // handler is sync inside the loop.
+            // Fire-and-forget, but never naked: updateProgress is an
+            // operational receipt write, not embedding correctness. A pooler
+            // blip here must not escape as an unhandledRejection and kill the
+            // worker while the real embed work is still healthy.
             void job.updateProgress({
               embedded,
               chunksProcessed,
               cursor,
               spentUsd: tracker.totalSpent,
+            }).catch((err) => {
+              process.stderr.write(
+                `[embed-backfill] progress update skipped: ${err instanceof Error ? err.message : String(err)}\n`,
+              );
             });
           },
         }),
