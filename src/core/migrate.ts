@@ -5275,6 +5275,10 @@ export interface IdleBlocker {
   query: string;
 }
 
+export interface IdleBlockerProbeOptions {
+  timeoutMs?: number;
+}
+
 /**
  * Find idle-in-transaction connections older than 5 minutes that might
  * block DDL. Postgres-only. Returns `[]` on PGLite, query failure, or
@@ -5287,18 +5291,38 @@ export interface IdleBlocker {
  *   - `gbrain doctor --locks` (CLI diagnostic)
  *   - any future `--exclusive` drain-wait logic
  */
-export async function getIdleBlockers(engine: BrainEngine): Promise<IdleBlocker[]> {
+export async function getIdleBlockers(
+  engine: BrainEngine,
+  opts: IdleBlockerProbeOptions = {},
+): Promise<IdleBlocker[]> {
   if (engine.kind !== 'postgres') return [];
+  const ac = new AbortController();
+  const timeoutMs = Math.max(1, Math.floor(opts.timeoutMs ?? 10_000));
+  const query = engine.executeRaw<IdleBlocker>(
+    `SELECT pid, state, query_start::text, substring(query, 1, 120) as query
+     FROM pg_stat_activity
+     WHERE state = 'idle in transaction'
+       AND query_start < NOW() - INTERVAL '5 minutes'
+       AND pid != pg_backend_pid()`,
+    [],
+    { signal: ac.signal },
+  );
+  let timer: ReturnType<typeof setTimeout> | null = null;
   try {
-    return await engine.executeRaw<IdleBlocker>(
-      `SELECT pid, state, query_start::text, substring(query, 1, 120) as query
-       FROM pg_stat_activity
-       WHERE state = 'idle in transaction'
-         AND query_start < NOW() - INTERVAL '5 minutes'
-         AND pid != pg_backend_pid()`
-    );
+    return await Promise.race([
+      query,
+      new Promise<IdleBlocker[]>((_, reject) => {
+        timer = setTimeout(() => {
+          ac.abort(new Error(`idle-blocker probe timeout after ${timeoutMs}ms`));
+          reject(new Error(`idle-blocker probe timeout after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
   } catch {
     return [];
+  } finally {
+    if (timer) clearTimeout(timer);
+    void query.catch(() => {});
   }
 }
 

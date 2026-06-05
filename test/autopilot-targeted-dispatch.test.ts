@@ -6,6 +6,7 @@ import {
   isAutopilotProposeOnly,
   selectAutopilotFreshnessSources,
   selectDispatchableTargetedSteps,
+  shouldRunAutopilotAdaptiveHealth,
   shouldRunAutopilotWithoutWorker,
   submitOrProposeAutopilotJob,
 } from '../src/commands/autopilot.ts';
@@ -118,6 +119,13 @@ describe('selectDispatchableTargetedSteps', () => {
     expect(isAutopilotFreshnessOnly(['--freshness-only'], {} as NodeJS.ProcessEnv)).toBe(true);
     expect(isAutopilotFreshnessOnly([], { GBRAIN_AUTOPILOT_FRESHNESS_ONLY: '1' } as NodeJS.ProcessEnv)).toBe(true);
     expect(isAutopilotFreshnessOnly([], { GBRAIN_AUTOPILOT_FRESHNESS_ONLY: '0' } as NodeJS.ProcessEnv)).toBe(false);
+  });
+
+  test('freshness-only skips the adaptive brain-score health query', () => {
+    expect(shouldRunAutopilotAdaptiveHealth(['--freshness-only'], {} as NodeJS.ProcessEnv)).toBe(false);
+    expect(shouldRunAutopilotAdaptiveHealth([], { GBRAIN_AUTOPILOT_FRESHNESS_ONLY: '1' } as NodeJS.ProcessEnv)).toBe(false);
+    expect(shouldRunAutopilotAdaptiveHealth(['--once'], {} as NodeJS.ProcessEnv)).toBe(true);
+    expect(shouldRunAutopilotAdaptiveHealth(['--propose-only'], {} as NodeJS.ProcessEnv)).toBe(true);
   });
 
   test('one-shot autopilot never owns a worker child', () => {

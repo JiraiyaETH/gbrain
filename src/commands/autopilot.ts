@@ -173,6 +173,15 @@ export function isAutopilotFreshnessOnly(args: string[], env: NodeJS.ProcessEnv 
   return args.includes('--freshness-only') || env.GBRAIN_AUTOPILOT_FRESHNESS_ONLY === '1';
 }
 
+export function shouldRunAutopilotAdaptiveHealth(args: string[], env: NodeJS.ProcessEnv = process.env): boolean {
+  // Freshness-only is the first execution rung: source sync dispatch and an
+  // explicit stop before brain-score remediation. The adaptive health query is
+  // part of the score/remediation loop, so running it after freshness-only
+  // widens the canary and can fail on statement_timeout even when freshness
+  // dispatch itself was healthy.
+  return !isAutopilotFreshnessOnly(args, env);
+}
+
 export function selectDispatchableTargetedSteps(plan: RemediationStep[]): {
   dispatch: RemediationStep[];
   deferred: RemediationStep[];
@@ -858,23 +867,28 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
       } catch (e) { logError('cycle-inline', e); cycleOk = false; }
     }
 
-    // 4. Health check + adaptive interval (same for both paths)
+    // 4. Health check + adaptive interval (same for both paths, except
+    // freshness-only canaries which stop before score/remediation surfaces)
     let interval = baseInterval;
-    try {
-      const health = await engine.getHealth();
-      const score = (health as any).brain_score ?? 50;
-      interval = score >= 90 ? baseInterval * 2
-               : score < 70 ? Math.max(Math.floor(baseInterval / 2), 60)
-               : baseInterval;
+    if (shouldRunAutopilotAdaptiveHealth(args)) {
+      try {
+        const health = await engine.getHealth();
+        const score = (health as any).brain_score ?? 50;
+        interval = score >= 90 ? baseInterval * 2
+                 : score < 70 ? Math.max(Math.floor(baseInterval / 2), 60)
+                 : baseInterval;
 
-      const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(0);
-      const line = `[cycle] score=${score} elapsed=${elapsed}s next=${interval}s`;
-      if (jsonMode) {
-        process.stderr.write(JSON.stringify({ event: 'cycle', brain_score: score, elapsed_s: Number(elapsed), next_s: interval }) + '\n');
-      } else {
-        console.log(line);
-      }
-    } catch (e) { logError('health', e); }
+        const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(0);
+        const line = `[cycle] score=${score} elapsed=${elapsed}s next=${interval}s`;
+        if (jsonMode) {
+          process.stderr.write(JSON.stringify({ event: 'cycle', brain_score: score, elapsed_s: Number(elapsed), next_s: interval }) + '\n');
+        } else {
+          console.log(line);
+        }
+      } catch (e) { logError('health', e); }
+    } else if (jsonMode) {
+      process.stderr.write(JSON.stringify({ event: 'skip_adaptive_health', reason: 'freshness_only' }) + '\n');
+    }
 
     if (cycleOk) {
       consecutiveErrors = 0;
@@ -894,7 +908,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
     // Wrapped in try/catch — a probe failure NEVER crashes the autopilot
     // loop. Probe runs even when cycleOk=false (probe may surface signal
     // explaining why the cycle is failing).
-    if (!proposeOnly) {
+    if (!proposeOnly && !freshnessOnly) {
       try {
         const probeEnabled = cfg?.autopilot?.nightly_quality_probe?.enabled === true;
         if (probeEnabled) {

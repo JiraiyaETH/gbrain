@@ -1136,6 +1136,26 @@ describe('PR #356 — getIdleBlockers pg_stat_activity shape', () => {
     const blockers = await getIdleBlockers(engine);
     expect(blockers).toEqual([]);
   });
+
+  test('bounds a hung pg_stat_activity query with an abort signal', async () => {
+    let sawSignal = false;
+    const engine = {
+      kind: 'postgres' as const,
+      async executeRaw<T>(_sql: string, _params?: unknown[], opts?: { signal?: AbortSignal }): Promise<T[]> {
+        sawSignal = !!opts?.signal;
+        await new Promise(() => {
+          // Simulates postgres.js/pooler cancellation not settling the original
+          // pending query promptly; getIdleBlockers must still return on the
+          // wall-clock deadline.
+        });
+        return [] as T[];
+      },
+    } as unknown as BrainEngine;
+
+    const blockers = await getIdleBlockers(engine, { timeoutMs: 5 });
+    expect(blockers).toEqual([]);
+    expect(sawSignal).toBe(true);
+  });
 });
 
 describe('PR #356 — 57014 catch path emits actionable 4-part diagnostic', () => {
