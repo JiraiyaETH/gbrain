@@ -93,13 +93,16 @@ describe('runSyncTrigger', () => {
     expect(exitCode).toBeNull();
     expect(stdout).toMatch(/^job_id=\d+$/m);
 
-    // Verify a sync job exists with auto_embed_backfill + priority -10
+    // Verify a sync job exists with auto_embed_backfill + priority -10.
+    // The sync handler defaults noEmbed=true for generic Minion jobs, so
+    // sync trigger must explicitly opt into deferred embed-backfill.
     const queue = new MinionQueue(engine);
     const jobs = await queue.getJobs({ name: 'sync', limit: 5 });
     expect(jobs.length).toBe(1);
     const job = jobs[0];
     expect(job.priority).toBe(-10);
     expect((job.data as { sourceId: string }).sourceId).toBe('default');
+    expect((job.data as { noEmbed: boolean }).noEmbed).toBe(false);
     expect((job.data as { auto_embed_backfill: boolean }).auto_embed_backfill).toBe(true);
   });
 

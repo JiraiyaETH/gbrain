@@ -638,6 +638,12 @@ See also:
     {
       sourceId: sourceIdArg,
       repoPath: source.local_path,
+      // The Minion sync handler defaults noEmbed=true because most callers
+      // want sync-only semantics. `sync trigger` is explicitly the
+      // source-freshness entry point documented to enqueue bounded
+      // embed-backfill after changed pages, so opt into the handler's
+      // deferred embed submission path.
+      noEmbed: false,
       auto_embed_backfill: true,
       embed_reason: 'sync_trigger',
     },
