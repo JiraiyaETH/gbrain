@@ -24,7 +24,7 @@ from typing import Any
 DEFAULT_RUNTIME_ROOT = Path('/Users/jarvis/gbrain-runtime')
 DEFAULT_BRAIN_ROOT = Path('/Users/jarvis/gbrain/main')
 DEFAULT_SNAPSHOT = Path('/Users/jarvis/gbrain-runtime/var/calendar/calendar.json')
-DEFAULT_GBRAIN = Path('/Users/jarvis/.local/bin/gbrain-supabase-mcp')
+DEFAULT_GBRAIN = Path('/Users/jarvis/.local/bin/gbrain')
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--snapshot', type=Path, default=DEFAULT_SNAPSHOT)
     parser.add_argument('--runtime-root', type=Path, default=Path(os.environ.get('GBRAIN_RUNTIME_ROOT', DEFAULT_RUNTIME_ROOT)))
     parser.add_argument('--brain-root', type=Path, default=Path(os.environ.get('GBRAIN_DEFAULT_SOURCE_ROOT', DEFAULT_BRAIN_ROOT)))
-    parser.add_argument('--gbrain-bin', type=Path, default=Path(os.environ.get('GBRAIN_BIN_WRAPPER', DEFAULT_GBRAIN)))
+    parser.add_argument('--gbrain-bin', type=Path, default=Path(os.environ.get('GBRAIN_BIN') or os.environ.get('GBRAIN_BIN_WRAPPER', DEFAULT_GBRAIN)))
     parser.add_argument('--projection-timeout', type=int, default=int(os.environ.get('CALENDAR_PROJECTION_TIMEOUT_SECONDS', '120')))
     parser.add_argument('--sync-timeout', type=int, default=int(os.environ.get('CALENDAR_PROJECTION_SYNC_TIMEOUT_SECONDS', '300')))
     parser.add_argument('--dry-run', action='store_true', help='Render projection to a temp proof root; do not write Brain DB/repo.')
@@ -121,7 +121,7 @@ def main() -> int:
     if not cli.exists():
         raise FileNotFoundError(f'gbrain runtime CLI not found: {cli}')
     if not gbrain_bin.exists():
-        raise FileNotFoundError(f'gbrain command wrapper not found: {gbrain_bin}')
+        raise FileNotFoundError(f'gbrain command not found: {gbrain_bin}')
     if not brain_root.exists():
         raise FileNotFoundError(f'gbrain source root not found: {brain_root}')
     if args.dry_run:

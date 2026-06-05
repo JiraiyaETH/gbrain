@@ -71,4 +71,16 @@ describe('GBrain runtime Calendar sync wrapper', () => {
     expect(script).not.toContain('/Users/jarvis/.openclaw-jarvis-v2');
     expect(script).not.toContain('maybe_bootstrap_exporter_app');
   });
+
+  test('calendar helper scripts default to native gbrain command, not retired wrapper', () => {
+    const syncScript = readFileSync('scripts/calendar-sync-refresh.py', 'utf8');
+    const projectionScript = readFileSync('scripts/calendar-projection-refresh.py', 'utf8');
+
+    for (const script of [syncScript, projectionScript]) {
+      expect(script).toContain("DEFAULT_GBRAIN = Path('/Users/jarvis/.local/bin/gbrain')");
+      expect(script).toContain("os.environ.get('GBRAIN_BIN') or os.environ.get('GBRAIN_BIN_WRAPPER'");
+      expect(script).not.toContain('gbrain-supabase-mcp');
+      expect(script).not.toContain('gbrain command wrapper not found');
+    }
+  });
 });
