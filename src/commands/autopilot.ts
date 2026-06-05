@@ -12,6 +12,7 @@
  *
  * Usage:
  *   gbrain autopilot [--repo <path>] [--interval N] [--json] [--inline]
+ *                   [--freshness-only] [--once]
  *   gbrain autopilot --install [--repo <path>]
  *   gbrain autopilot --uninstall
  *   gbrain autopilot --status [--json]
@@ -160,6 +161,18 @@ export function shouldSpawnAutopilotWorker(args: string[]): boolean {
   return !args.includes('--no-worker');
 }
 
+export function shouldRunAutopilotWithoutWorker(args: string[], proposeOnly = isAutopilotProposeOnly(args)): boolean {
+  // One-shot autopilot is a dispatch canary, not a worker supervisor. If a
+  // child worker is spawned here, the once-loop can enqueue and then keep the
+  // event loop alive while the child continues draining beyond the one-shot
+  // boundary. Keep worker ownership external for every once/propose run.
+  return !shouldSpawnAutopilotWorker(args) || proposeOnly || args.includes('--once');
+}
+
+export function isAutopilotFreshnessOnly(args: string[], env: NodeJS.ProcessEnv = process.env): boolean {
+  return args.includes('--freshness-only') || env.GBRAIN_AUTOPILOT_FRESHNESS_ONLY === '1';
+}
+
 export function selectDispatchableTargetedSteps(plan: RemediationStep[]): {
   dispatch: RemediationStep[];
   deferred: RemediationStep[];
@@ -218,7 +231,7 @@ export function buildAutopilotFreshnessSyncData(src: AutopilotFreshnessSource): 
 export async function runAutopilot(engine: BrainEngine, args: string[]) {
   if (args.includes('--help') || args.includes('-h')) {
     console.log(
-      'Usage: gbrain autopilot [--repo <path>] [--interval N] [--json] [--no-worker] [--all-sources] [--observe|--propose-only]\n' +
+      'Usage: gbrain autopilot [--repo <path>] [--interval N] [--json] [--no-worker] [--all-sources] [--observe|--propose-only] [--freshness-only] [--once]\n' +
       '       gbrain autopilot --install [--repo <path>]\n' +
       '       gbrain autopilot --install --observe [--repo <path>] [--interval N]\n' +
       '       gbrain autopilot --uninstall\n' +
@@ -251,9 +264,11 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
   const baseInterval = parseInt(parseArg(args, '--interval') || '300', 10);
   const jsonMode = args.includes('--json');
   const proposeOnly = isAutopilotProposeOnly(args);
+  const once = proposeOnly || args.includes('--once');
   const forceInline = args.includes('--inline');
-  const noWorker = !shouldSpawnAutopilotWorker(args) || proposeOnly;
+  const noWorker = shouldRunAutopilotWithoutWorker(args, proposeOnly);
   const allSources = args.includes('--all-sources');
+  const freshnessOnly = isAutopilotFreshnessOnly(args);
 
   if (!repoPath) {
     console.error('No repo path. Use --repo or attach a local_path to the default source with `gbrain sources add/default`.');
@@ -460,8 +475,12 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
       autopilotReconnectFails = 0; // reset on success
     } catch (probeErr) {
       try {
-        await engine.disconnect();
-        await (engine as any).connect?.();
+        if ('reconnect' in engine && typeof (engine as { reconnect?: unknown }).reconnect === 'function') {
+          await (engine as { reconnect: () => Promise<void> }).reconnect();
+        } else {
+          await engine.disconnect();
+          throw probeErr;
+        }
         autopilotReconnectFails = 0;
       } catch (e) {
         logError('reconnect', e);
@@ -622,6 +641,15 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
         } catch (e) {
           logError('dispatch.freshness-gate', e);
         }
+
+        if (freshnessOnly) {
+          if (jsonMode) {
+            process.stderr.write(JSON.stringify({ event: 'skip_non_freshness', reason: 'freshness_only' }) + '\n');
+          } else {
+            console.log('[dispatch] freshness-only: skipped score/remediation/full-cycle work');
+          }
+          cycleOk = true;
+        } else {
 
         // Cheap path: engine.getHealth() is a single SQL count query.
         const health = await engine.getHealth();
@@ -793,6 +821,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
             }
           }
         }
+        }
       } catch (e) { logError('dispatch', e); cycleOk = false; }
     } else {
       // Inline fallback — delegate to runCycle so lint + backlinks +
@@ -890,7 +919,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
       }
     }
 
-    if (proposeOnly) {
+    if (once) {
       try { unlinkSync(lockPath); } catch { /* already absent */ }
       break;
     }
@@ -971,6 +1000,7 @@ export interface AutopilotWrapperScriptOptions {
   mode?: AutopilotInstallMode;
   intervalSeconds?: number;
   runtimeBinOverride?: string;
+  freshnessOnly?: boolean;
 }
 
 export function buildAutopilotWrapperScript(
@@ -985,9 +1015,10 @@ export function buildAutopilotWrapperScript(
   const runtimeBinExport = opts.runtimeBinOverride
     ? `export GBRAIN_BIN='${opts.runtimeBinOverride.replace(/'/g, "'\\''")}'\n`
     : '';
+  const freshnessOnlyArg = opts.freshnessOnly ? ' --freshness-only' : '';
   const command = mode === 'observe-propose'
     ? `exec '${safeGbrainPath}' autopilot --repo '${safeRepoPath}' --interval ${intervalSeconds} --no-worker --propose-only --json`
-    : `exec '${safeGbrainPath}' autopilot --repo '${safeRepoPath}'`;
+    : `exec '${safeGbrainPath}' autopilot --repo '${safeRepoPath}'${freshnessOnlyArg}`;
   const purpose = mode === 'observe-propose'
     ? 'runs one observe/propose planning tick without spawning a worker or queueing jobs.'
     : 'runs autopilot.';
@@ -1030,6 +1061,10 @@ async function installDaemon(engine: BrainEngine, args: string[]) {
   const forcedTarget = parseArg(args, '--target') as InstallTarget | undefined;
   const target: InstallTarget = forcedTarget ?? detectInstallTarget();
   const installMode = resolveAutopilotInstallMode(args);
+  if (args.includes('--freshness-only') && installMode !== 'observe-propose') {
+    console.error('--install --freshness-only is not supported because daemon KeepAlive would respawn one-shot dispatch. Use a StartInterval one-shot wrapper with --freshness-only --once --no-worker.');
+    process.exit(2);
+  }
   const intervalSeconds = parsePositiveIntArg(args, '--interval', 600);
   if (installMode === 'observe-propose' && target !== 'macos' && target !== 'linux-cron') {
     console.error(`--install --observe/--propose-only is currently supported for macos launchd and linux-cron targets only; target=${target} would not provide recurring one-shot semantics.`);
@@ -1042,6 +1077,7 @@ async function installDaemon(engine: BrainEngine, args: string[]) {
   const wrapperPath = writeWrapperScript(repoPath, {
     mode: installMode,
     intervalSeconds,
+    freshnessOnly: args.includes('--freshness-only'),
   });
   const home = process.env.HOME || '';
 

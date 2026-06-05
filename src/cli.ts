@@ -240,32 +240,10 @@ async function main() {
   const engine = await connectEngine();
   // v0.41.8.0 (#1247, #1269, #1290): the search / query / get_page
   // op handlers fire-and-forget `bumpLastRetrievedAt` after returning
-  // results. On PGLite that IIFE keeps Bun's event loop alive past
-  // engine.disconnect(), hanging the CLI at ~95-98% CPU until SIGKILL.
-  // Drain the fire-and-forget set BEFORE disconnect; force-exit only
-  // if the drain itself times out (preserves stderr diagnostic signal
-  // AND guarantees the CLI doesn't re-hang at the disconnect layer).
-  //
-  // Defense-in-depth (adversarial-review C13): `engine.disconnect()` itself
-  // can hang on PGLite (db.close() or releaseLock racing OS-level FS state).
-  // Install an unref'd setTimeout hard-exit fallback BEFORE entering the
-  // try/catch/finally so a hung disconnect cannot defeat the force-exit
-  // contract. Daemons (`serve`) are excluded so they stay alive.
-  const DISCONNECT_HARD_DEADLINE_MS = 10_000;
-  let forceExitTimer: ReturnType<typeof setTimeout> | undefined;
-  if (shouldForceExitAfterMain()) {
-    forceExitTimer = setTimeout(() => {
-      console.warn(
-        `[cli] engine.disconnect() did not return within ${DISCONNECT_HARD_DEADLINE_MS}ms — force-exiting`,
-      );
-      process.exit(0);
-    }, DISCONNECT_HARD_DEADLINE_MS);
-    // unref so the timer itself doesn't keep the event loop alive — only
-    // the actual pending work (PGLite WASM handle) does. Without unref,
-    // we'd block a clean exit by 10s on every successful CLI run.
-    forceExitTimer.unref?.();
-  }
-
+  // results. On PGLite/Postgres poolers that work can keep Bun's event loop
+  // alive past the user-facing output. Drain before disconnect, then use the
+  // shared CLI disconnect helper so generic ops have the same hard-deadline
+  // behavior as doctor/dream/status-style command paths.
   let drainResult: DrainOutcome = { outcome: 'drained', pending: 0 };
   try {
     const ctx = await makeContext(engine, params);
@@ -316,8 +294,7 @@ async function main() {
       const { getFactsQueue } = await import('./core/facts/queue.ts');
       await getFactsQueue().drainPending({ timeout: 1000 });
     } catch { /* best-effort; never block disconnect on drain failure */ }
-    await engine.disconnect();
-    if (forceExitTimer) clearTimeout(forceExitTimer);
+    await disconnectEngineWithHardDeadline(engine, { label: `gbrain ${command}` });
     // Narrow force-exit: only when the drain timed out AND we are NOT
     // running a daemon. The drain helper already stderr-warned with the
     // pending count, so the diagnostic signal is preserved. Without

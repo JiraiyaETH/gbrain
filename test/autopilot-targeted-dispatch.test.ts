@@ -2,9 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import {
   buildAutopilotJobProposal,
   buildAutopilotFreshnessSyncData,
+  isAutopilotFreshnessOnly,
   isAutopilotProposeOnly,
   selectAutopilotFreshnessSources,
   selectDispatchableTargetedSteps,
+  shouldRunAutopilotWithoutWorker,
   submitOrProposeAutopilotJob,
 } from '../src/commands/autopilot.ts';
 import {
@@ -110,6 +112,20 @@ describe('selectDispatchableTargetedSteps', () => {
     expect(isAutopilotProposeOnly(['--observe'])).toBe(true);
     expect(isAutopilotProposeOnly(['--propose-only'])).toBe(true);
     expect(isAutopilotProposeOnly(['--status'])).toBe(false);
+  });
+
+  test('freshness-only can be selected by flag or environment', () => {
+    expect(isAutopilotFreshnessOnly(['--freshness-only'], {} as NodeJS.ProcessEnv)).toBe(true);
+    expect(isAutopilotFreshnessOnly([], { GBRAIN_AUTOPILOT_FRESHNESS_ONLY: '1' } as NodeJS.ProcessEnv)).toBe(true);
+    expect(isAutopilotFreshnessOnly([], { GBRAIN_AUTOPILOT_FRESHNESS_ONLY: '0' } as NodeJS.ProcessEnv)).toBe(false);
+  });
+
+  test('one-shot autopilot never owns a worker child', () => {
+    expect(shouldRunAutopilotWithoutWorker(['--once'])).toBe(true);
+    expect(shouldRunAutopilotWithoutWorker(['--freshness-only', '--once'])).toBe(true);
+    expect(shouldRunAutopilotWithoutWorker(['--observe'])).toBe(true);
+    expect(shouldRunAutopilotWithoutWorker(['--no-worker'])).toBe(true);
+    expect(shouldRunAutopilotWithoutWorker([])).toBe(false);
   });
 
   test('proposal payload preserves the exact job data and submit options', () => {
