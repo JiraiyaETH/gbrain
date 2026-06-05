@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import type { BrainEngine } from '../engine.ts';
+import { importFromContent } from '../import-file.ts';
 
 export const CALENDAR_PROJECTION_MANAGER = 'gbrain-runtime/calendar-projection';
 export const CALENDAR_RUNTIME_AUTHORITY = 'gbrain_brainengine';
@@ -301,6 +302,7 @@ export async function runCalendarProjectionSync(
   // DB path is idempotent, so a crash between the two leaves a retry-repairable
   // generated page rather than a torn markdown file.
   const writeResult = await writeCalendarPages(run.pages, sourceRoot);
+  await importCalendarPages(engine, run.pages, sourceRoot);
   const persistence = await persistCalendarProjectionRun(engine, run, writeResult.wroteBySlug);
   return {
     status: 'synced',
@@ -317,6 +319,24 @@ export async function runCalendarProjectionSync(
     pages: run.pages,
     files: writeResult.files,
   };
+}
+
+async function importCalendarPages(
+  engine: BrainEngine,
+  pages: readonly RenderedCalendarPage[],
+  sourceRoot: string,
+): Promise<void> {
+  for (const page of pages) {
+    const sourcePath = `${page.slug}.md`;
+    await importFromContent(engine, page.slug, page.markdown, {
+      noEmbed: true,
+      sourceId: CALENDAR_SOURCE_ID,
+      sourcePath,
+      source_kind: 'calendar-projection',
+      source_uri: `file://${resolve(sourceRoot, sourcePath)}`,
+      ingested_via: CALENDAR_PROJECTION_MANAGER,
+    });
+  }
 }
 
 export async function resolveDefaultSourceRoot(engine: BrainEngine): Promise<string> {

@@ -124,6 +124,12 @@ describe('Calendar Projection BrainEngine persistence and idempotency', () => {
     expect(dayMarkdown).toContain('managed_by: gbrain-runtime/calendar-projection');
     expect(indexMarkdown).toContain('[2026-06-03 (Wednesday)](2026/2026-06-03.md) — 2 event(s)');
 
+    const dayPage = await engine.getPage('sources/calendar/2026/2026-06-03', { sourceId: 'default' });
+    const indexPage = await engine.getPage('sources/calendar/index', { sourceId: 'default' });
+    expect(dayPage?.compiled_truth).toContain('Synthetic founder check-in');
+    expect(indexPage?.compiled_truth).toContain('[2026-06-03 (Wednesday)](2026/2026-06-03.md) — 2 event(s)');
+    expect(indexPage?.frontmatter.event_count).toBe(2);
+
     await ensureCalendarProjectionSchema(engine);
     const providerRows = await engine.executeRaw<{ count: string }>(
       `SELECT COUNT(*)::text AS count FROM calendar_provider_records WHERE source_id = 'default'`,
