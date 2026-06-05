@@ -5011,10 +5011,13 @@ export class PostgresEngine implements BrainEngine {
     // Already-aborted signal short-circuits before the network round-trip.
     if (opts?.signal) {
       if (opts.signal.aborted) {
-        // .cancel() is fire-and-forget; the awaited query rejects with the
-        // postgres "query was cancelled" error which the caller catches.
+        // .cancel() may return a Promise; consume it so a late postgres
+        // "canceling statement due to user request" rejection cannot surface
+        // as process-level unhandledRejection after the caller already handled
+        // the AbortError.
         try {
-          (pending as unknown as { cancel?: () => void }).cancel?.();
+          const cancelResult = (pending as unknown as { cancel?: () => void | Promise<void> }).cancel?.();
+          void Promise.resolve(cancelResult).catch(() => {});
         } catch {
           // best-effort
         }
@@ -5022,7 +5025,8 @@ export class PostgresEngine implements BrainEngine {
       }
       const onAbort = () => {
         try {
-          (pending as unknown as { cancel?: () => void }).cancel?.();
+          const cancelResult = (pending as unknown as { cancel?: () => void | Promise<void> }).cancel?.();
+          void Promise.resolve(cancelResult).catch(() => {});
         } catch {
           // best-effort; the .then below settles regardless
         }
