@@ -212,7 +212,7 @@ export async function computeAllSourceMetrics(
 ): Promise<SourceMetrics[]> {
   if (sources.length === 0) return [];
 
-  const usePostgresEstimate = engine.kind === 'postgres' && engine.constructor.name === 'PostgresEngine';
+  const usePostgresEstimate = engine.kind === 'postgres';
   const estimateSourceId = sources.find((s) => s.id === 'default')?.id ?? sources[0].id;
   const pageCounts = usePostgresEstimate
     ? await estimatedSingleSourcePageCounts(engine, estimateSourceId)
