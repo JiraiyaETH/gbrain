@@ -180,8 +180,14 @@ export async function computeAllSourceMetrics(
 ): Promise<SourceMetrics[]> {
   if (sources.length === 0) return [];
 
-  const pageCounts = await pageCountsBySource(engine);
-  const chunkCounts = await chunkCountsBySource(engine);
+  const usePostgresEstimate = engine.kind === 'postgres' && engine.constructor.name === 'PostgresEngine';
+  const estimateSourceId = sources.find((s) => s.id === 'default')?.id ?? sources[0].id;
+  const pageCounts = usePostgresEstimate
+    ? await estimatedSingleSourcePageCounts(engine, estimateSourceId)
+    : await pageCountsBySource(engine);
+  const chunkCounts = usePostgresEstimate
+    ? await estimatedSingleSourceChunkCounts(engine, estimateSourceId)
+    : await chunkCountsBySource(engine);
   const jobCounts = await jobCountsBySource(engine);
   const now = Date.now();
   // v0.41.32.0: LOCAL callers (gbrain sources status/audit) opt into a live
@@ -256,6 +262,15 @@ async function pageCountsBySource(engine: BrainEngine): Promise<Map<string, numb
   return m;
 }
 
+async function estimatedSingleSourcePageCounts(engine: BrainEngine, sourceId: string): Promise<Map<string, number>> {
+  const rows = await engine.executeRaw<{ estimate: string | number }>(
+    `SELECT GREATEST(reltuples, 0)::bigint AS estimate
+       FROM pg_class
+      WHERE relname = 'pages'`,
+  );
+  return new Map([[sourceId, Math.max(0, Math.round(Number(rows[0]?.estimate ?? 0)))]]);
+}
+
 async function chunkCountsBySource(engine: BrainEngine): Promise<Map<string, { total: number; embedded: number }>> {
   const rows = await engine.executeRaw<{ source_id: string; total: number; embedded: number }>(
     `SELECT p.source_id,
@@ -269,6 +284,21 @@ async function chunkCountsBySource(engine: BrainEngine): Promise<Map<string, { t
   const m = new Map<string, { total: number; embedded: number }>();
   for (const r of rows) m.set(r.source_id, { total: Number(r.total), embedded: Number(r.embedded) });
   return m;
+}
+
+async function estimatedSingleSourceChunkCounts(engine: BrainEngine, sourceId: string): Promise<Map<string, { total: number; embedded: number }>> {
+  const rows = await engine.executeRaw<{ relname: string; estimate: string | number }>(
+    `SELECT relname, GREATEST(reltuples, 0)::bigint AS estimate
+       FROM pg_class
+      WHERE relname IN ('content_chunks', 'idx_chunks_embedding_null')`,
+  );
+  const estimates = new Map<string, number>();
+  for (const row of rows) {
+    estimates.set(row.relname, Math.max(0, Math.round(Number(row.estimate ?? 0))));
+  }
+  const total = estimates.get('content_chunks') ?? 0;
+  const unembedded = Math.min(estimates.get('idx_chunks_embedding_null') ?? 0, total);
+  return new Map([[sourceId, { total, embedded: Math.max(total - unembedded, 0) }]]);
 }
 
 type JobStats = { failed_24h: number; queue_depth: number; backfill_active: number; backfill_queued: number };

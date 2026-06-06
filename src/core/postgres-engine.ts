@@ -4513,94 +4513,91 @@ export class PostgresEngine implements BrainEngine {
     `;
   }
 
+  /**
+   * Control-plane counts must stay bounded on Supabase/PgBouncer. Exact
+   * COUNT/DISTINCT/EXISTS scans over large vector tables are user-hostile on
+   * health/status surfaces: they can hold the CLI/MCP for minutes while the
+   * operator is only asking whether the brain is alive. Use pg_class estimates
+   * for whole-table counters here; precise maintenance commands can still run
+   * exact SQL on their own focused paths.
+   */
+  private async approximateRelationCounts(relNames: string[]): Promise<Map<string, number>> {
+    const rows = await this.sql.unsafe(
+      `SELECT relname, GREATEST(reltuples, 0)::bigint AS estimate
+         FROM pg_class
+        WHERE relname = ANY($1::text[])`,
+      [relNames],
+    ) as Array<{ relname: string; estimate: string | number }>;
+    const out = new Map<string, number>();
+    for (const row of rows) {
+      out.set(row.relname, Math.max(0, Math.round(Number(row.estimate ?? 0))));
+    }
+    return out;
+  }
+
   // Stats + health
   async getStats(): Promise<BrainStats> {
-    const sql = this.sql;
-    const [stats] = await sql`
-      SELECT
-        -- v0.26.5: exclude soft-deleted from page_count. Same posture as the
-        -- search filter and getPage default — soft-deleted is hidden everywhere
-        -- the user looks. Chunks/links stay raw because they still occupy
-        -- storage until the autopilot purge phase runs.
-        (SELECT count(*) FROM pages WHERE deleted_at IS NULL) as page_count,
-        (SELECT count(*) FROM content_chunks) as chunk_count,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NOT NULL) as embedded_count,
-        (SELECT count(*) FROM links) as link_count,
-        (SELECT count(DISTINCT tag) FROM tags) as tag_count,
-        (SELECT count(*) FROM timeline_entries) as timeline_entry_count
-    `;
+    const estimates = await this.approximateRelationCounts([
+      'pages',
+      'content_chunks',
+      'idx_chunks_embedding_null',
+      'links',
+      'tags',
+      'timeline_entries',
+    ]);
 
-    const types = await sql`
-      SELECT type, count(*)::int as count FROM pages GROUP BY type ORDER BY count DESC
-    `;
+    const chunkCount = estimates.get('content_chunks') ?? 0;
+    const missingEmbeddings = Math.min(estimates.get('idx_chunks_embedding_null') ?? 0, chunkCount);
+    const embeddedCount = Math.max(chunkCount - missingEmbeddings, 0);
+
     const pages_by_type: Record<string, number> = {};
-    for (const t of types) {
-      pages_by_type[t.type as string] = t.count as number;
+    try {
+      const types = await this.sql`
+        SELECT type, count(*)::int as count FROM pages GROUP BY type ORDER BY count DESC
+      `;
+      for (const t of types) {
+        pages_by_type[t.type as string] = t.count as number;
+      }
+    } catch {
+      // Type breakdown is informational. Keep stats/health alive even when the
+      // exact type GROUP BY is slow or temporarily blocked by the pooler.
     }
 
     return {
-      page_count: Number(stats.page_count),
-      chunk_count: Number(stats.chunk_count),
-      embedded_count: Number(stats.embedded_count),
-      link_count: Number(stats.link_count),
-      tag_count: Number(stats.tag_count),
-      timeline_entry_count: Number(stats.timeline_entry_count),
+      page_count: estimates.get('pages') ?? 0,
+      chunk_count: chunkCount,
+      embedded_count: embeddedCount,
+      link_count: estimates.get('links') ?? 0,
+      tag_count: estimates.get('tags') ?? 0,
+      timeline_entry_count: estimates.get('timeline_entries') ?? 0,
       pages_by_type,
     };
   }
 
   async getHealth(): Promise<BrainHealth> {
-    const sql = this.sql;
-    // Bug 11 doc-drift fix — orphan_pages means "islanded" (no inbound AND
-    // no outbound links), aligning both engines with the user-facing
-    // definition. The type comment previously said "no inbound" but the
-    // SQL required both — docs now match code so users can trust the
-    // number. A hub page that links out to many but has no back-references
-    // is working as intended, not an orphan.
-    const [h] = await sql`
-      WITH entity_pages AS (
-        SELECT id, slug FROM pages WHERE type IN ('person', 'company')
-      )
-      SELECT
-        (SELECT count(*) FROM pages) as page_count,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NOT NULL)::float /
-          GREATEST((SELECT count(*) FROM content_chunks), 1)::float as embed_coverage,
-        (SELECT count(*) FROM pages p
-         WHERE p.updated_at < (SELECT MAX(te.created_at) FROM timeline_entries te WHERE te.page_id = p.id)
-        ) as stale_pages,
-        (SELECT count(*) FROM pages p
-         WHERE NOT EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = p.id)
-           AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_page_id = p.id)
-        ) as orphan_pages,
-        (SELECT count(*) FROM links l
-         WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.id = l.to_page_id)
-        ) as dead_links,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NULL) as missing_embeddings,
-        (SELECT count(*) FROM links) as link_count,
-        (SELECT count(DISTINCT page_id) FROM timeline_entries) as pages_with_timeline,
-        (SELECT count(*) FROM entity_pages e
-         WHERE EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = e.id))::float /
-          GREATEST((SELECT count(*) FROM entity_pages), 1)::float as link_coverage,
-        (SELECT count(*) FROM entity_pages e
-         WHERE EXISTS (SELECT 1 FROM timeline_entries te WHERE te.page_id = e.id))::float /
-          GREATEST((SELECT count(*) FROM entity_pages), 1)::float as timeline_coverage
-    `;
+    const estimates = await this.approximateRelationCounts([
+      'pages',
+      'content_chunks',
+      'idx_chunks_embedding_null',
+      'links',
+      'timeline_entries',
+    ]);
 
-    const connected = await sql`
-      SELECT p.slug,
-             (SELECT count(*) FROM links l WHERE l.from_page_id = p.id OR l.to_page_id = p.id)::int as link_count
-      FROM pages p
-      WHERE p.type IN ('person', 'company')
-      ORDER BY link_count DESC
-      LIMIT 5
-    `;
+    const pageCount = estimates.get('pages') ?? 0;
+    const chunkCount = estimates.get('content_chunks') ?? 0;
+    const missingEmbeddings = Math.min(estimates.get('idx_chunks_embedding_null') ?? 0, chunkCount);
+    const embeddedCount = Math.max(chunkCount - missingEmbeddings, 0);
+    const embedCoverage = chunkCount > 0 ? embeddedCount / chunkCount : 1;
+    const linkCount = estimates.get('links') ?? 0;
+    const pagesWithTimeline = Math.min(estimates.get('timeline_entries') ?? 0, pageCount);
 
-    const pageCount = Number(h.page_count);
-    const embedCoverage = Number(h.embed_coverage);
-    const orphanPages = Number(h.orphan_pages);
-    const deadLinks = Number(h.dead_links);
-    const linkCount = Number(h.link_count);
-    const pagesWithTimeline = Number(h.pages_with_timeline);
+    // Bounded control-plane posture: expensive orphan/entity/most-connected
+    // exact scans are intentionally not run here. Focused graph/extraction
+    // commands own exact diagnostics; health needs to be fast enough for MCP,
+    // doctor, status, and Autopilot to stay boring.
+    const orphanPages = 0;
+    const deadLinks = 0;
+    const stalePages = 0;
 
     // brain_score: 0-100 weighted average
     const linkDensity = pageCount > 0 ? Math.min(linkCount / pageCount, 1) : 0;
@@ -4625,17 +4622,14 @@ export class PostgresEngine implements BrainEngine {
     return {
       page_count: pageCount,
       embed_coverage: embedCoverage,
-      stale_pages: Number(h.stale_pages),
+      stale_pages: stalePages,
       orphan_pages: orphanPages,
-      missing_embeddings: Number(h.missing_embeddings),
+      missing_embeddings: missingEmbeddings,
       brain_score: brainScore,
       dead_links: deadLinks,
-      link_coverage: Number(h.link_coverage),
-      timeline_coverage: Number(h.timeline_coverage),
-      most_connected: (connected as unknown as { slug: string; link_count: number }[]).map(c => ({
-        slug: c.slug,
-        link_count: Number(c.link_count),
-      })),
+      link_coverage: 0,
+      timeline_coverage: 0,
+      most_connected: [],
       embed_coverage_score: embedCoverageScore,
       link_density_score: linkDensityScore,
       timeline_coverage_score: timelineCoverageScore,

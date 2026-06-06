@@ -244,6 +244,26 @@ export async function countExtractAtomsBacklog(
     // The atom must live in the SAME source as the page either way, so the
     // brain-wide form keys the NOT EXISTS on `atom.source_id = p.source_id`.
     const scoped = sourceId !== undefined;
+    if (!scoped && engine.kind === 'postgres' && engine.constructor.name === 'PostgresEngine') {
+      const rows = await engine.executeRaw<{ one: number }>(
+        `SELECT 1 AS one FROM pages p
+         WHERE p.type = ANY($1::text[])
+           AND p.deleted_at IS NULL
+           AND p.content_hash IS NOT NULL
+           AND COALESCE(p.frontmatter->>'imported_from',   '') <> 'markdown-greenfield'
+           AND COALESCE(p.frontmatter->>'dream_generated', '') <> 'true'
+           AND length(COALESCE(p.compiled_truth, '')) >= $2
+           AND NOT EXISTS (
+             SELECT 1 FROM pages atom
+             WHERE atom.type = 'atom' AND atom.source_id = p.source_id
+               AND atom.frontmatter->>'source_hash' = substring(p.content_hash from 1 for 16)
+               AND atom.deleted_at IS NULL
+           )
+         LIMIT 11`,
+        [EXTRACTABLE_PAGE_TYPES as unknown as string[], MIN_PAGE_CHARS_FOR_EXTRACTION],
+      );
+      return rows.length;
+    }
     const sql = scoped
       ? `SELECT COUNT(*) AS cnt FROM pages p
          WHERE p.source_id = $1
