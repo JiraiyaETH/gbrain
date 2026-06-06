@@ -30,6 +30,7 @@ import { shouldForceExitAfterMain, finishCliTeardown, flushThenExit, currentExit
 import { serializeMarkdown } from './core/markdown.ts';
 import { parseGlobalFlags, setCliOptions, getCliOptions } from './core/cli-options.ts';
 import type { CliOptions } from './core/cli-options.ts';
+import { resolveReadOnlyCommandTimeoutMs } from './core/cli-timeout-policy.ts';
 import { callRemoteTool, RemoteMcpError, unpackToolResult } from './core/mcp-client.ts';
 import { maybePromptForUpgrade } from './core/thin-client-upgrade-prompt.ts';
 import { VERSION } from './version.ts';
@@ -1479,17 +1480,13 @@ async function handleCliOnly(command: string, args: string[]) {
   // covers connectEngine (so a hung schema probe / PgBouncer freeze actually
   // surfaces a timeout) AND the dispatch body (so a wedged runSearch /
   // runList honors the same deadline).
-  // Per-command default: search 30s, sources list 10s. User --timeout=Ns wins.
-  // Other commands (import, embed, doctor, etc.) keep their existing
-  // unbounded connect — destructive / long-running commands shouldn't get
-  // a default kill switch.
-  const readOnlyDefaultTimeoutMs =
-    command === 'search' ? 30_000 :
-    command === 'sources' && (args[0] === 'list' || args[0] === undefined) ? 10_000 :
-    null;
+  // Per-command default: search 30s, sources list 10s. User --timeout=Ns wins
+  // only when this read-only wrapper applies. Non-read-only commands must not
+  // be forced through dispatchReadOnlyCommand just because --timeout was set.
+  // They keep their command-specific lifecycle / timeout behavior.
   const cliOptsResolved = getCliOptions();
   const userTimeoutMs = cliOptsResolved.timeoutMs;
-  const readOnlyTimeoutMs = userTimeoutMs ?? readOnlyDefaultTimeoutMs;
+  const readOnlyTimeoutMs = resolveReadOnlyCommandTimeoutMs(command, args, userTimeoutMs);
 
   if (readOnlyTimeoutMs !== null) {
     const { withTimeout, OperationTimeoutError } = await import('./core/timeout.ts');

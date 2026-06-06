@@ -3121,14 +3121,17 @@ export async function computeExtractAtomsBacklogCheck(
       };
     }
 
+    const approximateBacklog = engine.kind === 'postgres' && engine.constructor.name === 'PostgresEngine' && backlog >= 11;
+    const backlogLabel = approximateBacklog ? `at least ${backlog}` : `${backlog}`;
+
     // The incident: pack does NOT run the phase but a real backlog exists →
     // it will grow forever without a signal. WARN with the drain command.
     if (!declared && backlog > 10) {
       const fix = 'gbrain dream --phase extract_atoms --drain --window 120 (or declare extract_atoms in your active schema pack)';
       return {
         name, status: 'warn',
-        message: `${backlog} pages eligible for atom extraction but the active pack does not run extract_atoms — backlog growing. Fix: ${fix}`,
-        details: { backlog, pack_declares_phase: false, fix_hint: fix, known_approximation: approx },
+        message: `${backlogLabel} pages eligible for atom extraction but the active pack does not run extract_atoms — backlog growing. Fix: ${fix}`,
+        details: { backlog, approximate_backlog: approximateBacklog, pack_declares_phase: false, fix_hint: fix, known_approximation: approx },
       };
     }
 
@@ -3136,16 +3139,16 @@ export async function computeExtractAtomsBacklogCheck(
       // Pack runs it; the routine cycle drains in bounded batches. Informational.
       return {
         name, status: 'ok',
-        message: `${backlog} page(s) pending; active pack runs extract_atoms each cycle`,
-        details: { backlog, pack_declares_phase: true, known_approximation: approx },
+        message: `${backlogLabel} page(s) pending; active pack runs extract_atoms each cycle`,
+        details: { backlog, approximate_backlog: approximateBacklog, pack_declares_phase: true, known_approximation: approx },
       };
     }
 
     // Not declared but below the warn threshold.
     return {
       name, status: 'ok',
-      message: `${backlog} page(s) eligible (below warn threshold; pack does not run extract_atoms)`,
-      details: { backlog, pack_declares_phase: false, known_approximation: approx },
+      message: `${backlogLabel} page(s) eligible (below warn threshold; pack does not run extract_atoms)`,
+      details: { backlog, approximate_backlog: approximateBacklog, pack_declares_phase: false, known_approximation: approx },
     };
   } catch (err) {
     return { name, status: 'warn', message: `extract_atoms_backlog check failed: ${(err as Error).message}` };
@@ -4920,7 +4923,10 @@ export async function buildChecks(
     const sources = await engine!.executeRaw<{ id: string; local_path: string | null }>(
       `SELECT id, local_path FROM sources`,
     );
-    const nonDefaultWithPath = sources.filter(s => s.id !== 'default' && s.local_path);
+    const nonDefaultWithPath = sources.filter((s) => {
+      if (s.id === 'default' || !s.local_path) return false;
+      return parseSourceConfig(s.config).federated === true;
+    });
     if (sources.length > 1 && nonDefaultWithPath.length > 0) {
       const result = await findMisroutedPages(
         engine!,
@@ -5575,16 +5581,33 @@ export async function buildChecks(
         // Codex /ship #5: pull `total` alongside `pct` so a fresh brain
         // (0 chunks → NULLIF makes pct NULL → coalesces to 0) doesn't
         // false-warn "Active column 'embedding' is 0.0% populated".
-        const covRows = await engine.executeRaw<{ pct: number; total: number }>(
-          `SELECT (
-             COUNT(*) FILTER (WHERE ${quoteIdentifier(activeCol)} IS NOT NULL)::float
-             / NULLIF(COUNT(*), 0) * 100
-           )::float AS pct,
-           COUNT(*)::int AS total
-           FROM content_chunks`,
-        );
-        const pct = covRows[0]?.pct ?? 0;
-        const total = covRows[0]?.total ?? 0;
+        let pct = 0;
+        let total = 0;
+        if (engine.kind === 'postgres' && engine.constructor.name === 'PostgresEngine' && activeCol === 'embedding') {
+          const estimateRows = await engine.executeRaw<{ relname: string; estimate: string | number }>(
+            `SELECT relname, GREATEST(reltuples, 0)::bigint AS estimate
+               FROM pg_class
+              WHERE relname IN ('content_chunks', 'idx_chunks_embedding_null')`,
+          );
+          const estimates = new Map<string, number>();
+          for (const row of estimateRows) {
+            estimates.set(row.relname, Math.max(0, Math.round(Number(row.estimate ?? 0))));
+          }
+          total = estimates.get('content_chunks') ?? 0;
+          const missing = Math.min(estimates.get('idx_chunks_embedding_null') ?? 0, total);
+          pct = total > 0 ? ((total - missing) / total) * 100 : 0;
+        } else {
+          const covRows = await engine.executeRaw<{ pct: number; total: number }>(
+            `SELECT (
+               COUNT(*) FILTER (WHERE ${quoteIdentifier(activeCol)} IS NOT NULL)::float
+               / NULLIF(COUNT(*), 0) * 100
+             )::float AS pct,
+             COUNT(*)::int AS total
+             FROM content_chunks`,
+          );
+          pct = covRows[0]?.pct ?? 0;
+          total = covRows[0]?.total ?? 0;
+        }
         // Only warn when there's a real coverage gap. Empty brain (0 chunks)
         // is a normal state for new installs — skip the gate entirely.
         if (total > 0 && pct < 90) {
