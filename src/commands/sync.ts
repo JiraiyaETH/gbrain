@@ -3155,7 +3155,7 @@ export async function buildSyncStatusReport(
   // real error is better than a misleading "0 chunks" report (Q2).
   let countRows: CountRow[] = [];
   if (sourceIds.length > 0) {
-    if (engine.kind === 'postgres' && engine.constructor.name === 'PostgresEngine') {
+    if (engine.kind === 'postgres') {
       const estimateRows = await engine.executeRaw<{ relname: string; estimate: string | number }>(
         `SELECT relname, GREATEST(reltuples, 0)::bigint AS estimate
            FROM pg_class
