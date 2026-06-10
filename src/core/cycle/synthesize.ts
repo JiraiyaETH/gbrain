@@ -73,6 +73,10 @@ const HEADROOM_RATIO = 0.9;
 const MIN_PROMPT_TOKENS = 100_000;
 /** Default chunk-count cap; operator-configurable via dream.synthesize.max_chunks_per_transcript. */
 const DEFAULT_MAX_CHUNKS = 24;
+/** Default per-child synthesis wall clock: 30 minutes (stock behavior). */
+const DEFAULT_CHILD_TIMEOUT_MS = 30 * 60 * 1000;
+/** Orchestrator waits five minutes longer than the child job timeout. */
+const ORCHESTRATOR_WAIT_GRACE_MS = 5 * 60 * 1000;
 /** Conservative default budget when model is unknown (200K × HEADROOM_RATIO). */
 const UNKNOWN_MODEL_BUDGET_TOKENS = 180_000;
 
@@ -478,7 +482,7 @@ export async function runPhaseSynthesize(
           max_stalled: 3,
           on_child_fail: 'continue',
           idempotency_key,
-          timeout_ms: 30 * 60 * 1000, // 30 min per chunk
+          timeout_ms: config.childTimeoutMs,
         };
         const child = await queue.add(
           'subagent',
@@ -499,7 +503,7 @@ export async function runPhaseSynthesize(
     for (const jobId of childIds) {
       try {
         const job = await waitForCompletion(queue, jobId, {
-          timeoutMs: 35 * 60 * 1000,
+          timeoutMs: synthesizeOrchestratorWaitMs(config.childTimeoutMs),
           pollMs: 5 * 1000,
         });
         childOutcomes.push({ jobId, status: job.status });
@@ -594,6 +598,18 @@ interface SynthConfig {
    * `dream.synthesize.max_chunks_per_transcript`.
    */
   maxChunksPerTranscript: number;
+  /** Per-child subagent timeout. Operator override: `dream.synthesize.child_timeout_ms`. */
+  childTimeoutMs: number;
+}
+
+export function parseSynthesizeChildTimeoutMs(raw: string | null | undefined): number {
+  if (!raw) return DEFAULT_CHILD_TIMEOUT_MS;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CHILD_TIMEOUT_MS;
+}
+
+export function synthesizeOrchestratorWaitMs(childTimeoutMs: number): number {
+  return childTimeoutMs + ORCHESTRATOR_WAIT_GRACE_MS;
 }
 
 async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
@@ -622,6 +638,7 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
   const cooldownHoursStr = await engine.getConfig('dream.synthesize.cooldown_hours');
   const maxPromptTokensStr = await engine.getConfig('dream.synthesize.max_prompt_tokens');
   const maxChunksStr = await engine.getConfig('dream.synthesize.max_chunks_per_transcript');
+  const childTimeoutStr = await engine.getConfig('dream.synthesize.child_timeout_ms');
 
   let excludePatterns: string[] = ['medical', 'therapy'];
   if (excludeStr) {
@@ -659,6 +676,7 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
     cooldownHours: cooldownHoursStr ? Math.max(0, parseInt(cooldownHoursStr, 10) || 12) : 12,
     maxPromptTokens,
     maxChunksPerTranscript,
+    childTimeoutMs: parseSynthesizeChildTimeoutMs(childTimeoutStr),
   };
 }
 
