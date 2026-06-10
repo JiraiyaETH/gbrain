@@ -18,7 +18,7 @@ import { dedupResults } from './search/dedup.ts';
 import { captureEvalCandidate, isEvalCaptureEnabled, isEvalScrubEnabled } from './eval-capture.ts';
 import type { HybridSearchMeta } from './types.ts';
 import { extractPageLinks, isAutoLinkEnabled, isAutoTimelineEnabled, isGlobalBasenameEnabled, parseTimelineEntries, makeResolver, type UnresolvedFrontmatterRef } from './link-extraction.ts';
-import { loadActivePackBestEffort } from './schema-pack/best-effort.ts';
+import { loadActivePackBestEffortWithResolution } from './schema-pack/best-effort.ts';
 import { isFactsBackstopEligible } from './facts/eligibility.ts';
 import { stripTakesFence } from './takes-fence.ts';
 import { stripFactsFence } from './facts-fence.ts';
@@ -928,9 +928,20 @@ const put_page: Operation = {
       try {
         const enabled = await isAutoLinkEnabled(ctx.engine);
         if (enabled) {
+          const packState = await loadActivePackBestEffortWithResolution(ctx);
+          if (!packState.pack && packState.configured) {
+            console.error(
+              `[schema] active schema_pack \`${packState.resolution.pack_name}\` (${packState.resolution.source}) failed to load; ` +
+              'skipping frontmatter link extraction for this put_page auto-link run to avoid legacy-verb edges.',
+            );
+          }
+          const schemaPack = packState.configured && packState.pack?.manifest.frontmatter_links.length
+            ? packState.pack.manifest
+            : undefined;
           autoLinks = await runAutoLink(ctx.engine, slug, result.parsedPage, {
             ...(ctx.sourceId ? { sourceId: ctx.sourceId } : {}),
-            schemaPack: (await loadActivePackBestEffort(ctx))?.manifest,
+            schemaPack,
+            skipFrontmatter: !packState.pack && packState.configured,
           });
         }
       } catch (e) {
@@ -1064,7 +1075,7 @@ async function runAutoLink(
   engine: BrainEngine,
   slug: string,
   parsed: { type: PageType; compiled_truth: string; timeline: string; frontmatter: Record<string, unknown> },
-  opts?: { sourceId?: string; schemaPack?: Pick<SchemaPackManifest, 'frontmatter_links'> },
+  opts?: { sourceId?: string; schemaPack?: Pick<SchemaPackManifest, 'frontmatter_links'>; skipFrontmatter?: boolean },
 ): Promise<{ created: number; removed: number; errors: number; unresolved: UnresolvedFrontmatterRef[] }> {
   const fullContent = parsed.compiled_truth + '\n' + parsed.timeline;
   // v0.31.8 (codex OV-2): thread sourceId through every read + write inside
@@ -1089,7 +1100,7 @@ async function runAutoLink(
   const globalBasename = await isGlobalBasenameEnabled(engine);
   const { candidates, unresolved } = await extractPageLinks(
     slug, fullContent, parsed.frontmatter, parsed.type, resolver,
-    { globalBasename, schemaPack: opts?.schemaPack },
+    { globalBasename, skipFrontmatter: opts?.skipFrontmatter, schemaPack: opts?.schemaPack },
   );
 
   // Resolve which targets exist (skip refs to non-existent pages to avoid FK
