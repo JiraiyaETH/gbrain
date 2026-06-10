@@ -206,6 +206,26 @@ describe('synthesize prompt slug examples', () => {
   });
 });
 
+describe('synthesize summary slug prefix', () => {
+  test('derives summary prefix from dream-cycle allow-list glob first', () => {
+    expect(__synthesizeInternals.deriveSummarySlugPrefix([
+      'brain/reflections/*',
+      'brain/dream-cycle-index/*',
+    ], 'configured/summaries/*')).toBe('brain/dream-cycle-index');
+  });
+
+  test('uses config key when allow-list has no dream-cycle prefix', () => {
+    expect(__synthesizeInternals.deriveSummarySlugPrefix(
+      ['brain/reflections/*'],
+      'configured/summaries/*',
+    )).toBe('configured/summaries');
+  });
+
+  test('keeps stock dream-cycle-summaries default for back-compat', () => {
+    expect(__synthesizeInternals.deriveSummarySlugPrefix([], null)).toBe('dream-cycle-summaries');
+  });
+});
+
 describe('readSingleTranscript', () => {
   test('returns transcript above minChars', () => {
     const path = makeTranscript('hello.txt', 'a'.repeat(3000));

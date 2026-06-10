@@ -531,7 +531,8 @@ export async function runPhaseSynthesize(
     // Summary index page (deterministic; orchestrator-written via direct
     // engine.putPage so no allow-list path needed).
     const summaryDate = opts.date ?? today();
-    const summarySlug = `dream-cycle-summaries/${summaryDate}`;
+    const summaryPrefixConfig = await engine.getConfig('dream.synthesize.summary_slug_prefix');
+    const summarySlug = `${deriveSummarySlugPrefix(allowedSlugPrefixes, summaryPrefixConfig)}/${summaryDate}`;
     // Back-compat: writeSummaryPage takes string[] for display; map refs back to slugs.
     const writtenSlugs = writtenRefs.map(r => r.slug);
     if (SUMMARY_SLUG_RE.test(summarySlug)) {
@@ -1009,6 +1010,19 @@ export function deriveSynthesisExamplePrefixes(allowedSlugPrefixes: string[]): {
   return { reflections, originals };
 }
 
+export function deriveSummarySlugPrefix(allowedSlugPrefixes: string[], configuredPrefix?: string | null): string {
+  const normalized = allowedSlugPrefixes
+    .map(normalizeAllowedSlugPrefix)
+    .filter(Boolean);
+  const fromAllowList = normalized.find(p => /(^|\/)dream-cycle/i.test(p));
+  if (fromAllowList) return fromAllowList;
+  if (configuredPrefix) {
+    const normalizedConfig = normalizeAllowedSlugPrefix(configuredPrefix);
+    if (normalizedConfig) return normalizedConfig;
+  }
+  return 'dream-cycle-summaries';
+}
+
 function sanitizeForSlug(s: string): string {
   return s
     .toLowerCase()
@@ -1259,6 +1273,7 @@ function failed(error: PhaseError): PhaseResult {
 
 export const __synthesizeInternals = {
   buildSynthesisPrompt,
+  deriveSummarySlugPrefix,
   deriveSynthesisExamplePrefixes,
   normalizeAllowedSlugPrefix,
 };
