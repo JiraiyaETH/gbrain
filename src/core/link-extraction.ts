@@ -469,78 +469,82 @@ export async function extractPageLinks(
   frontmatter: Record<string, unknown>,
   pageType: PageType,
   resolver: SlugResolver,
-  opts: { globalBasename?: boolean; skipFrontmatter?: boolean; schemaPack?: Pick<SchemaPackManifest, 'frontmatter_links'> } = {},
+  opts: { globalBasename?: boolean; skipFrontmatter?: boolean; frontmatterOnly?: boolean; schemaPack?: Pick<SchemaPackManifest, 'frontmatter_links'> } = {},
 ): Promise<PageLinksResult> {
   const candidates: LinkCandidate[] = [];
 
   // 1. Markdown entity refs.
-  for (const ref of extractEntityRefs(content)) {
-    // Issue #972: refs from the generic `[[bare-name]]` pass carry the
-    // literal wikilink text, not a real page slug. When global_basename
-    // mode is on AND the resolver implements basename lookup, resolve
-    // to every matching page and emit one candidate per match. When the
-    // flag is off (default), drop silently — back-compat with the
-    // pre-v0.40.8.2 behavior of dropping bare wikilinks outside
-    // DIR_PATTERN.
-    if (ref.needsResolution) {
-      if (!opts.globalBasename || typeof resolver.resolveBasenameMatches !== 'function') {
+  if (!opts.frontmatterOnly) {
+    for (const ref of extractEntityRefs(content)) {
+      // Issue #972: refs from the generic `[[bare-name]]` pass carry the
+      // literal wikilink text, not a real page slug. When global_basename
+      // mode is on AND the resolver implements basename lookup, resolve
+      // to every matching page and emit one candidate per match. When the
+      // flag is off (default), drop silently — back-compat with the
+      // pre-v0.40.8.2 behavior of dropping bare wikilinks outside
+      // DIR_PATTERN.
+      if (ref.needsResolution) {
+        if (!opts.globalBasename || typeof resolver.resolveBasenameMatches !== 'function') {
+          continue;
+        }
+        // Issue #972 (codex): resolve by the wikilink TARGET (ref.slug — the
+        // text inside `[[...]]` before any `|`), NOT the display alias
+        // (ref.name = match[2]). `[[struktura|the project]]` must resolve
+        // `struktura`, not "the project". The display text is for context only.
+        const matches = await resolver.resolveBasenameMatches(ref.slug);
+        if (matches.length === 0) continue;
+        const idx = content.indexOf(ref.slug);
+        const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
+        for (const matched of matches) {
+          // Issue #972 (codex [P2]): a basename `[[own-tail]]` on its own page
+          // resolves back to itself — drop the self-loop.
+          if (matched === slug) continue;
+          candidates.push({
+            targetSlug: matched,
+            linkType: WIKILINK_BASENAME_LINK_TYPE,
+            context,
+            linkSource: 'wikilink-resolved',
+          });
+        }
         continue;
       }
-      // Issue #972 (codex): resolve by the wikilink TARGET (ref.slug — the
-      // text inside `[[...]]` before any `|`), NOT the display alias
-      // (ref.name = match[2]). `[[struktura|the project]]` must resolve
-      // `struktura`, not "the project". The display text is for context only.
-      const matches = await resolver.resolveBasenameMatches(ref.slug);
-      if (matches.length === 0) continue;
-      const idx = content.indexOf(ref.slug);
+      const idx = content.indexOf(ref.name);
+      // Wider context window (240 chars vs original 80) catches verbs that
+      // appear at sentence-or-paragraph distance from the slug — common in
+      // narrative prose where a partner's investment verbs appear once and
+      // then portfolio companies are listed in subsequent sentences.
       const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
-      for (const matched of matches) {
-        // Issue #972 (codex [P2]): a basename `[[own-tail]]` on its own page
-        // resolves back to itself — drop the self-loop.
-        if (matched === slug) continue;
-        candidates.push({
-          targetSlug: matched,
-          linkType: WIKILINK_BASENAME_LINK_TYPE,
-          context,
-          linkSource: 'wikilink-resolved',
-        });
-      }
-      continue;
+      candidates.push({
+        targetSlug: ref.slug,
+        linkType: inferLinkType(pageType, context, content, ref.slug),
+        context,
+        linkSource: 'markdown',
+      });
     }
-    const idx = content.indexOf(ref.name);
-    // Wider context window (240 chars vs original 80) catches verbs that
-    // appear at sentence-or-paragraph distance from the slug — common in
-    // narrative prose where a partner's investment verbs appear once and
-    // then portfolio companies are listed in subsequent sentences.
-    const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
-    candidates.push({
-      targetSlug: ref.slug,
-      linkType: inferLinkType(pageType, context, content, ref.slug),
-      context,
-      linkSource: 'markdown',
-    });
   }
 
   // 2. Bare slug references (e.g. "see people/alice-chen for context").
   // Limited to the same entity directories ENTITY_REF_RE covers.
   // Code blocks are stripped first — slugs in code samples are not real refs.
-  const strippedContent = stripCodeBlocks(content);
-  const bareRe = new RegExp(
-    `\\b(${DIR_PATTERN}\\/[a-z0-9][a-z0-9/-]*[a-z0-9])\\b`,
-    'g',
-  );
-  let m: RegExpExecArray | null;
-  while ((m = bareRe.exec(strippedContent)) !== null) {
-    // Skip matches that are part of a markdown link (already handled above).
-    const charBefore = m.index > 0 ? strippedContent[m.index - 1] : '';
-    if (charBefore === '/' || charBefore === '(') continue;
-    const context = excerpt(strippedContent, m.index, 240);
-    candidates.push({
-      targetSlug: m[1],
-      linkType: inferLinkType(pageType, context, content, m[1]),
-      context,
-      linkSource: 'markdown',
-    });
+  if (!opts.frontmatterOnly) {
+    const strippedContent = stripCodeBlocks(content);
+    const bareRe = new RegExp(
+      `\\b(${DIR_PATTERN}\\/[a-z0-9][a-z0-9/-]*[a-z0-9])\\b`,
+      'g',
+    );
+    let m: RegExpExecArray | null;
+    while ((m = bareRe.exec(strippedContent)) !== null) {
+      // Skip matches that are part of a markdown link (already handled above).
+      const charBefore = m.index > 0 ? strippedContent[m.index - 1] : '';
+      if (charBefore === '/' || charBefore === '(') continue;
+      const context = excerpt(strippedContent, m.index, 240);
+      candidates.push({
+        targetSlug: m[1],
+        linkType: inferLinkType(pageType, context, content, m[1]),
+        context,
+        linkSource: 'markdown',
+      });
+    }
   }
 
   // 3. Frontmatter-derived edges (v0.13). Includes the legacy `source:`

@@ -701,6 +701,7 @@ export async function runExtract(engine: BrainEngine, args: string[]) {
   // v0_13_0 migration orchestrator runs this once under the hood; users
   // opt in for subsequent runs.
   const includeFrontmatter = args.includes('--include-frontmatter');
+  const frontmatterOnly = args.includes('--frontmatter-only');
   // v0.41.18.0 Part B: --by-mention auto-link body-text entity mentions
   // via the gazetteer pass. Mode dispatch — when set, run ONLY the
   // mention pass (skip default link extract). DB-source only per D7;
@@ -745,7 +746,7 @@ export async function runExtract(engine: BrainEngine, args: string[]) {
     console.error(`Usage: gbrain extract <subcommand> [flags]
 
 Extraction (existing):
-  gbrain extract links    [--source fs|db] [--source-id <id>] [--dir <brain-dir>] [--dry-run] [--json] [--type T] [--since DATE] [--workers N]
+  gbrain extract links    [--source fs|db] [--source-id <id>] [--dir <brain-dir>] [--dry-run] [--json] [--type T] [--since DATE] [--include-frontmatter] [--frontmatter-only] [--workers N]
   gbrain extract timeline [--source fs|db] [--source-id <id>] [--dir <brain-dir>] [--dry-run] [--json] [--type T] [--since DATE] [--workers N]
   gbrain extract all      [--source fs|db] [--source-id <id>] [--dir <brain-dir>] [--dry-run] [--json] [--type T] [--since DATE] [--workers N]
   gbrain extract <links|timeline> --by-mention --source db
@@ -774,6 +775,15 @@ Status (v0.42):
   if (source !== 'fs' && source !== 'db') {
     console.error(`Invalid --source: ${source}. Must be 'fs' or 'db'.`);
     process.exit(1);
+  }
+
+  if (frontmatterOnly && !includeFrontmatter) {
+    console.error(`--frontmatter-only requires --include-frontmatter. Re-run as:\n\n  gbrain extract ${subcommand} --include-frontmatter --frontmatter-only`);
+    process.exit(2);
+  }
+  if (frontmatterOnly && subcommand !== 'links' && subcommand !== 'all') {
+    console.error(`--frontmatter-only is a links-pass option. Re-run as 'gbrain extract links --include-frontmatter --frontmatter-only'.`);
+    process.exit(2);
   }
 
   // v0.41.18.0 D7: --by-mention requires DB-source. Gazetteer construction
@@ -911,7 +921,7 @@ Status (v0.42):
         if (subcommand === 'links' || subcommand === 'all') {
           // C3 (D6): only stamp the combined links+timeline watermark when BOTH
           // ran ('all'); a links-only run must not mark timeline fresh.
-          const r = await extractLinksFromDB(engine, dryRun, jsonMode, typeFilter, since, { includeFrontmatter, sourceIdFilter, stampWatermark: subcommand === 'all' });
+          const r = await extractLinksFromDB(engine, dryRun, jsonMode, typeFilter, since, { includeFrontmatter, frontmatterOnly, sourceIdFilter, stampWatermark: subcommand === 'all' });
           result.links_created = r.created;
           result.pages_processed = r.pages;
         }
@@ -1291,9 +1301,10 @@ async function extractLinksFromDB(
   jsonMode: boolean,
   typeFilter: PageType | undefined,
   since: string | undefined,
-  opts?: { includeFrontmatter?: boolean; sourceIdFilter?: string; stampWatermark?: boolean },
+  opts?: { includeFrontmatter?: boolean; frontmatterOnly?: boolean; sourceIdFilter?: string; stampWatermark?: boolean },
 ): Promise<{ created: number; pages: number; unresolved: UnresolvedFrontmatterRef[] }> {
   const includeFrontmatter = opts?.includeFrontmatter ?? false;
+  const frontmatterOnly = opts?.frontmatterOnly ?? false;
   const sourceIdFilter = opts?.sourceIdFilter;
   // C3 (D6): the links_extracted_at watermark covers links AND timeline, so a
   // links-ONLY run must NOT stamp it (that would hide timeline staleness for
@@ -1397,7 +1408,7 @@ async function extractLinksFromDB(
     // basename lookup; off by default for back-compat.
     const extracted = await extractPageLinks(
       slug, fullContent, page.frontmatter, page.type, resolver,
-      { skipFrontmatter: !includeFrontmatter || schemaPackState.skipFrontmatter, globalBasename, schemaPack: schemaPackState.schemaPack },
+      { skipFrontmatter: !includeFrontmatter || schemaPackState.skipFrontmatter, frontmatterOnly, globalBasename, schemaPack: schemaPackState.schemaPack },
     );
     unresolved.push(...extracted.unresolved);
 
