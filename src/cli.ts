@@ -363,7 +363,8 @@ async function main() {
   // Install an unref'd setTimeout hard-exit fallback BEFORE entering the
   // try/catch/finally so a hung disconnect cannot defeat the force-exit
   // contract. Daemons (`serve`) are excluded so they stay alive.
-  const DISCONNECT_HARD_DEADLINE_MS = 10_000;
+  const BACKGROUND_DRAIN_TIMEOUT_MS = 30_000;
+  const DISCONNECT_HARD_DEADLINE_MS = 45_000;
   let forceExitTimer: ReturnType<typeof setTimeout> | undefined;
   if (shouldForceExitAfterMain()) {
     forceExitTimer = setTimeout(() => {
@@ -405,16 +406,14 @@ async function main() {
     }
     process.exitCode = 1;
   } finally {
-    // v0.42.20.0 — drain ALL fire-and-forget sinks (facts, last-retrieved,
-    // search-cache, eval-capture) via the background-work registry BEFORE
-    // disconnect, so a PGLite db.close() can't race in-flight work into the
-    // re-pump busy-loop (#1762). facts drains first (order 0) so its abort-path
-    // DB logIngest gets the freshest live-engine window. 1s per-sink timeout:
-    // read paths with no pending work pay the ~0ms fast path; capture/import
-    // that DO enqueue pay up to 1s (+ facts shutdown grace) while in-flight
-    // Haiku finishes. The unref'd hard-deadline timer above is the backstop if
-    // disconnect or a lingering socket keeps Bun's loop alive.
-    await drainAllBackgroundWorkForCliExit({ timeoutMs: 1000 });
+    // v0.42 facts reliability: queue-mode facts extraction forwards the queue
+    // signal into the chat provider. A 1s CLI-exit drain made ordinary model
+    // latency look like an operator abort, producing facts:absorb
+    // `pipeline_error: [chat(...)] The operation was aborted.` rows while the
+    // inline extract_facts path worked. Keep the empty fast path (~0ms), but
+    // give real in-flight background work a model-call-sized window before the
+    // registry hard-aborts stragglers to protect PGLite disconnect (#1762).
+    await drainAllBackgroundWorkForCliExit({ timeoutMs: BACKGROUND_DRAIN_TIMEOUT_MS });
     await engine.disconnect();
     if (forceExitTimer) clearTimeout(forceExitTimer);
   }
@@ -1926,16 +1925,18 @@ async function handleCliOnly(command: string, args: string[]) {
     // #1471: this is also the fall-through OWNER-disconnect — the owner is torn
     // down LAST (after the drain), so module-singleton borrowers never outlive it.
     if (command !== 'serve') {
+      const BACKGROUND_DRAIN_TIMEOUT_MS = 30_000;
+      const DISCONNECT_HARD_DEADLINE_MS = 45_000;
       const forceExit = shouldForceExitAfterMain();
       let hardExitTimer: ReturnType<typeof setTimeout> | undefined;
       if (forceExit) {
         hardExitTimer = setTimeout(() => {
-          console.warn('[cli] engine.disconnect() did not return within 10000ms — force-exiting');
+          console.warn(`[cli] engine.disconnect() did not return within ${DISCONNECT_HARD_DEADLINE_MS}ms — force-exiting`);
           process.exit(process.exitCode ?? 0);
-        }, 10_000);
+        }, DISCONNECT_HARD_DEADLINE_MS);
         hardExitTimer.unref?.();
       }
-      await drainAllBackgroundWorkForCliExit();
+      await drainAllBackgroundWorkForCliExit({ timeoutMs: BACKGROUND_DRAIN_TIMEOUT_MS });
       await engine.disconnect();
       if (hardExitTimer) clearTimeout(hardExitTimer);
     }

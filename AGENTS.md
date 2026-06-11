@@ -101,6 +101,10 @@ writing or reviewing an operation, consult `src/core/operations.ts` for the cont
   [`./llms-full.txt`](./llms-full.txt) is the same map with core docs inlined for
   single-fetch ingestion.
 
+## Local wrapper discipline
+
+If an operator has pinned `gbrain` wrapper scripts to a carry worktree, do not run any command that overwrites those wrappers with a compiled or globally-installed binary (`bun link`, `bun install -g`, copying `dist/cli`, etc.) unless the operator explicitly asks for that install change. Verify `~/.local/bin/gbrain` and `~/.bun/bin/gbrain` remain shell wrappers before and after local carry work.
+
 ## Before shipping
 
 Easiest path: `bun run ci:local` runs the full CI gate inside Docker (gitleaks,
