@@ -27,7 +27,7 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { chat as gatewayChat, validateModelId, type ChatResult } from '../ai/gateway.ts';
 import { AIConfigError } from '../ai/errors.ts';
 import { normalizeModelId } from '../model-id.ts';
@@ -39,6 +39,7 @@ import { MinionQueue } from '../minions/queue.ts';
 import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.ts';
 import type { MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
 import { discoverTranscripts, type DiscoveredTranscript } from './transcript-discovery.ts';
+import { loadDreamFilingConfig, renderDreamSlugTemplate, type DreamFilingConfig } from './dream-filing.ts';
 import { serializeMarkdown, serializePageToMarkdown } from '../markdown.ts';
 import type { Page, PageType } from '../types.ts';
 import { validateSourceId } from '../utils.ts';
@@ -397,8 +398,8 @@ export async function runPhaseSynthesize(
 
     // Fan-out: submit one subagent per worth-processing transcript (or one
     // per chunk for transcripts that exceed the model's per-prompt budget).
-    const allowedSlugPrefixes = await loadAllowedSlugPrefixes();
-    if (allowedSlugPrefixes.length === 0) {
+    const filing = loadDreamFilingConfig();
+    if (filing.allowedSlugPrefixes.length === 0) {
       return failed(makeError('InternalError', 'NO_ALLOWLIST',
         'skills/_brain-filing-rules.json missing dream_synthesize_paths.globs'));
     }
@@ -460,10 +461,10 @@ export async function runPhaseSynthesize(
           : config.model;
       for (let i = 0; i < chunks.length; i++) {
         const childData: SubagentHandlerData = {
-          prompt: buildSynthesisPrompt(t, chunks[i], i, chunks.length, priorContradictionsBlock),
+          prompt: buildSynthesisPrompt(t, chunks[i], i, chunks.length, priorContradictionsBlock, filing),
           model: subagentModel,
           max_turns: 30,
-          allowed_slug_prefixes: allowedSlugPrefixes,
+          allowed_slug_prefixes: filing.allowedSlugPrefixes,
         };
         // Idempotency key parity:
         //   - single-chunk → legacy `dream:synth:<filePath>:<hash16>` (byte-
@@ -673,29 +674,6 @@ async function checkCooldown(
   const expiresMs = lastMs + hours * 60 * 60 * 1000;
   if (Date.now() >= expiresMs) return { active: false };
   return { active: true, expires_at: new Date(expiresMs).toISOString() };
-}
-
-// ── Allow-list source of truth ───────────────────────────────────────
-
-async function loadAllowedSlugPrefixes(): Promise<string[]> {
-  // Search a few known locations relative to the binary / repo. The first
-  // hit wins; if none found, return [].
-  const candidates = [
-    join(process.cwd(), 'skills', '_brain-filing-rules.json'),
-    join(__dirname, '..', '..', '..', 'skills', '_brain-filing-rules.json'),
-  ];
-  for (const path of candidates) {
-    if (!existsSync(path)) continue;
-    try {
-      const raw = readFileSync(path, 'utf8');
-      const parsed = JSON.parse(raw) as { dream_synthesize_paths?: { globs?: unknown } };
-      const globs = parsed?.dream_synthesize_paths?.globs;
-      if (Array.isArray(globs) && globs.every(g => typeof g === 'string')) {
-        return globs as string[];
-      }
-    } catch { /* try next */ }
-  }
-  return [];
 }
 
 // ── Significance judge (gateway-routed; provider-agnostic) ──────────────
@@ -933,12 +911,13 @@ async function loadPriorContradictionsBlock(engine: BrainEngine): Promise<string
   }
 }
 
-function buildSynthesisPrompt(
+export function buildSynthesisPrompt(
   t: DiscoveredTranscript,
   chunkText: string,
   chunkIdx: number,
   chunkTotal: number,
   priorContradictionsBlock = '',
+  filing: DreamFilingConfig = loadDreamFilingConfig(),
 ): string {
   const dateHint = t.inferredDate ?? today();
   const baseSlugSegment = sanitizeForSlug(t.basename) || `session-${dateHint}`;
@@ -952,11 +931,25 @@ function buildSynthesisPrompt(
   const transcriptHeader = isChunked
     ? `${t.filePath} (chunk ${chunkIdx + 1}/${chunkTotal})`
     : t.filePath;
+  const reflectionSlug = renderDreamSlugTemplate(filing.routes.reflection, {
+    date: dateHint,
+    topic: '<topic-slug>',
+    hash: hashSuffix,
+  });
+  const originalSlug = renderDreamSlugTemplate(filing.routes.original, {
+    date: dateHint,
+    topic: '<idea-slug>',
+    hash: hashSuffix,
+  });
+  const routeUsesHash = filing.routes.reflection.includes('{hash}') || filing.routes.original.includes('{hash}');
+  const hashGuidance = routeUsesHash
+    ? `- Transcript hash suffix (USE THIS in slugs): ${hashSuffix}`
+    : `- Transcript hash suffix (audit/idempotency only; configured slugs omit it): ${hashSuffix}`;
   return `You are synthesizing a conversation transcript into the user's personal knowledge brain.
 
 CONTEXT
 - Today's date: ${dateHint}
-- Transcript hash suffix (USE THIS in slugs): ${hashSuffix}
+${hashGuidance}
 - Source file basename: ${baseSlugSegment}${chunkBanner}${priorContradictionsBlock}
 
 OUTPUT POLICY (ALL of these are required)
@@ -967,10 +960,10 @@ OUTPUT POLICY (ALL of these are required)
 
 TASKS
 A. Reflections (self-knowledge, pattern recognition, emotional processing):
-   slug: \`wiki/personal/reflections/${dateHint}-<topic-slug>-${hashSuffix}\`
+   slug: \`${reflectionSlug}\`
 
 B. Originals (new ideas, frames, theses, mental models):
-   slug: \`wiki/originals/ideas/${dateHint}-<idea-slug>-${hashSuffix}\`
+   slug: \`${originalSlug}\`
 
 C. People mentions: search first; if a page exists, do not put_page over it (the orchestrator handles people enrichment via timeline entries — your job is the reflection/original synthesis, NOT modifying existing person pages).
 

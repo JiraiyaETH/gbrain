@@ -18,7 +18,8 @@ import {
   isDreamOutput,
   DREAM_OUTPUT_MARKER_RE,
 } from '../src/core/cycle/transcript-discovery.ts';
-import { judgeSignificance, renderPageToMarkdown, type JudgeClient } from '../src/core/cycle/synthesize.ts';
+import { buildSynthesisPrompt, judgeSignificance, renderPageToMarkdown, type JudgeClient } from '../src/core/cycle/synthesize.ts';
+import type { DreamFilingConfig } from '../src/core/cycle/dream-filing.ts';
 
 let tmpDir: string;
 
@@ -333,6 +334,72 @@ describe('judgeSignificance', () => {
     const r = await judgeSignificance(client, makeTranscript());
     expect(r.worth_processing).toBe(false);
     expect(r.reasons[0]).toContain('unparseable');
+  });
+});
+
+describe('buildSynthesisPrompt — filing routes', () => {
+  const jarvisFiling: DreamFilingConfig = {
+    allowedSlugPrefixes: ['reflections/*', 'ideas/*', 'people/*', 'dream-cycles/*'],
+    routes: {
+      reflection: 'reflections/{date}-{topic}',
+      original: 'ideas/{date}-{topic}',
+      pattern: 'reflections/patterns/{topic}',
+      cycleSummary: 'dream-cycles/{date}',
+    },
+    reflectionQueryPrefixes: ['reflections/'],
+    patternQueryPrefixes: ['reflections/patterns/'],
+  };
+
+  function makePromptTranscript(): import('../src/core/cycle/transcript-discovery.ts').DiscoveredTranscript {
+    return {
+      filePath: '/tmp/2026-06-15-richmond.txt',
+      contentHash: 'abc123def456',
+      content: 'User: important reflection',
+      basename: '2026-06-15-richmond',
+      inferredDate: '2026-06-15',
+    };
+  }
+
+  test('uses Jarvis-native date-topic routes without hash when configured', () => {
+    const prompt = buildSynthesisPrompt(
+      makePromptTranscript(),
+      'User: important reflection',
+      0,
+      1,
+      '',
+      jarvisFiling,
+    );
+
+    expect(prompt).toContain('slug: `reflections/2026-06-15-<topic-slug>`');
+    expect(prompt).toContain('slug: `ideas/2026-06-15-<idea-slug>`');
+    expect(prompt).not.toContain('wiki/personal/reflections/');
+    expect(prompt).not.toContain('wiki/originals/ideas/');
+    expect(prompt).not.toContain('slug: `reflections/2026-06-15-<topic-slug>-abc123`');
+  });
+
+  test('legacy filing config keeps upstream wiki route examples', () => {
+    const legacyFiling: DreamFilingConfig = {
+      allowedSlugPrefixes: ['wiki/personal/reflections/*', 'wiki/originals/*', 'wiki/personal/patterns/*'],
+      routes: {
+        reflection: 'wiki/personal/reflections/{date}-{topic}-{hash}',
+        original: 'wiki/originals/ideas/{date}-{topic}-{hash}',
+        pattern: 'wiki/personal/patterns/{topic}',
+        cycleSummary: 'wiki/personal/dream-cycles/{date}',
+      },
+      reflectionQueryPrefixes: ['wiki/personal/reflections/'],
+      patternQueryPrefixes: ['wiki/personal/patterns/'],
+    };
+    const prompt = buildSynthesisPrompt(
+      makePromptTranscript(),
+      'User: important reflection',
+      0,
+      1,
+      '',
+      legacyFiling,
+    );
+
+    expect(prompt).toContain('slug: `wiki/personal/reflections/2026-06-15-<topic-slug>-abc123`');
+    expect(prompt).toContain('slug: `wiki/originals/ideas/2026-06-15-<idea-slug>-abc123`');
   });
 });
 
