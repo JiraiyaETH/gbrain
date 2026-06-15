@@ -85,6 +85,15 @@ describe('matchesSlugAllowList — glob semantics', () => {
     expect(matchesSlugAllowList('wiki/people/alice', list)).toBe(false);
   });
 
+  test('Jarvis dream allow-list accepts semantic shelves and rejects retired wiki paths', () => {
+    const list = ['reflections/*', 'ideas/*', 'people/*', 'dream-cycles/*'];
+    expect(matchesSlugAllowList('reflections/2026-06-15-richmond-dream-repair', list)).toBe(true);
+    expect(matchesSlugAllowList('ideas/2026-06-15-filing-rules-as-routes', list)).toBe(true);
+    expect(matchesSlugAllowList('reflections/patterns/rescuer-pattern', list)).toBe(true);
+    expect(matchesSlugAllowList('wiki/personal/reflections/2026-06-15-richmond-dream-repair', list)).toBe(false);
+    expect(matchesSlugAllowList('wiki/personal/patterns/rescuer-pattern', list)).toBe(false);
+  });
+
   test('empty list rejects everything', () => {
     expect(matchesSlugAllowList('wiki/anything', [])).toBe(false);
   });
