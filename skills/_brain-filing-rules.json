@@ -160,6 +160,14 @@
       "wiki/personal/patterns/*",
       "wiki/people/*",
       "dream-cycle-summaries/*"
-    ]
+    ],
+    "routes": {
+      "reflection": "wiki/personal/reflections/{date}-{topic}-{hash}",
+      "original": "wiki/originals/ideas/{date}-{topic}-{hash}",
+      "pattern": "wiki/personal/patterns/{topic}",
+      "cycleSummary": "dream-cycle-summaries/{date}"
+    },
+    "reflection_query_prefixes": ["wiki/personal/reflections/"],
+    "pattern_query_prefixes": ["wiki/personal/patterns/"]
   }
 }
