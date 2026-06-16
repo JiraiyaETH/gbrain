@@ -397,7 +397,10 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
       // process.env clone; autopilot doesn't gate shell jobs the way the
       // standalone supervisor does (autopilot is the operator-trust path).
       env: { ...process.env },
-      maxCrashes: 5,
+      // 2026-06-16: env-configurable so a flaky link (frequent brief DNS/conn
+      // drops) can't permanently give up after a short burst of fast crashes.
+      // Default 5 preserved; the daemon launcher sets it generous for this host.
+      maxCrashes: Math.max(1, Number(process.env.GBRAIN_AUTOPILOT_MAX_WORKER_CRASHES) || 5),
       isStopping: () => stopping,
       onMaxCrashesExceeded: (count, max) => {
         console.error(`[autopilot] ${count}/${max} consecutive worker crashes, giving up.`);

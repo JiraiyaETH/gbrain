@@ -41,6 +41,22 @@ const CONN_PATTERNS = [
   /too many clients already/i,
   /max.*clients?.*in session mode/i,
   /remaining connection slots are reserved/i,
+  // 2026-06-16: transient DNS + network-layer failures. On a flaky link
+  // (new ISP / WiFi micro-drops) a 1-2s outage makes getaddrinfo throw
+  // ENOTFOUND / EAI_AGAIN mid-connect, and TCP setup throws ETIMEDOUT /
+  // ECONNREFUSED / ENETUNREACH / EHOSTUNREACH. The host resolves fine seconds
+  // later, so these are transient — connectWithRetry should ride them out via
+  // its existing backoff instead of letting the error crash the worker (which
+  // then trips the supervisor's give-up). The comment below already anticipated
+  // "DNS failover"; this makes it real.
+  /ENOTFOUND/i,
+  /EAI_AGAIN/i,
+  /getaddrinfo/i,
+  /ETIMEDOUT/i,
+  /ECONNREFUSED/i,
+  /ENETUNREACH/i,
+  /EHOSTUNREACH/i,
+  /network is (?:unreachable|down)/i,
 ];
 
 interface PgError {
