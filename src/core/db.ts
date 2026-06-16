@@ -325,9 +325,19 @@ export async function withTransaction<T>(fn: (tx: ReturnType<typeof postgres>) =
 const RETRYABLE_DB_CONNECT_PATTERNS = [
   /password authentication failed/i,
   /connection refused/i,
+  /ECONNREFUSED/i,
   /the database system is starting up/i,
   /Connection terminated unexpectedly/i,
   /ECONNRESET/i,
+  // 2026-06-16: startup connect must survive flaky-ISP DNS/network blips
+  // the same way the running job loop does (see retry-matcher.ts).
+  /ENOTFOUND/i,
+  /EAI_AGAIN/i,
+  /getaddrinfo/i,
+  /ETIMEDOUT/i,
+  /EHOSTUNREACH/i,
+  /ENETUNREACH/i,
+  /network is (?:unreachable|down)/i,
 ];
 
 export function isRetryableDbConnectError(err: unknown): boolean {
@@ -343,13 +353,24 @@ export interface ConnectWithRetryOpts {
   log?: (line: string) => void;
 }
 
+const DEFAULT_CONNECT_ATTEMPTS = 10;
+
+function resolveConnectAttempts(): number {
+  const raw = process.env.GBRAIN_CONNECT_ATTEMPTS;
+  if (!raw) return DEFAULT_CONNECT_ATTEMPTS;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return DEFAULT_CONNECT_ATTEMPTS;
+  const parsed = Number.parseInt(trimmed, 10);
+  return parsed > 0 ? parsed : DEFAULT_CONNECT_ATTEMPTS;
+}
+
 export async function connectWithRetry(
   engine: BrainEngine,
   config: EngineConfig & { poolSize?: number },
   opts: ConnectWithRetryOpts = {},
 ): Promise<void> {
   const noRetry = opts.noRetry ?? (process.env.GBRAIN_NO_RETRY_CONNECT === '1');
-  const attempts = noRetry ? 1 : (opts.attempts ?? 3);
+  const attempts = noRetry ? 1 : (opts.attempts ?? resolveConnectAttempts());
   const baseDelayMs = opts.baseDelayMs ?? 1000;
   const log = opts.log ?? ((line) => console.warn(line));
 

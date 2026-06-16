@@ -6,6 +6,7 @@ import { MinionWorker } from '../src/core/minions/worker.ts';
 import { calculateBackoff } from '../src/core/minions/backoff.ts';
 import { UnrecoverableError } from '../src/core/minions/types.ts';
 import type { MinionJob } from '../src/core/minions/types.ts';
+import { withEnv } from './helpers/with-env.ts';
 
 let engine: PGLiteEngine;
 let queue: MinionQueue;
@@ -2175,6 +2176,12 @@ describe('connectWithRetry / isRetryableDbConnectError', () => {
     expect(isRetryableDbConnectError(new Error('the database system is starting up'))).toBe(true);
     expect(isRetryableDbConnectError(new Error('Connection terminated unexpectedly'))).toBe(true);
     expect(isRetryableDbConnectError(new Error('something happened: ECONNRESET'))).toBe(true);
+    expect(isRetryableDbConnectError(new Error('getaddrinfo ENOTFOUND db.example.invalid'))).toBe(true);
+    expect(isRetryableDbConnectError(new Error('getaddrinfo EAI_AGAIN db.example.invalid'))).toBe(true);
+    expect(isRetryableDbConnectError(new Error('connect ETIMEDOUT 203.0.113.10:5432'))).toBe(true);
+    expect(isRetryableDbConnectError(new Error('connect EHOSTUNREACH 203.0.113.10:5432'))).toBe(true);
+    expect(isRetryableDbConnectError(new Error('connect ENETUNREACH 203.0.113.10:5432'))).toBe(true);
+    expect(isRetryableDbConnectError(new Error('network is unreachable'))).toBe(true);
   });
 
   test('isRetryableDbConnectError rejects permanent errors', async () => {
@@ -2198,7 +2205,7 @@ describe('connectWithRetry / isRetryableDbConnectError', () => {
     expect(attempts).toBe(2);
   });
 
-  test('connectWithRetry: 3 transient rejects → throws', async () => {
+  test('connectWithRetry: default transient attempts exhaust after 10 tries', async () => {
     const { connectWithRetry } = await import('../src/core/db.ts');
     let attempts = 0;
     const fakeEngine = {
@@ -2209,9 +2216,27 @@ describe('connectWithRetry / isRetryableDbConnectError', () => {
     } as unknown as Parameters<typeof connectWithRetry>[0];
 
     await expect(
-      connectWithRetry(fakeEngine, { database_url: 'postgres://x' }, { baseDelayMs: 1, log: () => {} })
+      connectWithRetry(fakeEngine, { database_url: 'postgres://x' }, { baseDelayMs: 0, log: () => {} })
     ).rejects.toThrow('connection refused');
-    expect(attempts).toBe(3);
+    expect(attempts).toBe(10);
+  });
+
+  test('connectWithRetry: GBRAIN_CONNECT_ATTEMPTS controls transient attempts', async () => {
+    const { connectWithRetry } = await import('../src/core/db.ts');
+    await withEnv({ GBRAIN_CONNECT_ATTEMPTS: '4' }, async () => {
+      let attempts = 0;
+      const fakeEngine = {
+        connect: async () => {
+          attempts++;
+          throw new Error('getaddrinfo ENOTFOUND db.example.invalid');
+        },
+      } as unknown as Parameters<typeof connectWithRetry>[0];
+
+      await expect(
+        connectWithRetry(fakeEngine, { database_url: 'postgres://x' }, { baseDelayMs: 0, log: () => {} })
+      ).rejects.toThrow('ENOTFOUND');
+      expect(attempts).toBe(4);
+    });
   });
 
   test('connectWithRetry: permanent error does NOT retry', async () => {
@@ -2240,9 +2265,11 @@ describe('connectWithRetry / isRetryableDbConnectError', () => {
       },
     } as unknown as Parameters<typeof connectWithRetry>[0];
 
-    await expect(
-      connectWithRetry(fakeEngine, { database_url: 'postgres://x' }, { noRetry: true, log: () => {} })
-    ).rejects.toThrow();
+    await withEnv({ GBRAIN_CONNECT_ATTEMPTS: '5' }, async () => {
+      await expect(
+        connectWithRetry(fakeEngine, { database_url: 'postgres://x' }, { noRetry: true, log: () => {} })
+      ).rejects.toThrow();
+    });
     expect(attempts).toBe(1);
   });
 });
