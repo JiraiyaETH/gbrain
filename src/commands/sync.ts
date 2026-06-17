@@ -3818,55 +3818,33 @@ export async function buildSyncStatusReport(
   // real error is better than a misleading "0 chunks" report (Q2).
   let countRows: CountRow[] = [];
   if (sourceIds.length > 0) {
-    if (engine.kind === 'postgres') {
-      const estimateRows = await engine.executeRaw<{ relname: string; estimate: string | number }>(
-        `SELECT relname, GREATEST(reltuples, 0)::bigint AS estimate
-           FROM pg_class
-          WHERE relname IN ('pages', 'content_chunks', 'idx_chunks_embedding_null')`,
-      );
-      const estimates = new Map<string, number>();
-      for (const row of estimateRows) {
-        estimates.set(row.relname, Math.max(0, Math.round(Number(row.estimate ?? 0))));
-      }
-      const chunksTotal = estimates.get('content_chunks') ?? 0;
-      const chunksUnembedded = resolved.name === 'embedding'
-        ? Math.min(estimates.get('idx_chunks_embedding_null') ?? 0, chunksTotal)
-        : 0;
-      countRows = [{
-        source_id: sourceIds.includes('default') ? 'default' : sourceIds[0],
-        pages: estimates.get('pages') ?? 0,
-        chunks_total: chunksTotal,
-        chunks_unembedded: chunksUnembedded,
-      }];
-    } else {
-      countRows = await engine.executeRaw<CountRow>(
-        `WITH s AS (
-           SELECT unnest($1::text[]) AS source_id
-         )
-         SELECT
-           s.source_id,
-           COALESCE(p.pages, 0) AS pages,
-           COALESCE(c.chunks_total, 0) AS chunks_total,
-           COALESCE(c.chunks_unembedded, 0) AS chunks_unembedded
-         FROM s
-         LEFT JOIN (
-           SELECT source_id, COUNT(*) AS pages
-           FROM pages
-           WHERE deleted_at IS NULL
-           GROUP BY source_id
-         ) p ON p.source_id = s.source_id
-         LEFT JOIN (
-           SELECT pg.source_id,
-                  COUNT(*) AS chunks_total,
-                  COUNT(*) FILTER (WHERE cc.${embeddingColIdent} IS NULL) AS chunks_unembedded
-           FROM content_chunks cc
-           JOIN pages pg ON pg.id = cc.page_id
-           WHERE pg.deleted_at IS NULL
-           GROUP BY pg.source_id
-         ) c ON c.source_id = s.source_id`,
-        [sourceIds],
-      );
-    }
+    countRows = await engine.executeRaw<CountRow>(
+      `WITH s AS (
+         SELECT unnest($1::text[]) AS source_id
+       )
+       SELECT
+         s.source_id,
+         COALESCE(p.pages, 0) AS pages,
+         COALESCE(c.chunks_total, 0) AS chunks_total,
+         COALESCE(c.chunks_unembedded, 0) AS chunks_unembedded
+       FROM s
+       LEFT JOIN (
+         SELECT source_id, COUNT(*) AS pages
+         FROM pages
+         WHERE deleted_at IS NULL
+         GROUP BY source_id
+       ) p ON p.source_id = s.source_id
+       LEFT JOIN (
+         SELECT pg.source_id,
+                COUNT(*) AS chunks_total,
+                COUNT(*) FILTER (WHERE cc.${embeddingColIdent} IS NULL) AS chunks_unembedded
+         FROM content_chunks cc
+         JOIN pages pg ON pg.id = cc.page_id
+         WHERE pg.deleted_at IS NULL
+         GROUP BY pg.source_id
+       ) c ON c.source_id = s.source_id`,
+      [sourceIds],
+    );
   }
   const countMap = new Map<string, { pages: number; chunks_total: number; chunks_unembedded: number }>();
   for (const r of countRows) {

@@ -4772,8 +4772,12 @@ export class PostgresEngine implements BrainEngine {
       missing_embeddings: missingEmbeddings,
       brain_score: brainScore,
       dead_links: deadLinks,
-      link_coverage: 0,
-      timeline_coverage: 0,
+      // Cheap proxies from the same estimates the brain_score already uses, so
+      // the returned coverage fields stay consistent with the score and do not
+      // spuriously trip the `gbrain health` <0.5 penalty (cli.ts) on Postgres
+      // brains. Exact per-entity-page coverage is a focused-command concern.
+      link_coverage: linkDensity,
+      timeline_coverage: timelineCoverageWhole,
       most_connected: [],
       embed_coverage_score: embedCoverageScore,
       link_density_score: linkDensityScore,
