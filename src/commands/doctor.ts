@@ -1,6 +1,7 @@
 import type { BrainEngine } from '../core/engine.ts';
 import { setCliExitVerdict } from '../core/cli-force-exit.ts';
 import * as db from '../core/db.ts';
+import { parseSourceConfig } from '../core/sources-load.ts';
 import { LATEST_VERSION, getIdleBlockers } from '../core/migrate.ts';
 import { checkResolvable } from '../core/check-resolvable.ts';
 import { autoFixDryViolations, type AutoFixReport, type FixOutcome } from '../core/dry-fix.ts';
@@ -4920,8 +4921,8 @@ export async function buildChecks(
   // bail silently here when engine is null since the check needs DB access.
   if (engine !== null) try {
     const { findMisroutedPages } = await import('../core/multi-source-drift.ts');
-    const sources = await engine!.executeRaw<{ id: string; local_path: string | null }>(
-      `SELECT id, local_path FROM sources`,
+    const sources = await engine!.executeRaw<{ id: string; local_path: string | null; config: unknown }>(
+      `SELECT id, local_path, config FROM sources`,
     );
     const nonDefaultWithPath = sources.filter((s) => {
       if (s.id === 'default' || !s.local_path) return false;
