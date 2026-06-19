@@ -70,6 +70,9 @@ const RESCUE_SLUG_PREFIXES = ['meetings/', 'personal/', 'daily/'] as const;
 const ELIGIBLE_TYPES: PageType[] = [
   // gbrain-base (legacy) types
   'note', 'meeting', 'slack', 'email', 'calendar-event', 'source', 'writing',
+  // Entity pages are eligible so terse page-local facts can bind to the
+  // page-as-entity fallback in the backstop pipeline.
+  'person', 'company', 'deal',
   // gbrain-base-v2 canonical types declared extractable in the pack
   // (concept deliberately omitted — see above)
   'media', 'tweet', 'atom', 'analysis',
@@ -86,6 +89,7 @@ export function isFactsBackstopEligible(
   if (parsed.frontmatter && parsed.frontmatter.dream_generated === true) {
     return { ok: false, reason: 'dream_generated' };
   }
+  if (parsed.frontmatter?.facts === false) return { ok: false, reason: 'facts_disabled' };
 
   const body = (parsed.compiled_truth ?? '').trim();
   if (body.length < MIN_BODY_CHARS) return { ok: false, reason: 'too_short' };

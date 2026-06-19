@@ -98,6 +98,16 @@ describe('isFactsBackstopEligible — guards', () => {
     expect(isFactsBackstopEligible(f.slug, f.parsed)).toEqual({ ok: true });
   });
 
+  test('facts:false frontmatter is rejected even for an otherwise eligible note', () => {
+    const f = fixture({
+      slug: 'wiki/junk/log-page',
+      type: 'note',
+      frontmatter: { facts: false },
+      body: LONG_BODY,
+    });
+    expect(isFactsBackstopEligible(f.slug, f.parsed)).toEqual({ ok: false, reason: 'facts_disabled' });
+  });
+
   test('body < 80 chars → too_short', () => {
     const f = fixture({ body: 'TODO: write meeting notes' });
     expect(isFactsBackstopEligible(f.slug, f.parsed)).toEqual({ ok: false, reason: 'too_short' });
@@ -122,7 +132,14 @@ describe('isFactsBackstopEligible — eligible-types coverage', () => {
     });
   }
 
-  for (const t of ['person', 'company', 'deal', 'concept', 'project', 'image', 'code'] as PageType[]) {
+  for (const t of ['person', 'company', 'deal'] as PageType[]) {
+    test(`entity page type=${t} on arbitrary slug → ok`, () => {
+      const f = fixture({ slug: 'wiki/whatever/x', type: t });
+      expect(isFactsBackstopEligible(f.slug, f.parsed)).toEqual({ ok: true });
+    });
+  }
+
+  for (const t of ['concept', 'project', 'image', 'code'] as PageType[]) {
     test(`type=${t} on non-rescued slug → rejected with kind:${t}`, () => {
       const f = fixture({ slug: 'wiki/whatever/x', type: t });
       const r = isFactsBackstopEligible(f.slug, f.parsed);
