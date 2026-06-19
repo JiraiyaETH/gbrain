@@ -107,6 +107,12 @@ const DEDUP_THRESHOLD = 0.95;
 /** k for findCandidateDuplicates — ceiling on candidates considered. */
 const DEDUP_CANDIDATE_LIMIT = 5;
 
+const ENTITY_PAGE_TYPES: ReadonlySet<PageType> = new Set(['person', 'company', 'deal']);
+
+function entityPageSlug(parsedPage: ParsedPageInput): string | null {
+  return ENTITY_PAGE_TYPES.has(parsedPage.type) ? parsedPage.slug : null;
+}
+
 /**
  * Once-per-process stderr warning memo. v0.32.2 uses this to surface
  * the thin-client / no-local_path fallback without spamming a warning
@@ -245,6 +251,7 @@ async function runPipeline(
     {
       turnText: parsedPage.compiled_truth,
       isDreamGenerated: false,  // eligibility check already rejected dream pages
+      pageEntitySlug: entityPageSlug(parsedPage),
     },
     ctx,
     abortSignal,
@@ -278,7 +285,7 @@ async function runPipeline(
  * fallback regardless of local_path.
  */
 async function runPipelineWithBody(
-  input: { turnText: string; isDreamGenerated: boolean },
+  input: { turnText: string; isDreamGenerated: boolean; pageEntitySlug?: string | null },
   ctx: FactsBackstopCtx,
   abortSignal?: AbortSignal,
 ): Promise<{ inserted: number; duplicate: number; superseded: number; fact_ids: number[] }> {
@@ -327,7 +334,7 @@ async function runPipelineWithBody(
 
     const resolvedSlug = f.entity_slug
       ? await resolveEntitySlug(ctx.engine, ctx.sourceId, f.entity_slug)
-      : null;
+      : input.pageEntitySlug ?? null;
 
     // Dedup against DB candidates (correct per Codex Q7: fence rows
     // have no embeddings; FS lock + sync invariant means DB == fence

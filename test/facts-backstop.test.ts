@@ -19,6 +19,7 @@ import {
   type ChatResult,
 } from '../src/core/ai/gateway.ts';
 import { __resetFactsQueueForTests } from '../src/core/facts/queue.ts';
+import { withEnv } from './helpers/with-env.ts';
 
 let engine: PGLiteEngine;
 
@@ -186,6 +187,109 @@ describe('runFactsBackstop — mode: inline', () => {
     }
   });
 
+  test('null entity on a person page falls back to the page entity slug', async () => {
+    const { mkdtempSync, rmSync, existsSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+
+    const brainDir = mkdtempSync(join(tmpdir(), 'backstop-page-entity-'));
+    const gbrainHome = mkdtempSync(join(tmpdir(), 'backstop-gbrain-home-'));
+    const sessionId = 'page-entity-session-' + Math.random().toString(36).slice(2, 9);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (engine as any).db.query(
+        `UPDATE sources SET local_path = $1 WHERE id = 'default'`,
+        [brainDir],
+      );
+
+      await withEnv({ GBRAIN_HOME: gbrainHome }, async () => {
+        chatStub([{ fact: 'Prefers async updates', kind: 'preference', notability: 'medium', entity: null }]);
+        const r = await runFactsBackstop(
+          {
+            slug: 'people/alice-example',
+            type: 'person',
+            compiled_truth: LONG_BODY,
+            frontmatter: {},
+          },
+          makeCtx({ mode: 'inline', sessionId }),
+        );
+
+        expect(r.mode).toBe('inline');
+        if (r.mode === 'inline') {
+          expect(r.inserted).toBe(1);
+          expect(r.fact_ids.length).toBe(1);
+          expect(existsSync(join(brainDir, 'people/alice-example.md'))).toBe(true);
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const rows = await (engine as any).db.query(
+            `SELECT entity_slug, source_markdown_slug, row_num, fact FROM facts WHERE id = $1`,
+            [r.fact_ids[0]],
+          );
+          expect(rows.rows[0].entity_slug).toBe('people/alice-example');
+          expect(rows.rows[0].source_markdown_slug).toBe('people/alice-example');
+          expect(rows.rows[0].row_num).toBeGreaterThan(0);
+          expect(rows.rows[0].fact).toBe('Prefers async updates');
+        }
+      });
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (engine as any).db.query(`UPDATE sources SET local_path = NULL WHERE id = 'default'`);
+      rmSync(brainDir, { recursive: true, force: true });
+      rmSync(gbrainHome, { recursive: true, force: true });
+    }
+  });
+
+  test('null entity on a non-entity note page stays unparented', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+
+    const brainDir = mkdtempSync(join(tmpdir(), 'backstop-note-unbound-'));
+    const gbrainHome = mkdtempSync(join(tmpdir(), 'backstop-gbrain-home-'));
+    const sessionId = 'note-unbound-session-' + Math.random().toString(36).slice(2, 9);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (engine as any).db.query(
+        `UPDATE sources SET local_path = $1 WHERE id = 'default'`,
+        [brainDir],
+      );
+
+      await withEnv({ GBRAIN_HOME: gbrainHome }, async () => {
+        chatStub([{ fact: 'Prefers async updates', kind: 'preference', notability: 'medium', entity: null }]);
+        const r = await runFactsBackstop(
+          {
+            slug: 'notes/alice-meeting',
+            type: 'note',
+            compiled_truth: LONG_BODY,
+            frontmatter: {},
+          },
+          makeCtx({ mode: 'inline', sessionId }),
+        );
+
+        expect(r.mode).toBe('inline');
+        if (r.mode === 'inline') {
+          expect(r.inserted).toBe(1);
+          expect(r.fact_ids.length).toBe(1);
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const rows = await (engine as any).db.query(
+            `SELECT entity_slug, source_markdown_slug, row_num, fact FROM facts WHERE id = $1`,
+            [r.fact_ids[0]],
+          );
+          expect(rows.rows[0].entity_slug).toBeNull();
+          expect(rows.rows[0].source_markdown_slug).toBeNull();
+          expect(rows.rows[0].row_num).toBeNull();
+          expect(rows.rows[0].fact).toBe('Prefers async updates');
+        }
+      });
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (engine as any).db.query(`UPDATE sources SET local_path = NULL WHERE id = 'default'`);
+      rmSync(brainDir, { recursive: true, force: true });
+      rmSync(gbrainHome, { recursive: true, force: true });
+    }
+  });
+
   test('aborted before LLM call → zero counts, no throw', async () => {
     chatStub([]);
     const ac = new AbortController();
@@ -270,6 +374,7 @@ describe('runFactsBackstop — stub guard routing (v0.34.5)', () => {
     const { join } = await import('node:path');
 
     const brainDir = mkdtempSync(join(tmpdir(), 'backstop-stub-guard-'));
+    const gbrainHome = mkdtempSync(join(tmpdir(), 'backstop-gbrain-home-'));
     try {
       // Point the default source at the tempdir so localPath is non-null.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -287,38 +392,41 @@ describe('runFactsBackstop — stub guard routing (v0.34.5)', () => {
       // The bare slug then trips the stub guard in writeFactsToFence,
       // which returns stubGuardBlocked: true, and backstop routes the
       // fact to engine.insertFact (DB-only).
-      chatStub([
-        { fact: 'said hello at the meeting', kind: 'event', notability: 'high', entity: 'noresolvable' },
-      ]);
+      await withEnv({ GBRAIN_HOME: gbrainHome }, async () => {
+        chatStub([
+          { fact: 'said hello at the meeting', kind: 'event', notability: 'high', entity: 'noresolvable' },
+        ]);
 
-      const r = await runFactsBackstop(meetingPage(), makeCtx({ mode: 'inline' }));
+        const r = await runFactsBackstop(meetingPage(), makeCtx({ mode: 'inline' }));
 
-      expect(r.mode).toBe('inline');
-      if (r.mode === 'inline') {
-        // The fact MUST be persisted via the DB-only fallback, not dropped.
-        expect(r.inserted).toBe(1);
-        expect(r.fact_ids.length).toBe(1);
+        expect(r.mode).toBe('inline');
+        if (r.mode === 'inline') {
+          // The fact MUST be persisted via the DB-only fallback, not dropped.
+          expect(r.inserted).toBe(1);
+          expect(r.fact_ids.length).toBe(1);
 
-        // No phantom file at the brain root (this is the whole point of the guard).
-        expect(existsSync(join(brainDir, 'noresolvable.md'))).toBe(false);
+          // No phantom file at the brain root (this is the whole point of the guard).
+          expect(existsSync(join(brainDir, 'noresolvable.md'))).toBe(false);
 
-        // The fact is in the DB with the bare entity_slug. Query directly to
-        // confirm — the routing is the contract under test.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rows = await (engine as any).db.query(
-          `SELECT entity_slug, fact, source_markdown_slug FROM facts WHERE id = $1`,
-          [r.fact_ids[0]],
-        );
-        expect(rows.rows[0].entity_slug).toBe('noresolvable');
-        expect(rows.rows[0].fact).toBe('said hello at the meeting');
-        // source_markdown_slug is the fence-tracking column; under DB-only
-        // fallback it stays null (no .md file backs the row).
-        expect(rows.rows[0].source_markdown_slug).toBeNull();
-      }
+          // The fact is in the DB with the bare entity_slug. Query directly to
+          // confirm — the routing is the contract under test.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const rows = await (engine as any).db.query(
+            `SELECT entity_slug, fact, source_markdown_slug FROM facts WHERE id = $1`,
+            [r.fact_ids[0]],
+          );
+          expect(rows.rows[0].entity_slug).toBe('noresolvable');
+          expect(rows.rows[0].fact).toBe('said hello at the meeting');
+          // source_markdown_slug is the fence-tracking column; under DB-only
+          // fallback it stays null (no .md file backs the row).
+          expect(rows.rows[0].source_markdown_slug).toBeNull();
+        }
+      });
     } finally {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (engine as any).db.query(`UPDATE sources SET local_path = NULL WHERE id = 'default'`);
       rmSync(brainDir, { recursive: true, force: true });
+      rmSync(gbrainHome, { recursive: true, force: true });
     }
   });
 });
