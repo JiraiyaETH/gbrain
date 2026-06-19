@@ -359,6 +359,42 @@ describe('doctor command', () => {
     expect(result.status).toBe('warn');
     expect(result.message).toContain('Could not check takes weight grid');
   });
+
+  test('unbound_facts warns above threshold with grouped examples', async () => {
+    const { PGLiteEngine } = await import('../src/core/pglite-engine.ts');
+    const { unboundFactsCheck } = await import('../src/commands/doctor.ts');
+    const engine = new PGLiteEngine();
+    await engine.connect({});
+    await engine.initSchema();
+    try {
+      for (let i = 0; i < 26; i++) {
+        await engine.executeRaw(
+          `INSERT INTO facts (source_id, fact, kind, source, source_session, entity_slug, row_num)
+           VALUES ('default', $1, 'fact', $2, $3, NULL, NULL)`,
+          [
+            `unbound fact ${i}`,
+            i < 20 ? 'mcp:extract_facts' : 'sync:import',
+            i < 20 ? 'session-a' : 'session-b',
+          ],
+        );
+      }
+      await engine.executeRaw(
+        `INSERT INTO facts (source_id, fact, kind, source, source_session, entity_slug, row_num, source_markdown_slug)
+         VALUES ('default', 'fenced fact ignored', 'fact', 'sync:import', 'session-c', NULL, 1, 'people/alice-example')`,
+      );
+
+      const result = await unboundFactsCheck(engine, 25);
+      expect(result.name).toBe('unbound_facts');
+      expect(result.status).toBe('warn');
+      expect(result.message).toContain('26 unbound legacy fact');
+      expect(result.message).toContain('mcp:extract_facts/session-a=20');
+      expect(result.message).toContain('sync:import/session-b=6');
+      expect(result.details?.total).toBe(26);
+      expect(Array.isArray(result.details?.examples)).toBe(true);
+    } finally {
+      await engine.disconnect();
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────

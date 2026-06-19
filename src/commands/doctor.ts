@@ -373,6 +373,97 @@ export async function takesWeightGridCheck(engine: BrainEngine): Promise<Check> 
   }
 }
 
+const UNBOUND_FACTS_WARN_THRESHOLD = 25;
+
+export async function unboundFactsCheck(
+  engine: BrainEngine,
+  threshold = UNBOUND_FACTS_WARN_THRESHOLD,
+): Promise<Check> {
+  const name = 'unbound_facts';
+  try {
+    const groups = await engine.executeRaw<{
+      source: string;
+      source_session: string | null;
+      n: string | number;
+      total: string | number;
+    }>(
+      `SELECT
+         source,
+         source_session,
+         COUNT(*)::text AS n,
+         SUM(COUNT(*)) OVER ()::text AS total
+       FROM facts
+       WHERE entity_slug IS NULL
+         AND row_num IS NULL
+       GROUP BY source, source_session
+       ORDER BY COUNT(*) DESC, MAX(created_at) DESC
+       LIMIT 5`,
+    );
+
+    if (groups.length === 0) {
+      return { name, status: 'ok', message: 'No unbound legacy facts' };
+    }
+
+    const total = Number(groups[0]?.total ?? 0);
+    const examples = await engine.executeRaw<{
+      source: string;
+      source_session: string | null;
+      fact: string;
+      created_at: string | Date;
+    }>(
+      `SELECT source, source_session, fact, created_at
+       FROM facts
+       WHERE entity_slug IS NULL
+         AND row_num IS NULL
+       ORDER BY created_at DESC
+       LIMIT 3`,
+    );
+
+    const groupSummary = groups
+      .map((r) => {
+        const session = r.source_session ?? '<none>';
+        return `${r.source}/${session}=${Number(r.n)}`;
+      })
+      .join(', ');
+    const sampleSummary = examples
+      .map((r) => {
+        const fact = String(r.fact).replace(/\s+/g, ' ').slice(0, 80);
+        return `${r.source}/${r.source_session ?? '<none>'}: ${fact}`;
+      })
+      .join(' | ');
+
+    return {
+      name,
+      status: total > threshold ? 'warn' : 'ok',
+      message: total > threshold
+        ? `${total} unbound legacy fact(s) without entity_slug or row_num (threshold ${threshold}). Top groups: ${groupSummary}. Recent examples: ${sampleSummary}`
+        : `${total} unbound legacy fact(s) below threshold ${threshold}. Top groups: ${groupSummary}.`,
+      details: {
+        total,
+        threshold,
+        groups: groups.map((r) => ({
+          source: r.source,
+          source_session: r.source_session,
+          count: Number(r.n),
+        })),
+        examples: examples.map((r) => ({
+          source: r.source,
+          source_session: r.source_session,
+          fact: r.fact,
+          created_at: r.created_at,
+        })),
+      },
+    };
+  } catch (e) {
+    const code = (e as { code?: string } | null)?.code;
+    if (code === '42P01' || code === '42703') {
+      return { name, status: 'ok', message: 'Skipped (facts fence columns unavailable — run `gbrain apply-migrations --yes`)' };
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    return { name, status: 'warn', message: `Could not check unbound facts: ${msg}` };
+  }
+}
+
 /**
  * Child-table orphan detection (closes #1063).
  *
@@ -6700,6 +6791,12 @@ export async function buildChecks(
       });
     }
   }
+
+  // 11a-bis-2b. Unbound legacy facts audit. These rows are DB-only residue:
+  // no entity_slug means they cannot bind to an entity page, and row_num
+  // NULL means they do not round-trip through a markdown facts fence.
+  progress.heartbeat('unbound_facts');
+  checks.push(await unboundFactsCheck(engine));
 
   // 11a-2. effective_date_health (v0.29.1).
   //
