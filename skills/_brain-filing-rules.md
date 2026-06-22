@@ -12,16 +12,79 @@ not the source, not the skill that's running.
 3. Cross-link from related directories
 4. When in doubt: what would you search for to find this page again?
 
+## Cron Brain-Report Contract (MANDATORY for any scheduled/cron job that writes a Brain page)
+
+Any cron job — Hermes `cronjob` (jobs.json), gbrain `cron-scheduler`, native CronCreate/schedule, or a `no_agent` script — that writes a page into the Brain (anything under `/Users/jarvis/brain`, especially `reports/`) MUST guarantee the page is well-formed BEFORE it lands. No exceptions, including quiet-on-green jobs whose report write is side-channel only. A page with no opening `---` / bad YAML wedges the autopilot commit phase AND fact extraction (this exact failure happened 2026-06-18).
+
+1. WRITE PATH — prefer `gbrain report <category> --dir /Users/jarvis/brain` (emits valid frontmatter AND imports to the DB), or the `put_page` MCP tool. NEVER hand-append raw markdown into `reports/` via echo/cat/file-write without a frontmatter block.
+
+2. REQUIRED FRONTMATTER on every Brain report page — open with `---` on line 1, close with `---` before the first heading:
+
+       ---
+       title: <descriptive, <60 chars>
+       type: report          # the reports/ shelf
+       category: <job-name / stable category>
+       date: <YYYY-MM-DD>
+       time: <HH:MM TZ>
+       ---
+
+   Single-quote any value containing `: " ' # [ ] { }`; no null bytes; no `slug` field unless it matches the path.
+
+3. SELF-VERIFY AT THE SOURCE (the nip-it-at-the-bud step) — before reporting success, run `gbrain frontmatter validate <written-file> --json` (exit 0 = clean; exit 1 = fix and re-validate, never report done on a dirty page). For `no_agent` scripts this validate call MUST be baked into the script after the write and treated as a hard failure. The brain-repo pre-commit hook (`gbrain frontmatter install-hook`) is the catch-all backstop. When a generator's defect surfaces on one file, validate the WHOLE containing folder and fix every confirmed sibling in one pass — dated cron/report generators often emit several pages sharing the same `MISSING_OPEN`/YAML defect — then re-run folder-level validation. Minimal-frontmatter auto-fix (`title`, `type: report`, `category`, `date`, `time`, modeled on adjacent known-good files) is acceptable for clearly-generated report output once the operator approves; NEVER silently wrap an unfinished human-authored draft in `---`.
+
+4. ROUTING — a cron prompt that writes Brain pages MUST follow `skills/reports/SKILL.md` + `skills/frontmatter-guard/SKILL.md`. Do not inline a malformed template.
+
+## Canonical Top-Level Shelves (this Brain: /Users/jarvis/brain, source `default`)
+
+Use these shelves only. Each is a first-class filing target when it is the primary subject, not an overflow bucket:
+
+- `people/` — humans only.
+- `companies/` — companies, protocols, products, vendors, clients, prospects, funds, organizations.
+- `projects/` — durable workstreams, initiatives, implementation plans.
+- `meetings/` — dated calls, meeting records, transcript-derived meeting pages.
+- `sources/` — raw/provider/evidence packets: transcripts, contracts, Telegram/X/web captures, imports.
+- `concepts/` — reusable ideas, frameworks, mental models.
+- `ideas/` — rough seeds, theses, possibilities not yet hardened.
+- `reflections/` — user-originated self-knowledge and decision-pattern notes.
+- `dream-cycles/` — Dream maintenance receipts/indexes, not live scheduler state.
+- `capabilities/` — system/agent/tool capability cards with boundaries, owner, and live-truth pointers.
+- `lessons/` — durable operational lessons that should change future behavior.
+- `decisions/` — durable decision records: what was decided, why, evidence, owner, and revisit trigger.
+- `reference/` — stable maps, registries, role maps, proof indexes, resolver-like indexes.
+- `reports/` — cron/job output artifacts and operational receipts. Full backend detail goes here; Telegram/operator messages remain separate styled summaries.
+- `analysis/` — synthesized market, competitive, commercial, technical, and research intelligence. Not raw source dumps.
+- `media/` — processed content objects and synthesized reading/listening/watching artifacts.
+- `writing/` — Jiraiya/Tailored-authored drafts and posts.
+- `food/` and `workout/` — health/coaching operating data, separated from business retrieval.
+- `inbox/` — triage only. Not durable truth; resolve and refile before import.
+
+Relationship labels (client, prospect, vendor, TAP member, creator, account owner) are
+metadata/links/statuses on `companies/`, `people/`, and `projects/` pages — never shelves.
+
+## Retired Shelves — DO NOT CREATE
+
+`clients/`, `agents/`, `domains/`, `ops/`, `memory/`, `personal/`, `deals/`, `daily/`,
+`civic/`, `guides/`, `tech/`, `finance/`, `research/`, `originals/`, `voice-notes/`,
+`conversations/`, `openclaw/`, `wiki/`, `tweets/`, `articles/`, and brand roots
+(`tailored/`, `bedsy/`, `jarvis/`). Route by primary subject instead: client/prospect
+state → `companies/` metadata; agent/fleet maps → `reference/` or `capabilities/`;
+domain findings → `analysis/`/`concepts/`; live ops truth stays OUTSIDE the Brain;
+personal content → `reflections/`/`food/`/`workout/`/`people/`; chat/voice raw captures
+→ `sources/`; research output → `analysis/`; user-originated theses → `ideas/` or
+`reflections/`. Corpus governance and the pre-import gate live in
+`/Users/jarvis/brain/RESOLVER.md`.
+
 ## Common Misfiling Patterns -- DO NOT DO THESE
 
 | Wrong | Right | Why |
 |-------|-------|-----|
 | Analysis of a topic -> `sources/` | -> appropriate subject directory | sources/ is for raw data only |
+| Cron/job backend output -> Telegram body | -> full artifact in `reports/{category}/YYYY-MM-DD-HHMM.md`; styled digest stays separate | Jiraiya never receives raw dumps; report and message are different documents |
 | Article about a person -> `sources/` | -> `people/` | Primary subject is a person |
 | Meeting-derived company info -> `meetings/` only | -> ALSO update `companies/` | Entity propagation is mandatory |
 | Research about a company -> `sources/` | -> `companies/` | Primary subject is a company |
 | Reusable framework/thesis -> `sources/` | -> `concepts/` | It's a mental model |
-| Tweet thread about policy -> `media/` | -> `civic/` or `concepts/` | media/ is for content ops |
+| Tweet thread about a topic -> `media/` | -> `concepts/` or `analysis/` | media/ is for processed content objects, not topical knowledge |
 
 ## Sanctioned exception: synthesis output is sui generis
 
@@ -133,24 +196,31 @@ and large files don't bloat the git repo.
 
 ## Dream-cycle synthesize / patterns directories (v0.23)
 
-The `synthesize` and `patterns` phases of `gbrain dream` write to a
-**fixed allow-list** of paths sourced from `_brain-filing-rules.json`'s
-`dream_synthesize_paths.globs` array. Editing that JSON is the ONLY way
-to add a new directory the synthesis subagent may write to:
+The `synthesize` and `patterns` phases of `gbrain dream` write to a configured
+allow-list of paths sourced from `_brain-filing-rules.json`'s
+`dream_synthesize_paths.globs` array, and their prompt examples come from
+`dream_synthesize_paths.routes`. Editing that JSON is the ONLY way to add a new
+directory or route template the synthesis subagent may write to:
 
 | Output type | Slug pattern | What goes here |
 |-------------|--------------|----------------|
-| Reflection | `wiki/personal/reflections/YYYY-MM-DD-<topic>-<hash[:6]>` | Self-knowledge, emotional processing, pattern recognition. Verbatim quotes from the user, with analysis. |
-| Original idea | `wiki/originals/ideas/YYYY-MM-DD-<idea>-<hash[:6]>` | New frames, theses, mental models, "conceptive ideologist" outputs. Capture the user's exact phrasing — that's the artifact. |
-| People enrichment | `wiki/people/<existing-slug>` | Timeline entries appended to existing people pages from session mentions. Stub pages for new substantive people. |
-| Pattern | `wiki/personal/patterns/<theme>` | Cross-session theme detected across ≥3 reflections. Highest-leverage output: a pattern can span 25 years if reflections reference dated content. |
-| Cycle summary | `dream-cycle-summaries/YYYY-MM-DD` | Index of every page produced by one dream cycle. Auto-written deterministically by the orchestrator. |
+| Reflection | `reflections/YYYY-MM-DD-<topic>` | Self-knowledge, emotional processing, pattern recognition. Verbatim quotes from the user, with analysis. |
+| Original idea | `ideas/YYYY-MM-DD-<idea>` | New frames, theses, mental models. Capture the user's exact phrasing — that's the artifact. |
+| People enrichment | `people/<existing-slug>` | Timeline entries appended to existing people pages from session mentions. Stub pages for new substantive people. |
+| Pattern | `reflections/patterns/<theme>` | Cross-session theme detected across ≥3 reflections. Decision-pattern notes live in `reflections/` in this Brain. |
+| Cycle summary | `dream-cycle-summaries/YYYY-MM-DD` | Index of every page produced by one dream cycle. Auto-written deterministically by the orchestrator. (Legacy summaries through 2026-06-11 live in `dream-cycles/`; the current shelf — matching the engine at `synthesize.ts` — is `dream-cycle-summaries/`.) |
+
+`{hash}` is supported by the engine for upstream/backward-compatible route
+templates, but Jarvis's active routes intentionally omit it for human-readable
+slugs. Date + topic is the operator-facing identity; if the same topic is
+re-synthesized for the same day, `put_page` updates that page rather than
+creating a hash-noise duplicate.
 
 **Iron Law for synthesize output:**
 1. Quote the user verbatim. Do not paraphrase memorable phrasings.
 2. Cross-reference compulsively: every new page MUST link to existing brain content.
 3. Slug discipline: lowercase alphanumeric and hyphens only, slash-separated. NO underscores, NO file extensions.
-4. Edited transcripts produce NEW slugs (content-hash suffix changes) — never silently overwrite a prior reflection.
+4. Do not write outside `dream_synthesize_paths.globs`; retired `wiki/` paths are rejected in this Brain.
 
 ## Takes attribution (v0.32+)
 
