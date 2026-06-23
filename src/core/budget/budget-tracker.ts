@@ -35,6 +35,7 @@ import { ANTHROPIC_PRICING, type ModelPricing } from '../anthropic-pricing.ts';
 import { EMBEDDING_PRICING, lookupEmbeddingPrice } from '../embedding-pricing.ts';
 import { splitProviderModelId } from '../model-id.ts';
 import { isoWeekFilename, resolveAuditDir } from '../audit-week-file.ts';
+import { checkAutonomousDailyCap } from './autonomous-daily-cap.ts';
 
 export type BudgetKind = 'chat' | 'embed' | 'rerank';
 
@@ -71,6 +72,12 @@ export interface BudgetSnapshot {
 export interface BudgetTrackerOpts {
   /** USD cap. When undefined, cost gate disabled; pricing misses warn-once. */
   maxCostUsd?: number;
+  /** Optional hard UTC-day cap shared by autonomous gateway-routed work. Negative disables. */
+  dailyCapUsd?: number;
+  /** Optional audit directory for the daily cap scan (tests/custom installers). */
+  dailyCapAuditDir?: string;
+  /** Frozen clock for tests. */
+  now?: Date;
   /** Wall-clock cap in milliseconds. When undefined, runtime gate disabled. */
   maxRuntimeMs?: number;
   /** Phase/command label used in audit rows. */
@@ -136,6 +143,17 @@ const FREE_LOCAL_RERANK_PROVIDERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Hosted reranker pricing, USD per 1M input tokens. Rerank calls have no
+ * generated-output token stream in this gateway, so output is always zero.
+ *
+ * ZeroEntropy zerank-2 pricing verified 2026-06-20 from
+ * https://zeroentropy.dev/pricing/: $0.025 / MM Tokens.
+ */
+const HOSTED_RERANK_PRICING: Readonly<Record<string, ModelPricing>> = {
+  'zeroentropyai:zerank-2': { input: 0.025, output: 0 },
+};
+
+/**
  * Provider id prefixes whose embeddings run on local inference (electricity,
  * not API tokens) and so price at $0. Without this, a `--max-cost`-bounded
  * embed/reindex job configured for a local provider TX2 hard-fails because
@@ -165,10 +183,11 @@ const FREE_LOCAL_EMBED_PROVIDERS: ReadonlySet<string> = new Set([
  *   - Embed: lookupEmbeddingPrice handles the provider:model form; on a miss,
  *     local-inference providers (FREE_LOCAL_EMBED_PROVIDERS) price at $0 so
  *     `--max-cost` callers don't hard-fail.
- *   - Rerank: try ANTHROPIC_PRICING (legacy path for any Claude-priced
- *     rerank); else if the provider half is in FREE_LOCAL_RERANK_PROVIDERS,
- *     return zero pricing so `--max-cost` callers don't TX2 hard-fail on
- *     local inference recipes (electricity, not tokens); else unknown.
+ *   - Rerank: try hosted reranker pricing first, then ANTHROPIC_PRICING
+ *     (legacy path for any Claude-priced rerank); else if the provider half
+ *     is in FREE_LOCAL_RERANK_PROVIDERS, return zero pricing so `--max-cost`
+ *     callers don't TX2 hard-fail on local inference recipes (electricity,
+ *     not tokens); else unknown.
  */
 function lookupPricing(modelId: string, kind: BudgetKind): ModelPricing | null {
   if (kind === 'embed') {
@@ -182,6 +201,10 @@ function lookupPricing(modelId: string, kind: BudgetKind): ModelPricing | null {
     }
     return null;
   }
+  if (kind === 'rerank') {
+    const exactRerank = HOSTED_RERANK_PRICING[modelId];
+    if (exactRerank) return exactRerank;
+  }
   // chat or rerank: try bare key first, then provider:model or provider/model.
   // v0.41.21.0: route through splitProviderModelId so slash-prefixed ids
   // (the form `--judge-model` and OpenRouter recipes emit) hit the pricing
@@ -190,6 +213,10 @@ function lookupPricing(modelId: string, kind: BudgetKind): ModelPricing | null {
   const bare = ANTHROPIC_PRICING[modelId];
   if (bare) return bare;
   const { provider: providerId, model: modelTail } = splitProviderModelId(modelId);
+  if (kind === 'rerank' && providerId && modelTail) {
+    const canonicalRerank = HOSTED_RERANK_PRICING[`${providerId}:${modelTail}`];
+    if (canonicalRerank) return canonicalRerank;
+  }
   if (modelTail) {
     const tailHit = ANTHROPIC_PRICING[modelTail];
     if (tailHit) return tailHit;
@@ -270,6 +297,28 @@ export class BudgetTracker {
     );
 
     if (projected === null) {
+      if (this.opts.dailyCapUsd !== undefined && this.opts.dailyCapUsd >= 0) {
+        const msg = `${this.opts.label}: no pricing entry for model "${estimate.modelId}" (kind=${estimate.kind}); ` +
+          `cannot enforce autonomous daily cap before provider call.`;
+        appendAuditLine(this.auditPath, {
+          schema_version: 1,
+          ts: (this.opts.now ?? new Date()).toISOString(),
+          event: 'reserve_denied',
+          label: this.opts.label,
+          kind: estimate.kind,
+          model: estimate.modelId,
+          sub_label: estimate.label,
+          reason: 'AUTONOMOUS_DAILY_BUDGET_UNPRICED',
+          daily_cap_usd: this.opts.dailyCapUsd,
+        });
+        this.fireExhausted();
+        throw new BudgetExhausted(msg, {
+          reason: 'no_pricing',
+          spent: this.cumulativeUsd,
+          cap: this.opts.dailyCapUsd,
+          modelId: estimate.modelId,
+        });
+      }
       if (this.opts.maxCostUsd !== undefined) {
         // TX2: hard-fail when a cap is set but pricing is missing — without
         // pricing we can't enforce the cap, and silently ignoring it would
@@ -305,6 +354,37 @@ export class BudgetTracker {
         max_output_tokens: estimate.maxOutputTokens,
       });
       return;
+    }
+
+    if (this.opts.dailyCapUsd !== undefined) {
+      const daily = checkAutonomousDailyCap(projected, {
+        dailyCapUsd: this.opts.dailyCapUsd,
+        auditPath: this.auditPath,
+        auditDir: this.opts.dailyCapAuditDir,
+        now: this.opts.now,
+      });
+      if (!daily.allowed) {
+        appendAuditLine(this.auditPath, {
+          schema_version: 1,
+          ts: (this.opts.now ?? new Date()).toISOString(),
+          event: 'reserve_denied',
+          label: this.opts.label,
+          kind: estimate.kind,
+          model: estimate.modelId,
+          sub_label: estimate.label,
+          projected_cost_usd: projected,
+          cumulative_cost_usd: this.cumulativeUsd,
+          daily_spent_usd: daily.spentTodayUsd,
+          daily_projected_usd: daily.projectedTotalUsd,
+          daily_cap_usd: daily.capUsd,
+          reason: daily.reason,
+        });
+        this.fireExhausted();
+        throw new BudgetExhausted(
+          `${this.opts.label}: ${daily.reason}`,
+          { reason: 'cost', spent: daily.spentTodayUsd, cap: daily.capUsd, modelId: estimate.modelId },
+        );
+      }
     }
 
     if (this.opts.maxCostUsd !== undefined) {

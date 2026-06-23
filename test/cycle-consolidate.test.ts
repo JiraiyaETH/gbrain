@@ -52,6 +52,11 @@ function unitVec(): string {
   a[0] = 1.0;
   return '[' + Array.from(a).join(',') + ']';
 }
+function basisVec(index: number): string {
+  const a = new Float32Array(1536);
+  a[index] = 1.0;
+  return '[' + Array.from(a).join(',') + ']';
+}
 
 async function seedPage(slug: string): Promise<number> {
   await engine.executeRaw(
@@ -107,6 +112,10 @@ describe('runPhaseConsolidate', () => {
     const r = await runPhaseConsolidate(engine, {});
     expect(r.details.facts_consolidated).toBe(4);
     expect(r.details.takes_written).toBe(1);
+    expect(r.details.facts_considered).toBe(4);
+    expect(r.details.facts_with_embedding).toBe(4);
+    expect(r.details.clusters_promotable).toBe(1);
+    expect(r.details.buckets_without_promotable_clusters).toBe(0);
 
     // Take row created on the right page.
     const takes = await engine.executeRaw<{ page_id: number; kind: string; weight: number; holder: string }>(
@@ -150,6 +159,27 @@ describe('runPhaseConsolidate', () => {
     for (const f of facts) {
       expect(f.consolidated_at).toBeNull();
     }
+  });
+
+  test('diagnoses zero-output buckets with no promotable clusters', async () => {
+    await seedPage('cons-no-promotable');
+    for (let i = 0; i < 3; i++) {
+      await engine.executeRaw(
+        `INSERT INTO facts (source_id, entity_slug, fact, kind, source, valid_from, embedding, embedded_at)
+         VALUES ('default', 'cons-no-promotable', $1, 'fact', 'test', $2::timestamptz, $3::vector, $2::timestamptz)`,
+        [`distinct fact ${i}`, oldDate(), basisVec(i)],
+      );
+    }
+
+    const r = await runPhaseConsolidate(engine, { dryRun: true });
+    expect(r.details.facts_consolidated).toBe(0);
+    expect(r.details.takes_written).toBe(0);
+    expect(r.details.facts_considered).toBe(3);
+    expect(r.details.facts_with_embedding).toBe(3);
+    expect(r.details.clusters_considered).toBe(3);
+    expect(r.details.clusters_promotable).toBe(0);
+    expect(r.details.buckets_without_promotable_clusters).toBe(1);
+    expect(r.summary).toContain('0 promotable');
   });
 
   test('skips bucket when no matching page exists in source', async () => {

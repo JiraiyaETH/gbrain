@@ -21,9 +21,11 @@ writes_pages: true
 writes_to:
   - people/
   - companies/
-  - deals/
   - concepts/
   - meetings/
+  - projects/
+  - ideas/
+  - reflections/
 ---
 
 # Brain Operations — The Ambient Context Layer

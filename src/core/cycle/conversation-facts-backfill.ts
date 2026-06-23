@@ -44,6 +44,7 @@
 
 import type { BrainEngine } from '../engine.ts';
 import { BudgetTracker, BudgetExhausted } from '../budget/budget-tracker.ts';
+import { resolveAutonomousDailyCapUsd } from '../budget/autonomous-daily-cap.ts';
 import { withBudgetTracker } from '../ai/gateway.ts';
 import { listSources } from '../sources-ops.ts';
 import {
@@ -187,6 +188,7 @@ export async function runPhaseConversationFactsBackfill(
   // so the core doesn't wrap (which would REPLACE).
   const brainTracker = new BudgetTracker({
     maxCostUsd: cfg.maxTotalCostUsd,
+    dailyCapUsd: await resolveAutonomousDailyCapUsd(engine),
     label: 'conversation_facts_backfill:brain-wide',
   });
 

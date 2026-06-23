@@ -22,6 +22,10 @@ import { runBootstrapFromSkill } from '../../src/core/skillopt/bootstrap-benchma
 import { loadBenchmark, splitBench } from '../../src/core/skillopt/benchmark.ts';
 import { BOOTSTRAP_PENDING_REVIEW } from '../../src/core/skillopt/types.ts';
 import { parseFlags } from '../../src/commands/skillopt.ts';
+import {
+  DEFAULT_SKILLOPT_BRAIN_WIDE_MAX_COST_USD,
+  DEFAULT_SKILLOPT_MAX_COST_USD,
+} from '../../src/core/skillopt/defaults.ts';
 
 const SKILL = 'widget-example';
 
@@ -285,6 +289,16 @@ describe('parseFlags — --bootstrap-from-skill CLI surface', () => {
     const p = parseFlags([SKILL, '--bootstrap-from-skill', '--bootstrap-tasks', '20']);
     expect(p.bootstrapFromSkill).toBe(true);
     expect(p.bootstrapTasks).toBe(20);
+  });
+
+  test('defaults spend caps to the autonomous daily ceiling', () => {
+    const single = parseFlags([SKILL]);
+    expect(single.maxCostUsd).toBe(DEFAULT_SKILLOPT_MAX_COST_USD);
+    expect(single.maxCostUsd).toBe(3.33);
+
+    const all = parseFlags(['--all']);
+    expect(all.brainWideMaxCostUsd).toBe(DEFAULT_SKILLOPT_BRAIN_WIDE_MAX_COST_USD);
+    expect(all.brainWideMaxCostUsd).toBe(3.33);
   });
 
   test('--bootstrap-tasks caps at 50', () => {

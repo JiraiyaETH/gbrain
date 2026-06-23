@@ -292,7 +292,7 @@ export const NEEDS_LOCK_PHASES: ReadonlySet<CyclePhase> = new Set([
   'commit',
 ]);
 
-export type PhaseStatus = 'ok' | 'warn' | 'fail' | 'skipped';
+export type PhaseStatus = 'ok' | 'warn' | 'fail' | 'skipped' | 'disabled' | 'empty' | 'degraded';
 
 export interface PhaseError {
   /** Error class for machine branching — e.g., 'DatabaseConnection', 'Timeout', 'LLMError', 'FilesystemError', 'InternalError'. */
@@ -333,7 +333,7 @@ async function isPaidCalibrationPhaseEnabled(engine: BrainEngine, phase: PaidCal
 function disabledPaidCalibrationPhaseResult(phase: PaidCalibrationPhase): PhaseResult {
   return {
     phase,
-    status: 'skipped',
+    status: 'disabled',
     duration_ms: 0,
     summary: `cycle.${phase}.enabled=false (default OFF)`,
     details: {
@@ -789,9 +789,11 @@ export async function runPhaseWithTimeout(
 
   const ac = new AbortController();
   const onParentAbort = () => ac.abort((parentSignal as AbortSignal).reason);
+  const parentCanNotify = typeof parentSignal?.addEventListener === 'function'
+    && typeof parentSignal?.removeEventListener === 'function';
   if (parentSignal) {
     if (parentSignal.aborted) ac.abort(parentSignal.reason);
-    else parentSignal.addEventListener('abort', onParentAbort, { once: true });
+    else if (parentCanNotify) parentSignal.addEventListener('abort', onParentAbort, { once: true });
   }
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -824,7 +826,7 @@ export async function runPhaseWithTimeout(
     throw e;
   } finally {
     clearTimeout(timer);
-    if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+    if (parentCanNotify) parentSignal.removeEventListener('abort', onParentAbort);
   }
 }
 
@@ -971,7 +973,13 @@ export async function packDeclaresPhase(
     const { loadActivePack } = await import('./schema-pack/load-active.ts');
     const { loadConfig } = await import('./config.ts');
     const cfg = loadConfig();
-    const resolved = await loadActivePack({ cfg, remote: false });
+    let dbConfig: string | undefined;
+    try {
+      dbConfig = (await engine.getConfig('schema_pack'))?.trim() || undefined;
+    } catch {
+      dbConfig = undefined;
+    }
+    const resolved = await loadActivePack({ cfg, remote: false, dbConfig });
     const phases = resolved.manifest.phases ?? [];
     return phases.includes(phase);
   } catch {
@@ -1510,6 +1518,7 @@ export async function runCycle(
 ): Promise<CycleReport> {
   const start = performance.now();
   const phases = opts.phases ?? ALL_PHASES;
+  const explicitlySelectedPhases = opts.phases !== undefined;
   const dryRun = !!opts.dryRun;
   const pull = !!opts.pull;
   const phaseTimeoutMs = resolvePhaseTimeoutMs(opts.phaseTimeoutSeconds);
@@ -2408,8 +2417,9 @@ export async function runCycle(
   }
 
   const duration_ms = Math.round(performance.now() - start);
-  const totals = extractTotals(phaseResults);
-  const status = deriveStatus(phaseResults, totals);
+  const normalizedPhaseResults = phaseResults.map(p => normalizePhaseResult(p, explicitlySelectedPhases));
+  const totals = extractTotals(normalizedPhaseResults);
+  const status = deriveStatus(normalizedPhaseResults, totals);
 
   // #1972 (Codex #9): a phase that breaks on abort returns status 'ok' with
   // partial counts. If the abort fired during the LAST selected phase, no
@@ -2469,7 +2479,7 @@ export async function runCycle(
     ...(aborted ? { reason: 'aborted' } : {}),
     ...(reapedLocks ? { reaped_dead_holder_locks: reapedLocks } : {}),
     brain_dir: opts.brainDir,
-    phases: phaseResults,
+    phases: normalizedPhaseResults,
     totals,
   };
 }
@@ -2547,13 +2557,151 @@ function extractTotals(phases: PhaseResult[]): CycleReport['totals'] {
   return t;
 }
 
+function detailNumber(details: Record<string, unknown>, key: string): number {
+  const raw = details[key];
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function detailString(details: Record<string, unknown>, key: string): string {
+  const raw = details[key];
+  return typeof raw === 'string' ? raw : '';
+}
+
+function detailBoolean(details: Record<string, unknown>, key: string): boolean {
+  return details[key] === true;
+}
+
+function detailArrayLength(details: Record<string, unknown>, key: string): number {
+  const raw = details[key];
+  return Array.isArray(raw) ? raw.length : 0;
+}
+
+function phaseWithStatus(phase: PhaseResult, status: PhaseStatus, reason: string): PhaseResult {
+  return {
+    ...phase,
+    status,
+    details: {
+      ...phase.details,
+      reason: detailString(phase.details, 'reason') || reason,
+    },
+  };
+}
+
+function isDryRunPhase(phase: PhaseResult): boolean {
+  return detailBoolean(phase.details, 'dryRun') || detailBoolean(phase.details, 'dry_run');
+}
+
+function isDisabledPhase(phase: PhaseResult): boolean {
+  return phase.status === 'disabled' || detailString(phase.details, 'reason') === 'disabled';
+}
+
+function isModelSubstrateDegraded(phase: PhaseResult): boolean {
+  const reason = detailString(phase.details, 'reason');
+  if ([
+    'no_api_key',
+    'no_chat_gateway',
+    'no_configured_provider',
+    'model_unavailable',
+    'gateway_unavailable',
+    'provider_unavailable',
+  ].includes(reason)) {
+    return true;
+  }
+  const syncStatus = detailString(phase.details, 'syncStatus');
+  return syncStatus === 'missing_provider' || syncStatus === 'no_provider';
+}
+
+function isBudgetDegraded(phase: PhaseResult): boolean {
+  return detailBoolean(phase.details, 'budget_exhausted')
+    || detailBoolean(phase.details, 'daily_cap_exhausted')
+    || detailBoolean(phase.details, 'budget_denied')
+    || detailString(phase.details, 'reason') === 'budget_exhausted';
+}
+
+function isCommitPersistenceDegraded(phase: PhaseResult): boolean {
+  return phase.phase === 'commit'
+    && phase.status === 'ok'
+    && phase.details.committed === true
+    && phase.details.pushed === false
+    && typeof phase.details.push_error === 'string'
+    && phase.details.push_error.length > 0;
+}
+
+function explicitlyExpectedOutputButEmpty(phase: PhaseResult): boolean {
+  if (phase.details.output_expected !== true) return false;
+  return detailNumber(phase.details, 'output_count') <= 0;
+}
+
+function inferredExpectedOutputButEmpty(phase: PhaseResult): boolean {
+  if (isDryRunPhase(phase)) return false;
+  switch (phase.phase) {
+    case 'synthesize':
+      return detailNumber(phase.details, 'transcripts_processed') > 0
+        && detailNumber(phase.details, 'pages_written') === 0;
+    case 'patterns':
+      return detailNumber(phase.details, 'reflections_considered') > 0
+        && detailNumber(phase.details, 'patterns_written') === 0;
+    case 'consolidate':
+      return detailNumber(phase.details, 'buckets_processed') > 0
+        && detailNumber(phase.details, 'takes_written') === 0;
+    case 'extract_atoms':
+      return (detailNumber(phase.details, 'transcripts_processed') + detailNumber(phase.details, 'pages_processed')) > 0
+        && detailNumber(phase.details, 'atoms_extracted') === 0
+        && detailArrayLength(phase.details, 'failures') === 0;
+    case 'synthesize_concepts':
+      return (detailNumber(phase.details, 'groups_found') > 0 || detailNumber(phase.details, 'atoms_seen') > 0)
+        && detailNumber(phase.details, 'concepts_written') === 0
+        && detailArrayLength(phase.details, 'failures') === 0;
+    default:
+      return false;
+  }
+}
+
+function phaseExpectedOutputButEmpty(phase: PhaseResult): boolean {
+  return explicitlyExpectedOutputButEmpty(phase) || inferredExpectedOutputButEmpty(phase);
+}
+
+function normalizePhaseResult(phase: PhaseResult, required = false): PhaseResult {
+  if (phase.status === 'fail' || phase.status === 'warn') return phase;
+  if (isDisabledPhase(phase)) {
+    const normalized = phaseWithStatus(phase, 'disabled', 'disabled');
+    if (required) {
+      return {
+        ...normalized,
+        details: {
+          ...normalized.details,
+          required: true,
+        },
+      };
+    }
+    return normalized;
+  }
+  if (isModelSubstrateDegraded(phase)) return phaseWithStatus(phase, 'degraded', 'model_substrate_unavailable');
+  if (isBudgetDegraded(phase)) return phaseWithStatus(phase, 'degraded', 'budget_exhausted');
+  if (isCommitPersistenceDegraded(phase)) return phaseWithStatus(phase, 'degraded', 'push_failed');
+  if (phase.status === 'ok' && phaseExpectedOutputButEmpty(phase)) {
+    return phaseWithStatus(phase, 'empty', 'empty_output');
+  }
+  return phase;
+}
+
 function deriveStatus(phases: PhaseResult[], totals: CycleReport['totals']): CycleStatus {
   if (phases.length === 0) return 'failed';
   const anyFailed = phases.some(p => p.status === 'fail');
   const allFailed = phases.every(p => p.status === 'fail');
   const anyWarn = phases.some(p => p.status === 'warn');
+  const anyDegraded = phases.some(p =>
+    p.status === 'empty'
+    || p.status === 'degraded'
+    || (p.status === 'disabled' && p.details.required === true),
+  );
   if (allFailed) return 'failed';
-  if (anyFailed || anyWarn) return 'partial';
+  if (anyFailed || anyWarn || anyDegraded) return 'partial';
   // All phases 'ok' or 'skipped'. Distinguish clean (no activity) from ok (work done).
   const anyWork =
     totals.lint_fixes > 0 ||
@@ -2569,3 +2717,11 @@ function deriveStatus(phases: PhaseResult[], totals: CycleReport['totals']): Cyc
     totals.edges_ambiguous > 0;
   return anyWork ? 'ok' : 'clean';
 }
+
+export const __testing = {
+  emptyTotals,
+  extractTotals,
+  deriveStatus,
+  normalizePhaseResult,
+  phaseExpectedOutputButEmpty,
+};

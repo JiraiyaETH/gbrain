@@ -9,10 +9,23 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { MODE_BUNDLES } from '../src/core/search/mode.ts';
 import { applyReranker, type RerankerOpts } from '../src/core/search/rerank.ts';
 import type { SearchResult } from '../src/core/types.ts';
 import { RerankError } from '../src/core/ai/gateway.ts';
+import { withEnv } from './helpers/with-env.ts';
+
+async function withFreshAuditDir<T>(body: () => Promise<T>): Promise<T> {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gbrain-balanced-reranker-audit-'));
+  try {
+    return await withEnv({ GBRAIN_AUDIT_DIR: tmpDir }, body);
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
 
 describe('Mode bundle defaults (D6)', () => {
   test('balanced.reranker_enabled is true (the v0.36.0.0 flip)', () => {
@@ -74,7 +87,7 @@ describe('applyReranker — fail-open contract (D6 + R8)', () => {
         throw new RerankError('missing ZEROENTROPY_API_KEY', 'auth');
       },
     };
-    const out = await applyReranker('test query', results, opts);
+    const out = await withFreshAuditDir(() => applyReranker('test query', results, opts));
     // Fail-open: original order preserved.
     expect(out.map(r => r.slug)).toEqual(results.map(r => r.slug));
   });

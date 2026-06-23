@@ -372,6 +372,30 @@ describe('v0.41.2.1: runPhaseExtractAtoms — dual-source merge + idempotency', 
     expect(rows[0].count).toBe(0);
   });
 
+  test('uses utility-tier Haiku model for chat calls by default', async () => {
+    const seenModels: Array<string | undefined> = [];
+    const chat = async (o: ChatOpts): Promise<ChatResult> => {
+      seenModels.push(o.model);
+      const text = '[{"title":"x","atom_type":"insight","body":"b"}]';
+      return {
+        text,
+        blocks: [{ type: 'text', text }],
+        stopReason: 'end',
+        usage: { input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_creation_tokens: 0 },
+        model: o.model ?? 'missing-model',
+        providerId: 'anthropic',
+      };
+    };
+    const result = await runPhaseExtractAtoms(engine, {
+      _transcripts: [{ filePath: '/T.txt', content: 'tc', contentHash: 'th1234567890abcde' }],
+      _pages: [],
+      _chat: chat,
+      dryRun: true,
+    });
+    expect(seenModels).toEqual(['anthropic:claude-haiku-4-5-20251001']);
+    expect(result.details?.model).toBe('anthropic:claude-haiku-4-5-20251001');
+  });
+
   test('_pages: undefined triggers discovery; _pages: [] explicitly suppresses', async () => {
     await seedPage({ slug: 'meeting/discoverable', type: 'meeting', content_hash: 'discovered1234567' });
     const chat = stubChat(`[{"title":"x","atom_type":"insight","body":"b"}]`);

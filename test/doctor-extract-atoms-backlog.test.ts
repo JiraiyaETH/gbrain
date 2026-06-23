@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
-import { mkdtempSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
@@ -25,6 +25,12 @@ import { computeExtractAtomsBacklogCheck } from '../src/commands/doctor.ts';
 
 let engine: PGLiteEngine;
 const EMPTY_HOME = mkdtempSync(join(tmpdir(), 'gbrain-xa-backlog-home-'));
+const HOME_WITH_BASE_V2 = mkdtempSync(join(tmpdir(), 'gbrain-xa-backlog-home-base-'));
+mkdirSync(HOME_WITH_BASE_V2, { recursive: true });
+writeFileSync(
+  join(HOME_WITH_BASE_V2, 'config.json'),
+  JSON.stringify({ engine: 'pglite', schema_pack: 'gbrain-base-v2' }, null, 2),
+);
 
 beforeAll(async () => {
   engine = new PGLiteEngine();
@@ -94,5 +100,15 @@ describe('computeExtractAtomsBacklogCheck (issue #1678)', () => {
     expect(check.message).toContain('--drain');
     expect((check.details as { pack_declares_phase: boolean }).pack_declares_phase).toBe(false);
     expect((check.details as { known_approximation: string }).known_approximation).toContain('page backlog only');
+  });
+
+  it('honors DB schema_pack above home config when detecting extract_atoms phase', async () => {
+    for (let i = 0; i < 11; i++) await seedArticle(`db-pack-article-${i}`);
+    await engine.setConfig('schema_pack', 'gbrain-creator');
+    const check = await withEnv({ GBRAIN_HOME: HOME_WITH_BASE_V2 }, () =>
+      computeExtractAtomsBacklogCheck(engine));
+    expect(check.status).toBe('ok');
+    expect(check.message).toContain('active pack runs extract_atoms');
+    expect((check.details as { pack_declares_phase: boolean }).pack_declares_phase).toBe(true);
   });
 });

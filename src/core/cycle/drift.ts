@@ -17,6 +17,7 @@
 
 import type { BrainEngine } from '../engine.ts';
 import { BudgetMeter } from './budget-meter.ts';
+import { resolveAutonomousDailyCapUsd } from '../budget/autonomous-daily-cap.ts';
 import { resolveModel } from '../model-config.ts';
 import type { DreamPhaseResult } from './auto-think.ts';
 
@@ -138,6 +139,7 @@ export async function runPhaseDrift(
     budgetUsd: config.budgetUsd,
     phase: 'drift',
     auditPath: opts.auditPath,
+    dailyCapUsd: await resolveAutonomousDailyCapUsd(engine),
   });
 
   // v0.28 scaffold: write a candidate report. v0.29 wires LLM-driven weight

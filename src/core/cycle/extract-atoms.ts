@@ -48,9 +48,12 @@ import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult } from '../cycle.ts';
 import type { GBrainConfig } from '../config.ts';
 import type { ProgressReporter } from '../progress.ts';
-import { chat as gatewayChat } from '../ai/gateway.ts';
+import { chat as gatewayChat, withBudgetTracker } from '../ai/gateway.ts';
+import { TIER_DEFAULTS, resolveModel } from '../model-config.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
+import { BudgetExhausted, BudgetTracker } from '../budget/budget-tracker.ts';
+import { resolveAutonomousDailyCapUsd } from '../budget/autonomous-daily-cap.ts';
 
 const DEFAULT_BUDGET_USD = 0.3;
 
@@ -338,6 +341,12 @@ export async function runPhaseExtractAtoms(
 ): Promise<PhaseResult> {
   const sourceId = opts.sourceId ?? 'default';
   const chat = opts._chat ?? gatewayChat;
+  const model = await resolveModel(engine, {
+    configKey: 'models.extract_atoms',
+    deprecatedConfigKey: 'dream.extract_atoms.model',
+    tier: 'utility',
+    fallback: TIER_DEFAULTS.utility,
+  });
 
   // 1a. Get transcripts (test seam OR production discovery).
   //     v0.41.2.1: config loader switched to loadConfigWithEngine() so the
@@ -441,6 +450,7 @@ export async function runPhaseExtractAtoms(
         failures: [],
         estimated_spend_usd: 0,
         budget_usd: DEFAULT_BUDGET_USD,
+        model,
         dry_run: opts.dryRun ?? false,
       },
     };
@@ -455,6 +465,11 @@ export async function runPhaseExtractAtoms(
   const failures: Array<{ source: string; error: string }> = [];
   let estimatedSpendUsd = 0;
   const budgetCap = DEFAULT_BUDGET_USD;
+  const tracker = new BudgetTracker({
+    maxCostUsd: budgetCap,
+    dailyCapUsd: await resolveAutonomousDailyCapUsd(engine),
+    label: `cycle.extract_atoms:${sourceId}`,
+  });
 
   // v0.41.19.0 (T3): throttled yield helper. Fires `opts.yieldDuringPhase`
   // every 30s. Cycle.ts threads `buildYieldDuringPhase(lock, outer)` so
@@ -489,16 +504,19 @@ export async function runPhaseExtractAtoms(
 
     const originLabel = item.kind === 'transcript' ? item.filePath : item.slug;
     try {
-      const result = await chat({
-        system: EXTRACT_PROMPT,
-        messages: [
-          {
-            role: 'user',
-            content: `Source: ${originLabel}\n\n---\n\n${item.content.slice(0, 50_000)}`,
-          },
-        ],
-        maxTokens: 2000,
-      });
+      const result = await withBudgetTracker(tracker, () =>
+        chat({
+          model,
+          system: EXTRACT_PROMPT,
+          messages: [
+            {
+              role: 'user',
+              content: `Source: ${originLabel}\n\n---\n\n${item.content.slice(0, 50_000)}`,
+            },
+          ],
+          maxTokens: 2000,
+        }),
+      );
       // Post-await yield: closes the "long LLM call past TTL" hazard
       // codex flagged. The 30s throttle inside maybeYield bounds the
       // actual refresh rate so this is cheap when calls are fast.
@@ -558,6 +576,12 @@ export async function runPhaseExtractAtoms(
       // Reporter rate-limits to ~1 line/sec; safe to tick every iter.
       opts.progress?.tick(1, `${totalAtomsExtracted} atoms / ${duplicatesSkipped} skipped`);
     } catch (err) {
+      if (err instanceof BudgetExhausted) {
+        if (item.kind === 'transcript') transcriptsSkipped++;
+        else pagesSkipped++;
+        failures.push({ source: originLabel, error: err.message });
+        break;
+      }
       failures.push({
         source: originLabel,
         error: err instanceof Error ? err.message : String(err),
@@ -621,6 +645,7 @@ export async function runPhaseExtractAtoms(
       failures,
       estimated_spend_usd: estimatedSpendUsd,
       budget_usd: budgetCap,
+      model,
       source_id: sourceId,
       dry_run: opts.dryRun ?? false,
     },

@@ -2699,7 +2699,7 @@ export async function checkSubagentCapability(engine: BrainEngine): Promise<Chec
       if (issue) return issue;
     }
     // v0.37 (T10 / D7) + v0.38 (D7 capability rename): warn when the configured
-    // chat_model is non-Anthropic AND ANTHROPIC_API_KEY isn't set. With
+    // chat_model is non-Anthropic AND no Anthropic key is available. With
     // agent.use_gateway_loop=false (the v0.38 default), subagent jobs still
     // require Anthropic at runtime; without the key, gbrain dream / gbrain
     // agent run / gbrain autopilot will all fail at job submission. Catches
@@ -2713,15 +2713,16 @@ export async function checkSubagentCapability(engine: BrainEngine): Promise<Chec
       const gatewayLoopEnabled = typeof gatewayLoopRaw === 'string'
         && ['true', '1', 'yes', 'on'].includes(gatewayLoopRaw.trim().toLowerCase());
       const { isAnthropicProvider } = await import('../core/model-config.ts');
-      if (chatModel && !isAnthropicProvider(chatModel) && !process.env.ANTHROPIC_API_KEY && !gatewayLoopEnabled) {
+      const { hasAnthropicKey } = await import('../core/ai/anthropic-key.ts');
+      if (chatModel && !isAnthropicProvider(chatModel) && !hasAnthropicKey() && !gatewayLoopEnabled) {
         return {
           name: 'subagent_capability',
           status: 'warn',
           message:
-            `chat_model is "${chatModel}" (non-Anthropic) and ANTHROPIC_API_KEY is not set. ` +
+            `chat_model is "${chatModel}" (non-Anthropic) and no Anthropic API key is available via env or config. ` +
             `Subagent features (gbrain dream, gbrain agent run, gbrain autopilot) will fail at job submission ` +
             `unless agent.use_gateway_loop=true. Chat alone (gbrain think) still works. ` +
-            `Either set ANTHROPIC_API_KEY or enable: \`gbrain config set agent.use_gateway_loop true\`.`,
+            `Either set ANTHROPIC_API_KEY / anthropic_api_key or enable: \`gbrain config set agent.use_gateway_loop true\`.`,
         };
       }
     } catch { /* loadConfig may throw; fall through */ }
@@ -5783,10 +5784,28 @@ export async function buildChecks(
     const { getOrphansData } = await import('./orphans.ts');
     const srcId = orphanRatioSourceId;
     const inSource = srcId ? ` in source '${srcId}'` : '';
-    const entityCount = (await engine.executeRaw<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM pages WHERE type IN ('entity', 'person', 'company', 'organization') AND deleted_at IS NULL${srcId ? ' AND source_id = $1' : ''}`,
-      srcId ? [srcId] : [],
-    ))[0]?.count ?? 0;
+    const entityRows = srcId
+      ? await engine.executeRaw<{ source_id: string; count: number }>(
+        `SELECT source_id, COUNT(*)::int AS count
+         FROM pages
+         WHERE type IN ('entity', 'person', 'company', 'organization')
+           AND deleted_at IS NULL
+           AND source_id = $1
+         GROUP BY source_id`,
+        [srcId],
+      )
+      : await engine.executeRaw<{ source_id: string; count: number }>(
+        `SELECT source_id, COUNT(*)::int AS count
+         FROM pages
+         WHERE type IN ('entity', 'person', 'company', 'organization')
+           AND deleted_at IS NULL
+         GROUP BY source_id`,
+      );
+    const graphSourceRows = srcId
+      ? entityRows
+      : entityRows.filter(row => Number(row.count) >= 100);
+    const graphSourceIds = graphSourceRows.map(row => row.source_id);
+    const entityCount = graphSourceRows.reduce((sum, row) => sum + Number(row.count), 0);
     // Brain-wide (no --source): <100 entities is vacuous — small brains
     // naturally show a high orphan ratio; not actionable signal. Skip.
     if (entityCount < 100 && !srcId) {
@@ -5800,7 +5819,9 @@ export async function buildChecks(
       // about one source — answer it even below 100 entities, with a
       // low-scale caveat, instead of swallowing a real per-source failure
       // (e.g. 80 fully-orphaned entity pages) behind a vacuous "ok".
-      const data = await getOrphansData(engine, { includePseudo: false, sourceId: srcId });
+      const data = await getOrphansData(engine, srcId
+        ? { includePseudo: false, sourceId: srcId }
+        : { includePseudo: false, sourceIds: graphSourceIds });
       const ratio = data.total_linkable > 0 ? data.total_orphans / data.total_linkable : 0;
       const pct = (ratio * 100).toFixed(0);
       const caveat =

@@ -119,6 +119,36 @@ describe('autopilot-cycle handler — partial failure does NOT throw', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 30_000);
+
+  test('disabled requested phase returns partial:true with disabled phase receipt', async () => {
+    const fs = await import('fs');
+    const { execSync } = await import('child_process');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = fs.mkdtempSync(join(tmpdir(), 'gbrain-autopilot-disabled-phase-'));
+    try {
+      execSync('git init', { cwd: dir, stdio: 'pipe' });
+      execSync('git config user.email test@example.com', { cwd: dir, stdio: 'pipe' });
+      execSync('git config user.name Test', { cwd: dir, stdio: 'pipe' });
+      execSync('git commit --allow-empty -m init', { cwd: dir, stdio: 'pipe' });
+
+      const handler = (worker as any).handlers.get('autopilot-cycle');
+      const result = await handler({
+        data: { repoPath: dir, phases: ['propose_takes'] },
+        signal: { aborted: false } as any,
+        job: { id: 3, name: 'autopilot-cycle' } as any,
+      });
+
+      expect((result as any).partial).toBe(true);
+      expect((result as any).status).toBe('partial');
+      const phase = (result as any).report.phases[0];
+      expect(phase.phase).toBe('propose_takes');
+      expect(phase.status).toBe('disabled');
+      expect(phase.details.reason).toBe('disabled');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe('autopilot-cycle handler — phase passthrough', () => {

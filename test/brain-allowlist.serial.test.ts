@@ -132,6 +132,88 @@ describe('buildBrainTools', () => {
     expect(res).toBeTruthy();
   });
 
+  test('execute() uses the job sourceId for put_page instead of hard-coded default', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name) VALUES ('client-source', 'Client Source') ON CONFLICT (id) DO NOTHING`,
+    );
+    const tools = buildBrainTools({
+      subagentId: 42,
+      engine,
+      config,
+      sourceId: 'client-source',
+    });
+    const putPage = tools.find(t => t.name === 'brain_put_page');
+    const ctx: ToolCtx = { engine, jobId: 1, remote: true };
+    await putPage!.execute(
+      { slug: 'wiki/agents/42/source-bound', content: '---\ntitle: Scoped\n---\nbody' },
+      ctx,
+    );
+
+    const rows = await engine.executeRaw<{ source_id: string }>(
+      `SELECT source_id FROM pages WHERE slug = $1`,
+      ['wiki/agents/42/source-bound'],
+    );
+    expect(rows[0]?.source_id).toBe('client-source');
+  });
+
+  test('execute() read tools only see the job sourceId', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name) VALUES ('client-source', 'Client Source') ON CONFLICT (id) DO NOTHING`,
+    );
+    await engine.putPage('scope/default-only', {
+      type: 'note',
+      title: 'Default Only',
+      compiled_truth: 'default source body',
+      frontmatter: {},
+    }, { sourceId: 'default' });
+    await engine.putPage('scope/client-only', {
+      type: 'note',
+      title: 'Client Only',
+      compiled_truth: 'client source body',
+      frontmatter: {},
+    }, { sourceId: 'client-source' });
+
+    const tools = buildBrainTools({
+      subagentId: 42,
+      engine,
+      config,
+      sourceId: 'client-source',
+    });
+    const getPage = tools.find(t => t.name === 'brain_get_page');
+    const listPages = tools.find(t => t.name === 'brain_list_pages');
+    const ctx: ToolCtx = { engine, jobId: 1, remote: true };
+
+    const clientPage = await getPage!.execute({ slug: 'scope/client-only' }, ctx) as { title: string };
+    expect(clientPage.title).toBe('Client Only');
+    await expect(getPage!.execute({ slug: 'scope/default-only' }, ctx)).rejects.toBeInstanceOf(OperationError);
+
+    const listed = await listPages!.execute({ limit: 20, sort: 'slug' }, ctx) as Array<{ slug: string }>;
+    const slugs = listed.map(page => page.slug);
+    expect(slugs).toContain('scope/client-only');
+    expect(slugs).not.toContain('scope/default-only');
+  });
+
+  test('execute() rejects explicit source_id outside the job source grant', async () => {
+    const tools = buildBrainTools({
+      subagentId: 42,
+      engine,
+      config,
+      sourceId: 'client-source',
+    });
+    const query = tools.find(t => t.name === 'brain_query');
+    const ctx: ToolCtx = { engine, jobId: 1, remote: true };
+
+    try {
+      // No `query` text on purpose: the source-scope resolver must reject before
+      // query validation or any embedding/provider path can run.
+      await query!.execute({ source_id: 'default' }, ctx);
+      throw new Error('expected source grant rejection');
+    } catch (err) {
+      expect(err).toBeInstanceOf(OperationError);
+      expect((err as OperationError).code).toBe('permission_denied');
+    }
+  });
+
   test('execute() on put_page with out-of-namespace slug throws permission_denied', async () => {
     const tools = buildBrainTools({ subagentId: 42, engine, config });
     const putPage = tools.find(t => t.name === 'brain_put_page');

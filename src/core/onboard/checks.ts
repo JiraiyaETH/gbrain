@@ -45,6 +45,28 @@ async function safeCount(engine: BrainEngine, sql: string, params: unknown[] = [
   }
 }
 
+async function safeDistinctTypeCountsBySource(engine: BrainEngine): Promise<Array<{ source_id: string; count: number }>> {
+  try {
+    const result = await engine.executeRaw(
+      `SELECT COALESCE(source_id, 'default') AS source_id,
+              COUNT(DISTINCT type) AS count
+       FROM pages
+       WHERE deleted_at IS NULL AND type IS NOT NULL
+       GROUP BY COALESCE(source_id, 'default')
+       ORDER BY COUNT(DISTINCT type) DESC, COALESCE(source_id, 'default') ASC`,
+    );
+    const rows = (result as { rows?: Array<Record<string, unknown>> } | undefined)?.rows
+      ?? (result as Array<Record<string, unknown>> | undefined)
+      ?? [];
+    return rows.map((row) => ({
+      source_id: String(row.source_id ?? 'default'),
+      count: Number(row.count ?? 0),
+    })).filter((row) => Number.isFinite(row.count));
+  } catch {
+    return [];
+  }
+}
+
 /**
  * embed_staleness: count of chunks awaiting embedding.
  *
@@ -452,10 +474,11 @@ export async function checkPackUpgradeAvailable(
 }
 
 /**
- * type_proliferation (D16): pack-aware ratio. Warns when distinct typed
- * pages exceed pack-declared types + 5; fails at declared × 2. No false
- * positives on custom packs (compares to actual pack declaration count,
- * not a hardcoded threshold).
+ * type_proliferation (D16): pack-aware ratio. Warns when any single source's
+ * distinct typed values exceed pack-declared types + 5; fails at declared × 2.
+ * The aggregate union is reported for context only. In a federated brain,
+ * summing every source into one distinct-type set false-positives when code,
+ * personal notes, and robotics repos each have healthy source-local schemas.
  */
 export async function checkTypeProliferation(
   engine: BrainEngine,
@@ -473,31 +496,36 @@ export async function checkTypeProliferation(
   } catch {
     // Use fallback.
   }
-  const n = await safeCount(
+  const aggregate = await safeCount(
     engine,
     `SELECT COUNT(DISTINCT type) AS count FROM pages WHERE deleted_at IS NULL AND type IS NOT NULL`,
   );
+  const perSource = await safeDistinctTypeCountsBySource(engine);
+  const maxSource = perSource[0] ?? { source_id: 'default', count: aggregate };
   const warn = declared + 5;
   const fail = declared * 2;
-  if (n > fail) {
+  if (maxSource.count > fail) {
     return {
       check: {
         name: 'type_proliferation',
         status: 'fail',
         message:
-          `${n} distinct page types (pack declares ${declared}). ` +
+          `${maxSource.count} distinct page types in source '${maxSource.source_id}' ` +
+          `(aggregate union ${aggregate}; pack declares ${declared}). ` +
           `Run \`gbrain onboard --check --explain\` to preview a pack upgrade ` +
           `or define a custom pack with mapping_rules.`,
       },
       remediations: [],  // pack_upgrade_available check emits the actionable step
     };
   }
-  if (n > warn) {
+  if (maxSource.count > warn) {
     return {
       check: {
         name: 'type_proliferation',
         status: 'warn',
-        message: `${n} distinct page types vs ${declared} declared in pack — consider unification.`,
+        message:
+          `${maxSource.count} distinct page types in source '${maxSource.source_id}' ` +
+          `vs ${declared} declared in pack (aggregate union ${aggregate}) — consider unification.`,
       },
       remediations: [],
     };
@@ -506,7 +534,9 @@ export async function checkTypeProliferation(
     check: {
       name: 'type_proliferation',
       status: 'ok',
-      message: `${n} distinct typed values (pack declares ${declared})`,
+      message:
+        `${maxSource.count} max distinct typed values/source ` +
+        `(aggregate union ${aggregate}; pack declares ${declared})`,
     },
     remediations: [],
   };

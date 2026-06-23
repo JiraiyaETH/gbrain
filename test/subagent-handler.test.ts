@@ -39,6 +39,9 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  await engine.executeRaw('DELETE FROM mcp_spend_reservations');
+  await engine.executeRaw('DELETE FROM mcp_spend_log');
+  await engine.executeRaw('DELETE FROM oauth_clients');
   await engine.executeRaw('DELETE FROM subagent_tool_executions');
   await engine.executeRaw('DELETE FROM subagent_messages');
   await engine.executeRaw('DELETE FROM subagent_rate_leases');
@@ -97,6 +100,18 @@ async function makeCtx(input: unknown): Promise<MinionJobContext> {
     async isActive() { return true; },
     async readInbox() { return []; },
   };
+}
+
+async function seedBudgetClient(clientId: string, capUsd: number | null): Promise<void> {
+  await engine.executeRaw(
+    `INSERT INTO oauth_clients
+       (client_id, client_name, client_secret_hash, scope, grant_types,
+        redirect_uris, token_endpoint_auth_method, budget_usd_per_day, created_at, deleted_at)
+     VALUES ($1, $1, '', 'agent', ARRAY['client_credentials'],
+             ARRAY[]::text[], 'client_secret_post', $2, now(), NULL)
+     ON CONFLICT (client_id) DO UPDATE SET budget_usd_per_day = EXCLUDED.budget_usd_per_day`,
+    [clientId, capUsd],
+  );
 }
 
 // ── Tiny tool registry for tests ────────────────────────────
@@ -453,6 +468,79 @@ describe('subagent handler replay (crash recovery)', () => {
 });
 
 describe('subagent handler lease behavior', () => {
+  test('owned legacy subagent refuses over-budget job before Anthropic call', async () => {
+    await seedBudgetClient('tight-client', 0.01);
+    const client = new FakeMessagesClient([
+      { content: [{ type: 'text', text: 'should not run' }] as any, stop_reason: 'end_turn' },
+    ]);
+    const handler = makeSubagentHandler({
+      engine, client, toolRegistry: [], maxConcurrent: 1, rateLeaseKey: 'k_budget_refuse',
+    });
+    const ctx = await makeCtx({
+      prompt: 'this should be blocked by the DB budget reserve',
+      model: 'anthropic:claude-sonnet-4-6',
+      max_turns: 1,
+      __owner_client_id: 'tight-client',
+    });
+
+    await expect(handler(ctx)).rejects.toThrow(/budget exceeded/i);
+    expect(client.calls.length).toBe(0);
+
+    const reservations = await engine.executeRaw<{ c: string }>(
+      `SELECT count(*)::text AS c FROM mcp_spend_reservations WHERE client_id = 'tight-client'`,
+    );
+    expect(Number(reservations[0]!.c)).toBe(0);
+  });
+
+  test('owned legacy subagent settles actual usage into mcp_spend_log', async () => {
+    await seedBudgetClient('metered-client', 1.00);
+    const client = new FakeMessagesClient([
+      {
+        content: [{ type: 'text', text: 'metered ok' }] as any,
+        stop_reason: 'end_turn',
+        usage: {
+          input_tokens: 1000,
+          output_tokens: 2000,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        } as any,
+      },
+    ]);
+    const handler = makeSubagentHandler({
+      engine, client, toolRegistry: [], maxConcurrent: 1, rateLeaseKey: 'k_budget_settle',
+    });
+    const ctx = await makeCtx({
+      prompt: 'charge this',
+      model: 'anthropic:claude-sonnet-4-6',
+      max_turns: 1,
+      __owner_client_id: 'metered-client',
+    });
+
+    const result = await handler(ctx);
+    expect(result.result).toBe('metered ok');
+    expect(client.calls.length).toBe(1);
+
+    const reservations = await engine.executeRaw<{ status: string; actual_cents: string }>(
+      `SELECT status, actual_cents::text AS actual_cents
+         FROM mcp_spend_reservations
+        WHERE client_id = 'metered-client'`,
+    );
+    expect(reservations.length).toBe(1);
+    expect(reservations[0]!.status).toBe('settled');
+    expect(parseFloat(reservations[0]!.actual_cents)).toBeCloseTo(3.3, 3);
+
+    const spendRows = await engine.executeRaw<{ spend_cents: string; operation: string; provider: string; model: string }>(
+      `SELECT spend_cents::text AS spend_cents, operation, provider, model
+         FROM mcp_spend_log
+        WHERE client_id = 'metered-client'`,
+    );
+    expect(spendRows.length).toBe(1);
+    expect(parseFloat(spendRows[0]!.spend_cents)).toBeCloseTo(3.3, 3);
+    expect(spendRows[0]!.operation).toBe('subagent_loop');
+    expect(spendRows[0]!.provider).toBe('anthropic');
+    expect(spendRows[0]!.model).toBe('anthropic:claude-sonnet-4-6');
+  });
+
   test('acquires + releases a lease around the LLM call', async () => {
     const client = new FakeMessagesClient([
       { content: [{ type: 'text', text: 'ok' }] as any, stop_reason: 'end_turn' },
@@ -592,6 +680,52 @@ describe('makeSubagentHandler default client construction', () => {
     const result = await handler(ctx);
 
     expect(calls.length).toBe(1);
+    expect(result.stop_reason).toBe('end_turn');
+    expect(result.result).toBe('ok');
+  });
+
+  test('default Anthropic client receives anthropic_api_key from config file plane', async () => {
+    let constructorOptions: unknown;
+    const calls: Anthropic.MessageCreateParamsNonStreaming[] = [];
+    const fakeSdk = {
+      messages: {
+        async create(
+          params: Anthropic.MessageCreateParamsNonStreaming,
+        ): Promise<Anthropic.Message> {
+          calls.push(params);
+          return {
+            id: 'msg_config_key',
+            type: 'message',
+            role: 'assistant',
+            model: params.model,
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            content: [{ type: 'text', text: 'ok' }],
+            usage: {
+              input_tokens: 1,
+              output_tokens: 1,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
+          } as unknown as Anthropic.Message;
+        },
+      },
+    } as unknown as Anthropic;
+
+    const handler = makeSubagentHandler({
+      engine,
+      config: { engine: 'pglite', anthropic_api_key: 'sk-config-plane' } as any,
+      makeAnthropic: ((options: unknown) => {
+        constructorOptions = options;
+        return fakeSdk;
+      }) as any,
+      toolRegistry: [],
+    });
+    const ctx = await makeCtx({ prompt: 'hello' });
+    const result = await handler(ctx);
+
+    expect(calls.length).toBe(1);
+    expect(constructorOptions).toEqual({ apiKey: 'sk-config-plane' });
     expect(result.stop_reason).toBe('end_turn');
     expect(result.result).toBe('ok');
   });

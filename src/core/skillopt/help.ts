@@ -2,6 +2,11 @@
  * gbrain skillopt --help text.
  */
 
+import {
+  DEFAULT_SKILLOPT_BRAIN_WIDE_MAX_COST_USD,
+  DEFAULT_SKILLOPT_MAX_COST_USD,
+} from './defaults.ts';
+
 export const SKILLOPT_HELP_TEXT = `gbrain skillopt <skill-name> [flags]
 
 Self-evolving skill optimization. Treats SKILL.md as the trainable parameters
@@ -47,7 +52,7 @@ Modes:
   --json                        Machine-readable stdout
 
 Safety:
-  --max-cost-usd N              Hard cap. Default 5.00. Preflight refuses
+  --max-cost-usd N              Hard cap. Default ${DEFAULT_SKILLOPT_MAX_COST_USD.toFixed(2)}. Preflight refuses
                                 if estimate exceeds.
   --max-runtime-min N           Wall-clock cap. Default 30
   --force                       Bypass dirty-working-tree refusal (rare)
@@ -56,8 +61,8 @@ Safety:
 Batch + fleet + background:
   --all                         Optimize every skill with a benchmark
                                 (per-skill cap = --max-cost-usd; brain-wide
-                                cap = --brain-wide-max-cost-usd, default $10)
-  --brain-wide-max-cost-usd N   Cumulative ceiling for --all (default 10.00)
+                                cap = --brain-wide-max-cost-usd, default $${DEFAULT_SKILLOPT_BRAIN_WIDE_MAX_COST_USD.toFixed(2)})
+  --brain-wide-max-cost-usd N   Cumulative ceiling for --all (default ${DEFAULT_SKILLOPT_BRAIN_WIDE_MAX_COST_USD.toFixed(2)})
   --target-models a,b,c         Fleet mode: optimize ONCE per model. Always
                                 runs no-mutate; per-model receipts under
                                 skills/<name>/skillopt/fleet/<slug>/

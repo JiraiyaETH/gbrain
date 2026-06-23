@@ -11,9 +11,11 @@ triggers:
 mutating: true
 writes_pages: true
 writes_to:
-  - originals/
-  - personal/
   - ideas/
+  - reflections/
+  - people/
+  - companies/
+  - media/
 ---
 
 # archive-crawler — The Universal Archivist
@@ -137,15 +139,15 @@ Work through folders in priority order:
 When an item is worth keeping, file it by **primary subject** per
 `_brain-filing-rules.md`:
 
-- User's own writing / ideas / origin-story content → `originals/<slug>.md`
-- Reflections / personal-life content → `personal/<slug>.md`
+- User's own writing / ideas / origin-story content → `ideas/<slug>.md`
+- Reflections / personal-life content → `reflections/<slug>.md`
 - Product / business ideas → `ideas/<slug>.md`
 - Letters or threads about a specific person → `people/<person>/timeline`
-  back-link plus the letter at `personal/<slug>.md` or `originals/<slug>.md`
+  back-link plus the letter at `reflections/<slug>.md` or `ideas/<slug>.md`
 
 **The skill is schema-generic.** It does NOT bake in any specific
-era-folder structure (e.g., `originals/archive/` for pre-2003,
-`originals/yc-era/` for post-2019, etc.). The user's filing rules from
+era-folder structure (e.g., `ideas/archive/` for pre-2003,
+`ideas/yc-era/` for post-2019, etc.). The user's filing rules from
 `_brain-filing-rules.json` are read at runtime; the agent decides per-page
 where content lands within those sanctioned directories.
 
@@ -286,8 +288,8 @@ scan_paths: ["paths from gbrain.yml"]
 
 - ❌ Running without `archive-crawler.scan_paths:` set. Hard refusal.
   This is the safety contract — never bypass.
-- ❌ Hardcoding era-specific filing paths (e.g., `originals/archive/`,
-  `originals/yc-era/`). Read filing rules at runtime instead.
+- ❌ Hardcoding era-specific filing paths (e.g., `ideas/archive/`,
+  `ideas/yc-era/`). Read filing rules at runtime instead.
 - ❌ Re-showing items already marked in the manifest. The user's time
   is the scarcest resource.
 - ❌ Paraphrasing reactions. Exact words only.

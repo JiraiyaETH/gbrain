@@ -115,8 +115,9 @@ mock.module('../../src/commands/orphans.ts', () => ({
 }));
 
 // Import after mocks.
-const { runCycle, ALL_PHASES } = await import('../../src/core/cycle.ts');
+const { runCycle, ALL_PHASES, __testing } = await import('../../src/core/cycle.ts');
 const { PGLiteEngine } = await import('../../src/core/pglite-engine.ts');
+const { gbrainPath } = await import('../../src/core/config.ts');
 
 // Shared PGLite engine per describe block. Each block does its own
 // beforeAll/afterAll (below). `truncateCycleLocks` clears the cycle
@@ -289,10 +290,11 @@ describe('runCycle — cycle_already_running skip', () => {
 // ─── Engine null path ─────────────────────────────────────────────
 
 describe('runCycle — engine = null (filesystem-only mode)', () => {
-  const lockFile = require('path').join(require('os').homedir(), '.gbrain', 'cycle.lock');
+  const lockFile = () => gbrainPath('cycle.lock');
 
   afterEach(() => {
-    if (existsSync(lockFile)) { try { unlinkSync(lockFile); } catch { /* */ } }
+    const file = lockFile();
+    if (existsSync(file)) { try { unlinkSync(file); } catch { /* */ } }
   });
 
   test('filesystem phases still run when engine is null', async () => {
@@ -320,8 +322,9 @@ describe('runCycle — engine = null (filesystem-only mode)', () => {
     // returns null → runCycle returns skipped/cycle_already_running.
     const { writeFileSync, mkdirSync } = require('fs');
     const path = require('path');
-    mkdirSync(path.dirname(lockFile), { recursive: true });
-    writeFileSync(lockFile, `1\n${new Date().toISOString()}\n`);
+    const file = lockFile();
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, `1\n${new Date().toISOString()}\n`);
 
     const report = await runCycle(null, { brainDir: '/tmp/brain' });
     expect(report.status).toBe('skipped');
@@ -365,6 +368,85 @@ describe('runCycle — status derivation', () => {
     expect(report).toHaveProperty('brain_dir');
     expect(report).toHaveProperty('phases');
     expect(report).toHaveProperty('totals');
+  });
+
+  test('disabled phases derive partial rather than clean', () => {
+    const phase = {
+      phase: 'propose_takes',
+      status: 'disabled',
+      duration_ms: 0,
+      summary: 'cycle.propose_takes.enabled=false (default OFF)',
+      details: { reason: 'disabled', required: true },
+    } as any;
+
+    expect(__testing.deriveStatus([phase], __testing.extractTotals([phase]))).toBe('partial');
+  });
+
+  test('completed-but-zero-output phases normalize to empty and derive partial', () => {
+    const phase = {
+      phase: 'synthesize',
+      status: 'ok',
+      duration_ms: 0,
+      summary: '1 transcript(s) synthesized',
+      details: { transcripts_processed: 1, pages_written: 0 },
+    } as any;
+
+    const normalized = __testing.normalizePhaseResult(phase);
+    expect(normalized.status).toBe('empty');
+    expect(normalized.details.reason).toBe('empty_output');
+    expect(__testing.deriveStatus([normalized], __testing.extractTotals([normalized]))).toBe('partial');
+  });
+
+  test('skipped, disabled, empty, and degraded states stay distinct', () => {
+    const skipped = __testing.normalizePhaseResult({
+      phase: 'extract_atoms',
+      status: 'skipped',
+      duration_ms: 0,
+      summary: 'extract_atoms: no transcripts or pages to process',
+      details: { reason: 'no_work' },
+    } as any);
+    const disabled = __testing.normalizePhaseResult({
+      phase: 'grade_takes',
+      status: 'skipped',
+      duration_ms: 0,
+      summary: 'cycle.grade_takes.enabled=false (default OFF)',
+      details: { reason: 'disabled' },
+    } as any, true);
+    const empty = __testing.normalizePhaseResult({
+      phase: 'patterns',
+      status: 'ok',
+      duration_ms: 0,
+      summary: '0 pattern pages written',
+      details: { reflections_considered: 3, patterns_written: 0 },
+    } as any);
+    const degraded = __testing.normalizePhaseResult({
+      phase: 'patterns',
+      status: 'skipped',
+      duration_ms: 0,
+      summary: 'ANTHROPIC_API_KEY unset; pattern detection skipped',
+      details: { reason: 'no_api_key' },
+    } as any);
+
+    expect(skipped.status).toBe('skipped');
+    expect(disabled.status).toBe('disabled');
+    expect(empty.status).toBe('empty');
+    expect(degraded.status).toBe('degraded');
+    expect(__testing.deriveStatus([skipped], __testing.extractTotals([skipped]))).toBe('clean');
+    expect(__testing.deriveStatus([disabled, empty, degraded], __testing.extractTotals([disabled, empty, degraded]))).toBe('partial');
+  });
+
+  test('commit push failure normalizes to degraded and derives partial', () => {
+    const phase = __testing.normalizePhaseResult({
+      phase: 'commit',
+      status: 'ok',
+      duration_ms: 0,
+      summary: 'committed abc123; push skipped',
+      details: { committed: true, pushed: false, push_error: 'origin missing' },
+    } as any);
+
+    expect(phase.status).toBe('degraded');
+    expect(phase.details.reason).toBe('push_failed');
+    expect(__testing.deriveStatus([phase], __testing.extractTotals([phase]))).toBe('partial');
   });
 });
 
@@ -431,12 +513,13 @@ describe('runCycle — paid calibration phase enabled gates', () => {
     await disablePaidCalibrationPhases();
   });
 
-  test('propose_takes is skipped by default unless DB config enables it', async () => {
+  test('propose_takes is disabled by default unless DB config enables it', async () => {
     const report = await runCycle(sharedEngine, { brainDir: '/tmp/brain', phases: ['propose_takes'] });
     expect(report.phases).toHaveLength(1);
     expect(report.phases[0].phase).toBe('propose_takes');
-    expect(report.phases[0].status).toBe('skipped');
+    expect(report.phases[0].status).toBe('disabled');
     expect(report.phases[0].details.reason).toBe('disabled');
+    expect(report.status).toBe('partial');
 
     await sharedEngine.setConfig('cycle.propose_takes.enabled', 'true');
     const enabledReport = await runCycle(sharedEngine, { brainDir: '/tmp/brain', phases: ['propose_takes'] });
@@ -444,15 +527,16 @@ describe('runCycle — paid calibration phase enabled gates', () => {
     expect(enabledReport.phases[0].details.reason).not.toBe('disabled');
   });
 
-  test('grade_takes and calibration_profile carry default-off skip receipts', async () => {
+  test('grade_takes and calibration_profile carry default-off disabled receipts', async () => {
     const report = await runCycle(sharedEngine, {
       brainDir: '/tmp/brain',
       phases: ['grade_takes', 'calibration_profile'],
     });
     expect(report.phases.map((p: any) => [p.phase, p.status, p.details.reason])).toEqual([
-      ['grade_takes', 'skipped', 'disabled'],
-      ['calibration_profile', 'skipped', 'disabled'],
+      ['grade_takes', 'disabled', 'disabled'],
+      ['calibration_profile', 'disabled', 'disabled'],
     ]);
+    expect(report.status).toBe('partial');
   });
 });
 

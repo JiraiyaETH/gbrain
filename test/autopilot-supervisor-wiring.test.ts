@@ -61,11 +61,12 @@ describe('autopilot.ts ↔ ChildWorkerSupervisor wiring', () => {
     expect(AUTOPILOT_SRC).not.toContain("'--max-rss', '2048'");
   });
 
-  it("constructs ChildWorkerSupervisor with maxCrashes: 5", () => {
+  it("constructs ChildWorkerSupervisor with an env-configurable maxCrashes defaulting to 5", () => {
     // Matches the legacy `crashCount >= 5` give-up rule from the inline
-    // loop. The shared core uses this to decide when to fire
-    // onMaxCrashesExceeded → autopilot's shutdown('max_crashes').
-    expect(AUTOPILOT_SRC).toMatch(/maxCrashes:\s*5\b/);
+    // loop by default, while allowing host-specific daemon launchers to raise
+    // the threshold for noisy but recoverable network/DNS bursts.
+    expect(AUTOPILOT_SRC).toContain('GBRAIN_AUTOPILOT_MAX_WORKER_CRASHES');
+    expect(AUTOPILOT_SRC).toMatch(/maxCrashes:\s*Math\.max\(1,[\s\S]{0,120}\|\|\s*5\)/);
   });
 
   it('routes onMaxCrashesExceeded to autopilot.shutdown (not process.exit directly)', () => {

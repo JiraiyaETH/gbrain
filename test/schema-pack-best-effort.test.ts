@@ -31,9 +31,12 @@ afterEach(() => {
   try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* swallow */ }
 });
 
-function fakeCtx(remote = false): OperationContext {
+function fakeCtx(
+  remote = false,
+  engine: OperationContext['engine'] = null as never,
+): OperationContext {
   return {
-    engine: null as never,
+    engine,
     config: {},
     logger: { info: () => {}, warn: () => {}, error: () => {} } as never,
     dryRun: false,
@@ -69,6 +72,27 @@ describe('loadActivePackBestEffort', () => {
     await withEnv({ GBRAIN_HOME: tmpDir, GBRAIN_SCHEMA_PACK: 'corrupt-pack' }, async () => {
       const result = await loadActivePackBestEffort(fakeCtx());
       expect(result).toBeNull();
+    });
+  });
+
+  it('honors DB schema_pack above home config when engine is available', async () => {
+    const homeConfigDir = join(tmpDir, '.gbrain');
+    mkdirSync(homeConfigDir, { recursive: true });
+    writeFileSync(
+      join(homeConfigDir, 'config.json'),
+      JSON.stringify({ engine: 'pglite', schema_pack: 'gbrain-base-v2' }, null, 2),
+      'utf-8',
+    );
+    const engine = {
+      async getConfig(key: string) {
+        return key === 'schema_pack' ? 'gbrain-creator' : null;
+      },
+    } as OperationContext['engine'];
+
+    await withEnv({ GBRAIN_HOME: tmpDir, GBRAIN_SCHEMA_PACK: undefined }, async () => {
+      const result = await loadActivePackBestEffort(fakeCtx(false, engine));
+      expect(result).not.toBeNull();
+      expect(result?.manifest.name).toBe('gbrain-creator');
     });
   });
 

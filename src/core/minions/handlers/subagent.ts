@@ -48,16 +48,24 @@ import {
   logSubagentHeartbeat,
 } from './subagent-audit.ts';
 import { resolveModel, isAnthropicProvider, TIER_DEFAULTS } from '../../model-config.ts';
+import { canonicalLookup } from '../../model-pricing.ts';
 import { buildSystemPrompt, DEFAULT_SUBAGENT_SYSTEM } from '../system-prompt.ts';
 import { toolLoop as gatewayToolLoop } from '../../ai/gateway.ts';
 import type { ChatToolDef, ChatMessage, ChatBlock, ChatResult, ToolHandler } from '../../ai/gateway.ts';
 import { classifyCapabilities } from '../../ai/capabilities.ts';
+import {
+  reserve as reserveBudget,
+  settle as settleBudget,
+  getClientDailyCapCents,
+  BudgetExceededError,
+} from '../budget-meter.ts';
 import { randomUUIDv7 } from 'bun';
 
 // ── Defaults ────────────────────────────────────────────────
 
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_MAX_TURNS = 20;
+const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_RATE_KEY = 'anthropic:messages';
 
 /**
@@ -106,12 +114,13 @@ export interface SubagentDeps {
   /** Anthropic client. Defaults to the SDK-constructed client. */
   client?: MessagesClient;
   /**
-   * Anthropic SDK constructor. Defaults to `() => new Anthropic()`.
+   * Anthropic SDK constructor. Defaults to passing file/env config through to
+   * `new Anthropic({ apiKey })` when available.
    * Overridable in tests so the factory default-client branch is
    * exercisable without an ANTHROPIC_API_KEY or a real API call.
    * When `deps.client` is provided, this is unused.
    */
-  makeAnthropic?: () => Anthropic;
+  makeAnthropic?: (options?: { apiKey?: string }) => Anthropic;
   /** Config (MCP, brain, etc.). Defaults to loadConfig(). */
   config?: GBrainConfig;
   /** Rate-lease key. Defaults to `anthropic:messages`. */
@@ -160,14 +169,15 @@ interface PersistedToolExec {
  */
 export function makeSubagentHandler(deps: SubagentDeps) {
   const engine = deps.engine;
+  const config = deps.config ?? loadConfig() ?? ({ engine: 'postgres' } as GBrainConfig);
   // sdk.messages IS the MessagesClient-shaped object. The v0.16.0 bug was
   // casting new Anthropic() (top level) to MessagesClient, but .create()
   // lives at sdk.messages.create. Assigning sdk.messages directly gets the
   // right object; JS method-call semantics preserve `this` at the call
   // site (subagent.ts invokes client.create(...) with client === sdk.messages).
-  const makeAnthropic = deps.makeAnthropic ?? (() => new Anthropic());
-  const client: MessagesClient = deps.client ?? makeAnthropic().messages;
-  const config = deps.config ?? loadConfig() ?? ({ engine: 'postgres' } as GBrainConfig);
+  const makeAnthropic = deps.makeAnthropic ?? ((options?: { apiKey?: string }) => new Anthropic(options));
+  const client: MessagesClient = deps.client
+    ?? makeAnthropic(config.anthropic_api_key ? { apiKey: config.anthropic_api_key } : undefined).messages;
   const rateLeaseKey = deps.rateLeaseKey ?? DEFAULT_RATE_KEY;
   const maxConcurrent = deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
   const leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
@@ -245,6 +255,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       engine,
       config,
       brainId: data.brain_id,
+      sourceId: data.source_id,
       allowedSlugPrefixes: data.allowed_slug_prefixes,
     });
     const toolDefs = data.allowed_tools && data.allowed_tools.length > 0
@@ -422,125 +433,118 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // ── Main loop ───────────────────────────────────────────
     let stopReason: SubagentStopReason = 'error';
     let finalText = '';
+    const runUsage = { in: 0, out: 0, cache_read: 0, cache_create: 0 };
+    const budgetReservation = await reserveSubagentBudget({
+      engine,
+      jobId: ctx.id,
+      data,
+      model,
+      systemPrompt,
+      toolDefs,
+      maxTurns,
+      maxTokens: DEFAULT_MAX_TOKENS,
+    });
 
-    while (true) {
-      if (assistantTurns >= maxTurns) {
-        stopReason = 'max_turns';
-        break;
-      }
-      if (ctx.signal.aborted || ctx.shutdownSignal.aborted) {
-        stopReason = 'error';
-        throw new Error('subagent aborted before turn');
-      }
-
-      // 1. Acquire rate lease for the outbound call.
-      //
-      // A1 ORDERING (v0.37.x budget cathedral):
-      //
-      //   +----------------------------------+
-      //   | gateway.chat() inside subagent   |
-      //   +-----+----------------------------+
-      //         |
-      //   1. getCurrentBudgetTracker()?.reserve(...)
-      //         |  (runs via the gateway's AsyncLocalStorage scope,
-      //         |   set by the upstream caller of the subagent.
-      //         |   On BudgetExhausted: throw BEFORE we touch the lease.)
-      //         v
-      //   2. acquireLease(...)  <-- the line below
-      //         |  (only attempted if the budget gate passed)
-      //         v
-      //   3. provider HTTP call
-      //         |
-      //         v
-      //   4. tracker.record(actual usage)
-      //
-      // The handler body intentionally does NOT thread `BudgetTracker`
-      // explicitly. Gateway-layer composition (TX5) handles it. The
-      // ordering is load-bearing: a budget throw must NOT consume a
-      // lease slot, because the lease is the rate-limit pacer for the
-      // entire fleet.
-      const lease = await acquireLease(engine, rateLeaseKey, ctx.id, maxConcurrent, { ttlMs: leaseTtlMs });
-      if (!lease.acquired) {
-        // No slots — treat as a renewable error so the worker re-claims
-        // the job later. Don't fail terminally.
-        throw new RateLeaseUnavailableError(rateLeaseKey, lease.activeCount, lease.maxConcurrent);
-      }
-
-      let assistantMsg: Anthropic.Message;
-      const turnIdx = assistantTurns;
-      const t0 = Date.now();
-      logSubagentHeartbeat({ job_id: ctx.id, event: 'llm_call_started', turn_idx: turnIdx });
-
-      // Renewal is short-lived; for single-call turns the initial TTL
-      // covers the whole request. A mid-call renewal loop would add
-      // complexity; for v0.15 we lean on the 120s TTL + abort-on-signal.
-      try {
-        const params: Anthropic.MessageCreateParamsNonStreaming = {
-          // v0.41 Bug 3: strip `provider:` prefix at the SDK call site only.
-          // `model` stays qualified everywhere else (persistence, recipe
-          // lookup at recipeIdFromModel(), capability gate).
-          model: stripProviderPrefix(model),
-          max_tokens: 4096,
-          system: [
-            { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
-          ] as any,
-          messages: anthroMessages,
-          ...(toolDefs.length > 0
-            ? {
-                tools: toolDefs.map((t, i) => {
-                  const def: any = {
-                    name: t.name,
-                    description: t.description,
-                    input_schema: t.input_schema,
-                  };
-                  // Cache only the last tool def — Anthropic treats cache_control
-                  // as "cache everything up to and including this block".
-                  if (i === toolDefs.length - 1) def.cache_control = { type: 'ephemeral' };
-                  return def;
-                }),
-              }
-            : {}),
-        };
-
-        const combinedSignal = mergeSignals(ctx.signal, ctx.shutdownSignal);
-        assistantMsg = await client.create(params, { signal: combinedSignal });
-      } catch (err) {
-        // Release lease eagerly on error so we don't starve capacity.
-        await releaseLease(engine, lease.leaseId!).catch(() => {});
-        // Terminal classification: a 400 "prompt is too long" from Anthropic
-        // is unrecoverable — retrying with the same prompt will always fail.
-        // Convert to UnrecoverableError so the worker routes the job
-        // straight to `dead`, bypassing max_stalled retries (the v0.30.x
-        // dream-cycle queue-clog the chunking work was built to prevent).
-        if (isPromptTooLongError(err)) {
-          const origMsg = err instanceof Error ? err.message : String(err);
-          throw new UnrecoverableError(`prompt_too_long: ${origMsg}`);
+    try {
+      while (true) {
+        if (assistantTurns >= maxTurns) {
+          stopReason = 'max_turns';
+          break;
         }
-        throw err;
-      }
+        if (ctx.signal.aborted || ctx.shutdownSignal.aborted) {
+          stopReason = 'error';
+          throw new Error('subagent aborted before turn');
+        }
 
-      // 2. Release lease as soon as the call returns. Tool execution runs
-      //    outside the lease — tool calls use their own capacity.
-      await releaseLease(engine, lease.leaseId!).catch(() => {});
+        // 1. Acquire rate lease for the outbound call. The owner-client DB
+        // budget reservation above runs before this point, so over-cap jobs
+        // refuse before consuming a lease slot or touching a provider.
+        const lease = await acquireLease(engine, rateLeaseKey, ctx.id, maxConcurrent, { ttlMs: leaseTtlMs });
+        if (!lease.acquired) {
+          // No slots — treat as a renewable error so the worker re-claims
+          // the job later. Don't fail terminally.
+          throw new RateLeaseUnavailableError(rateLeaseKey, lease.activeCount, lease.maxConcurrent);
+        }
 
-      const ms = Date.now() - t0;
-      const inTokens = assistantMsg.usage?.input_tokens ?? 0;
-      const outTokens = assistantMsg.usage?.output_tokens ?? 0;
-      const cacheRead = (assistantMsg.usage as any)?.cache_read_input_tokens ?? 0;
-      const cacheCreate = (assistantMsg.usage as any)?.cache_creation_input_tokens ?? 0;
+        let assistantMsg: Anthropic.Message;
+        const turnIdx = assistantTurns;
+        const t0 = Date.now();
+        logSubagentHeartbeat({ job_id: ctx.id, event: 'llm_call_started', turn_idx: turnIdx });
 
-      tokenTotals.in += inTokens;
-      tokenTotals.out += outTokens;
-      tokenTotals.cache_read += cacheRead;
-      tokenTotals.cache_create += cacheCreate;
+        // Renewal is short-lived; for single-call turns the initial TTL
+        // covers the whole request. A mid-call renewal loop would add
+        // complexity; for v0.15 we lean on the 120s TTL + abort-on-signal.
+        try {
+          const params: Anthropic.MessageCreateParamsNonStreaming = {
+            // v0.41 Bug 3: strip `provider:` prefix at the SDK call site only.
+            // `model` stays qualified everywhere else (persistence, recipe
+            // lookup at recipeIdFromModel(), capability gate).
+            model: stripProviderPrefix(model),
+            max_tokens: DEFAULT_MAX_TOKENS,
+            system: [
+              { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+            ] as any,
+            messages: anthroMessages,
+            ...(toolDefs.length > 0
+              ? {
+                  tools: toolDefs.map((t, i) => {
+                    const def: any = {
+                      name: t.name,
+                      description: t.description,
+                      input_schema: t.input_schema,
+                    };
+                    // Cache only the last tool def — Anthropic treats cache_control
+                    // as "cache everything up to and including this block".
+                    if (i === toolDefs.length - 1) def.cache_control = { type: 'ephemeral' };
+                    return def;
+                  }),
+                }
+              : {}),
+          };
 
-      logSubagentHeartbeat({
-        job_id: ctx.id,
-        event: 'llm_call_completed',
-        turn_idx: turnIdx,
-        ms_elapsed: ms,
-        tokens: { in: inTokens, out: outTokens, cache_read: cacheRead, cache_create: cacheCreate },
-      });
+          const combinedSignal = mergeSignals(ctx.signal, ctx.shutdownSignal);
+          assistantMsg = await client.create(params, { signal: combinedSignal });
+        } catch (err) {
+          // Release lease eagerly on error so we don't starve capacity.
+          await releaseLease(engine, lease.leaseId!).catch(() => {});
+          // Terminal classification: a 400 "prompt is too long" from Anthropic
+          // is unrecoverable — retrying with the same prompt will always fail.
+          // Convert to UnrecoverableError so the worker routes the job
+          // straight to `dead`, bypassing max_stalled retries (the v0.30.x
+          // dream-cycle queue-clog the chunking work was built to prevent).
+          if (isPromptTooLongError(err)) {
+            const origMsg = err instanceof Error ? err.message : String(err);
+            throw new UnrecoverableError(`prompt_too_long: ${origMsg}`);
+          }
+          throw err;
+        }
+
+        // 2. Release lease as soon as the call returns. Tool execution runs
+        //    outside the lease — tool calls use their own capacity.
+        await releaseLease(engine, lease.leaseId!).catch(() => {});
+
+        const ms = Date.now() - t0;
+        const inTokens = assistantMsg.usage?.input_tokens ?? 0;
+        const outTokens = assistantMsg.usage?.output_tokens ?? 0;
+        const cacheRead = (assistantMsg.usage as any)?.cache_read_input_tokens ?? 0;
+        const cacheCreate = (assistantMsg.usage as any)?.cache_creation_input_tokens ?? 0;
+
+        tokenTotals.in += inTokens;
+        tokenTotals.out += outTokens;
+        tokenTotals.cache_read += cacheRead;
+        tokenTotals.cache_create += cacheCreate;
+        runUsage.in += inTokens;
+        runUsage.out += outTokens;
+        runUsage.cache_read += cacheRead;
+        runUsage.cache_create += cacheCreate;
+
+        logSubagentHeartbeat({
+          job_id: ctx.id,
+          event: 'llm_call_completed',
+          turn_idx: turnIdx,
+          ms_elapsed: ms,
+          tokens: { in: inTokens, out: outTokens, cache_read: cacheRead, cache_create: cacheCreate },
+        });
 
       // Update job-level token rollup (best-effort; may throw if lock lost).
       await ctx.updateTokens({
@@ -702,12 +706,23 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       anthroMessages.push({ role: 'user', content: toolResults as any });
     }
 
-    return {
-      result: finalText,
-      turns_count: assistantTurns,
-      stop_reason: stopReason,
-      tokens: tokenTotals,
-    };
+      const result: SubagentResult = {
+        result: finalText,
+        turns_count: assistantTurns,
+        stop_reason: stopReason,
+        tokens: tokenTotals,
+      };
+      await settleSubagentBudget(engine, budgetReservation, runUsage, false);
+      return result;
+    } catch (err) {
+      await settleSubagentBudget(
+        engine,
+        budgetReservation,
+        runUsage,
+        !(err instanceof RateLeaseUnavailableError),
+      );
+      throw err;
+    }
   };
 }
 
@@ -819,93 +834,110 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     } as any);
   };
 
-  // Run the loop.
-  const result = await gatewayToolLoop({
+  const budgetReservation = await reserveSubagentBudget({
+    engine,
+    jobId: ctx.id,
+    data,
     model,
-    system: systemPrompt,
-    initialMessages,
-    tools: chatTools,
-    toolHandlers,
+    systemPrompt,
+    toolDefs,
     maxTurns,
-    abortSignal: ctx.signal,
-    cacheSystem,
-    // ALWAYS pass replayState (even on fresh runs) so the gateway loop's
-    // messageIdx counter starts at `nextMessageIdx` (1 on fresh, after the
-    // seed user write above). Without this, the loop defaults to messageIdx=0
-    // on fresh runs and the first onAssistantTurn callback tries to write
-    // role='assistant' at idx 0, colliding with the seed user message at idx 0
-    // (unique constraint on (job_id, message_idx)). Pinned by
-    // test/e2e/subagent-gateway-path.test.ts ("happy path 1-turn" + "write-
-    // ordering invariant").
-    replayState: {
-      priorMessages: priorChatMessages,
-      priorTools: priorToolsByStableKey,
-      nextTurnIdx: priorChatMessages.filter(m => m.role === 'assistant').length,
-      nextMessageIdx,
-    },
-    onAssistantTurn: async (turnIdx, messageIdx, blocks, usage, modelStr) => {
-      // Convert ChatBlock[] back to ContentBlock-shaped JSONB for persistence.
-      // Storing the gateway's provider-neutral shape is the v2 content_blocks
-      // contract; the D5 shim handles legacy reads from v1 rows.
-      await persistMessage(engine, ctx.id, {
-        message_idx: messageIdx,
-        role: 'assistant',
-        content_blocks: blocks as unknown as ContentBlock[],
-        tokens_in: usage.input_tokens,
-        tokens_out: usage.output_tokens,
-        tokens_cache_read: usage.cache_read_tokens,
-        tokens_cache_create: usage.cache_creation_tokens,
-        model: modelStr,
-      });
-      await ctx.updateTokens({
-        input: usage.input_tokens,
-        output: usage.output_tokens,
-        cache_read: usage.cache_read_tokens,
-      });
-      heartbeat('llm_call_completed', { turn_idx: turnIdx, tokens: usage });
-    },
-    onToolCallStart: async (turnIdx, messageIdx, ordinal, toolName, input, providerToolCallId) => {
-      // CRITICAL — read back the canonical gbrain_tool_use_id from RETURNING,
-      // NOT the locally-generated UUID. On crash-replay the (job_id,
-      // message_idx, ordinal) row already exists with the ORIGINAL UUID from
-      // the pre-crash run; the ON CONFLICT DO UPDATE keeps it. If we
-      // returned the freshly-generated `candidateId` instead, the gateway
-      // loop's `replayState.priorTools.get(stableKey)` lookup would miss
-      // because priorTools is keyed by the original UUID — the short-
-      // circuit silently breaks and the tool re-executes. Pinned by
-      // test/e2e/subagent-crash-replay-multi-provider.test.ts.
-      const candidateId = randomUUIDv7();
-      const rows = await engine.executeRaw<{ gbrain_tool_use_id: string }>(
-        `INSERT INTO subagent_tool_executions
-           (job_id, message_idx, tool_use_id, tool_name, input, status, schema_version, ordinal, gbrain_tool_use_id, provider_id)
-         VALUES ($1, $2, $3, $4, $5::jsonb, 'pending', 2, $6, $7, $8)
-         ON CONFLICT (job_id, message_idx, ordinal) DO UPDATE
-           SET status = subagent_tool_executions.status
-         RETURNING gbrain_tool_use_id::text AS gbrain_tool_use_id`,
-        [ctx.id, messageIdx, providerToolCallId, toolName, JSON.stringify(input ?? null), ordinal, candidateId, recipeIdFromModel(model)],
-      );
-      const gbrainToolUseId = rows[0]?.gbrain_tool_use_id ?? candidateId;
-      heartbeat('tool_called', { turn_idx: turnIdx, tool_name: toolName });
-      return { gbrainToolUseId };
-    },
-    onToolCallComplete: async (gbrainToolUseId, output) => {
-      await engine.executeRaw(
-        `UPDATE subagent_tool_executions
-           SET status = 'complete', output = $1::jsonb, ended_at = now()
-         WHERE gbrain_tool_use_id::text = $2`,
-        [JSON.stringify(output ?? null), gbrainToolUseId],
-      );
-    },
-    onToolCallFailed: async (gbrainToolUseId, errorMsg) => {
-      await engine.executeRaw(
-        `UPDATE subagent_tool_executions
-           SET status = 'failed', error = $1, ended_at = now()
-         WHERE gbrain_tool_use_id::text = $2`,
-        [errorMsg, gbrainToolUseId],
-      );
-    },
-    onHeartbeat: heartbeat,
+    maxTokens: DEFAULT_MAX_TOKENS,
   });
+
+  let result: Awaited<ReturnType<typeof gatewayToolLoop>>;
+  try {
+    // Run the loop.
+    result = await gatewayToolLoop({
+      model,
+      system: systemPrompt,
+      initialMessages,
+      tools: chatTools,
+      toolHandlers,
+      maxTurns,
+      abortSignal: ctx.signal,
+      cacheSystem,
+      // ALWAYS pass replayState (even on fresh runs) so the gateway loop's
+      // messageIdx counter starts at `nextMessageIdx` (1 on fresh, after the
+      // seed user write above). Without this, the loop defaults to messageIdx=0
+      // on fresh runs and the first onAssistantTurn callback tries to write
+      // role='assistant' at idx 0, colliding with the seed user message at idx 0
+      // (unique constraint on (job_id, message_idx)). Pinned by
+      // test/e2e/subagent-gateway-path.test.ts ("happy path 1-turn" + "write-
+      // ordering invariant").
+      replayState: {
+        priorMessages: priorChatMessages,
+        priorTools: priorToolsByStableKey,
+        nextTurnIdx: priorChatMessages.filter(m => m.role === 'assistant').length,
+        nextMessageIdx,
+      },
+      onAssistantTurn: async (turnIdx, messageIdx, blocks, usage, modelStr) => {
+        // Convert ChatBlock[] back to ContentBlock-shaped JSONB for persistence.
+        // Storing the gateway's provider-neutral shape is the v2 content_blocks
+        // contract; the D5 shim handles legacy reads from v1 rows.
+        await persistMessage(engine, ctx.id, {
+          message_idx: messageIdx,
+          role: 'assistant',
+          content_blocks: blocks as unknown as ContentBlock[],
+          tokens_in: usage.input_tokens,
+          tokens_out: usage.output_tokens,
+          tokens_cache_read: usage.cache_read_tokens,
+          tokens_cache_create: usage.cache_creation_tokens,
+          model: modelStr,
+        });
+        await ctx.updateTokens({
+          input: usage.input_tokens,
+          output: usage.output_tokens,
+          cache_read: usage.cache_read_tokens,
+        });
+        heartbeat('llm_call_completed', { turn_idx: turnIdx, tokens: usage });
+      },
+      onToolCallStart: async (turnIdx, messageIdx, ordinal, toolName, input, providerToolCallId) => {
+        // CRITICAL — read back the canonical gbrain_tool_use_id from RETURNING,
+        // NOT the locally-generated UUID. On crash-replay the (job_id,
+        // message_idx, ordinal) row already exists with the ORIGINAL UUID from
+        // the pre-crash run; the ON CONFLICT DO UPDATE keeps it. If we
+        // returned the freshly-generated `candidateId` instead, the gateway
+        // loop's `replayState.priorTools.get(stableKey)` lookup would miss
+        // because priorTools is keyed by the original UUID — the short-
+        // circuit silently breaks and the tool re-executes. Pinned by
+        // test/e2e/subagent-crash-replay-multi-provider.test.ts.
+        const candidateId = randomUUIDv7();
+        const rows = await engine.executeRaw<{ gbrain_tool_use_id: string }>(
+          `INSERT INTO subagent_tool_executions
+             (job_id, message_idx, tool_use_id, tool_name, input, status, schema_version, ordinal, gbrain_tool_use_id, provider_id)
+           VALUES ($1, $2, $3, $4, $5::jsonb, 'pending', 2, $6, $7, $8)
+           ON CONFLICT (job_id, message_idx, ordinal) DO UPDATE
+             SET status = subagent_tool_executions.status
+           RETURNING gbrain_tool_use_id::text AS gbrain_tool_use_id`,
+          [ctx.id, messageIdx, providerToolCallId, toolName, JSON.stringify(input ?? null), ordinal, candidateId, recipeIdFromModel(model)],
+        );
+        const gbrainToolUseId = rows[0]?.gbrain_tool_use_id ?? candidateId;
+        heartbeat('tool_called', { turn_idx: turnIdx, tool_name: toolName });
+        return { gbrainToolUseId };
+      },
+      onToolCallComplete: async (gbrainToolUseId, output) => {
+        await engine.executeRaw(
+          `UPDATE subagent_tool_executions
+             SET status = 'complete', output = $1::jsonb, ended_at = now()
+           WHERE gbrain_tool_use_id::text = $2`,
+          [JSON.stringify(output ?? null), gbrainToolUseId],
+        );
+      },
+      onToolCallFailed: async (gbrainToolUseId, errorMsg) => {
+        await engine.executeRaw(
+          `UPDATE subagent_tool_executions
+             SET status = 'failed', error = $1, ended_at = now()
+           WHERE gbrain_tool_use_id::text = $2`,
+          [errorMsg, gbrainToolUseId],
+        );
+      },
+      onHeartbeat: heartbeat,
+    });
+  } catch (err) {
+    await settleSubagentBudget(engine, budgetReservation, null, true);
+    throw err;
+  }
 
   // Map gateway stop reason to SubagentStopReason. SubagentStopReason has
   // {end_turn, max_turns, refusal, error}; aborted maps to error.
@@ -921,7 +953,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
             ? 'error'
             : 'end_turn';
 
-  return {
+  const mapped: SubagentResult = {
     result: result.finalText,
     turns_count: result.totalTurns,
     stop_reason: stopReason,
@@ -932,6 +964,8 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
       cache_create: result.totalUsage.cache_creation_tokens,
     },
   };
+  await settleSubagentBudget(engine, budgetReservation, mapped.tokens, false);
+  return mapped;
 }
 
 function recipeIdFromModel(modelString: string): string {
@@ -1178,6 +1212,141 @@ async function persistToolExecFailed(
 }
 
 // ── Internal: helpers ───────────────────────────────────────
+
+interface SubagentBudgetReservation {
+  clientId: string;
+  reservationId: string;
+  estimatedCents: number;
+  model: string;
+  provider: string;
+}
+
+interface SubagentBudgetUsage {
+  in: number;
+  out: number;
+  cache_read: number;
+  cache_create: number;
+}
+
+async function reserveSubagentBudget(args: {
+  engine: BrainEngine;
+  jobId: number;
+  data: SubagentHandlerData;
+  model: string;
+  systemPrompt: string;
+  toolDefs: ToolDef[];
+  maxTurns: number;
+  maxTokens: number;
+}): Promise<SubagentBudgetReservation | null> {
+  const clientId = getOwnerClientId(args.data);
+  if (!clientId) return null;
+
+  const capCents = await getClientDailyCapCents(args.engine, clientId);
+  if (capCents === null || capCents <= 0) {
+    throw new BudgetExceededError(
+      `subagent budget exceeded: client ${clientId} has no positive budget_usd_per_day; refusing paid job before provider call`,
+      0,
+      capCents ?? 0,
+    );
+  }
+
+  const estimatedInputTokens = estimateSubagentInputTokens(args.data.prompt, args.systemPrompt, args.toolDefs) *
+    Math.max(1, args.maxTurns);
+  const maxOutputTokens = args.maxTokens * Math.max(1, args.maxTurns);
+  const estimatedCents = costCentsForTokens(args.model, estimatedInputTokens, maxOutputTokens);
+  if (estimatedCents === null) {
+    throw new BudgetExceededError(
+      `subagent budget cannot be enforced: no pricing for model "${args.model}"; refusing paid job before provider call`,
+      0,
+      capCents,
+    );
+  }
+
+  const model = budgetModelId(args.model);
+  const provider = providerFromModelId(model);
+  const reservation = await reserveBudget(args.engine, {
+    clientId,
+    estimatedCents,
+    capCents,
+    model,
+    provider,
+    jobId: args.jobId,
+  });
+  return { clientId, reservationId: reservation.reservationId, estimatedCents, model, provider };
+}
+
+async function settleSubagentBudget(
+  engine: BrainEngine,
+  reservation: SubagentBudgetReservation | null,
+  usage: SubagentBudgetUsage | null,
+  chargeEstimateOnUnknown: boolean,
+): Promise<void> {
+  if (!reservation) return;
+  let actualCents: number | null = null;
+  if (usage && hasBudgetUsage(usage)) {
+    actualCents = costCentsForTokens(
+      reservation.model,
+      usage.in + usage.cache_read + usage.cache_create,
+      usage.out,
+    );
+  }
+  if (actualCents === null) {
+    actualCents = chargeEstimateOnUnknown ? reservation.estimatedCents : 0;
+  }
+  await settleBudget(engine, reservation.reservationId, actualCents, 'subagent_loop');
+}
+
+function getOwnerClientId(data: SubagentHandlerData): string | null {
+  const record = data as unknown as Record<string, unknown>;
+  const raw = record.__owner_client_id ?? record.client_id;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+function estimateSubagentInputTokens(prompt: string, systemPrompt: string, toolDefs: ToolDef[]): number {
+  let chars = prompt.length + systemPrompt.length;
+  for (const tool of toolDefs) {
+    chars += tool.name.length;
+    chars += tool.description.length;
+    chars += tool.usage_hint?.length ?? 0;
+    chars += safeJsonLength(tool.input_schema);
+  }
+  return Math.max(1, Math.ceil(chars / 4));
+}
+
+function safeJsonLength(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return String(value).length;
+  }
+}
+
+function hasBudgetUsage(usage: SubagentBudgetUsage): boolean {
+  return usage.in > 0 || usage.out > 0 || usage.cache_read > 0 || usage.cache_create > 0;
+}
+
+function costCentsForTokens(modelId: string, inputTokens: number, outputTokens: number): number | null {
+  const pricing = canonicalLookup(modelId);
+  if (!pricing) return null;
+  const usd = (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output;
+  return usd * 100;
+}
+
+function budgetModelId(modelId: string): string {
+  const colon = modelId.indexOf(':');
+  if (colon > 0) return modelId;
+  const slash = modelId.indexOf('/');
+  if (slash > 0) return `${modelId.slice(0, slash)}:${modelId.slice(slash + 1)}`;
+  return `anthropic:${modelId}`;
+}
+
+function providerFromModelId(modelId: string): string {
+  const colon = modelId.indexOf(':');
+  if (colon > 0) return modelId.slice(0, colon);
+  const slash = modelId.indexOf('/');
+  if (slash > 0) return modelId.slice(0, slash);
+  return 'anthropic';
+}
 
 function asStringIfNotObject(value: unknown): string {
   if (typeof value === 'string') return value;

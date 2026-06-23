@@ -46,14 +46,16 @@ writes_pages: true
 writes_to:
   - people/
   - companies/
-  - deals/
   - meetings/
   - concepts/
   - projects/
-  - civic/
   - writing/
   - analysis/
-  - guides/
+  - ideas/
+  - reflections/
+  - decisions/
+  - reference/
+  - reports/
 filing_exempt: true
 distinct_from:
   - name: brain-taxonomist

@@ -34,6 +34,8 @@ Any cron job — Hermes `cronjob` (jobs.json), gbrain `cron-scheduler`, native C
 
 4. ROUTING — a cron prompt that writes Brain pages MUST follow `skills/reports/SKILL.md` + `skills/frontmatter-guard/SKILL.md`. Do not inline a malformed template.
 
+5. ONE-SHOT JOBS DON'T REPORT — a one-shot / run-once cron (`schedule.kind` != `cron`, e.g. `once` with a `run_at`, or a `delay`/`at` job) MUST NOT write a Brain `reports/` page at all. Do the task and deliver the result; only RECURRING scheduled jobs produce a durable `reports/` artifact. One-shots are ephemeral — a `reports/` page per run pollutes the shelf and is a needless frontmatter-wedge risk.
+
 ## Canonical Top-Level Shelves (this Brain: /Users/jarvis/brain, source `default`)
 
 Use these shelves only. Each is a first-class filing target when it is the primary subject, not an overflow bucket:

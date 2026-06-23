@@ -48,10 +48,17 @@ export async function loadActivePackBestEffort(
   ctx: OperationContext,
 ): Promise<ResolvedPack | null> {
   try {
+    let dbConfig: string | undefined;
+    try {
+      dbConfig = (await ctx.engine.getConfig('schema_pack'))?.trim() || undefined;
+    } catch {
+      dbConfig = undefined;
+    }
     return await loadActivePack({
       cfg: loadConfig(),
       remote: ctx.remote ?? true,
       sourceId: ctx.sourceId,
+      dbConfig,
     });
   } catch {
     return null;

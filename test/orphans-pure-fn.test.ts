@@ -176,6 +176,22 @@ describe('shouldExclude — orphan filter regression (preserve curation)', () =>
     expect(shouldExclude('dashboards/_index')).toBe(true);
     expect(shouldExclude('scripts/build')).toBe(true);
     expect(shouldExclude('output/foo')).toBe(true);
+    expect(shouldExclude('test/fixtures/foo')).toBe(true);
+    expect(shouldExclude('sources/fireflies/raw-packet')).toBe(true);
+    expect(shouldExclude('attachments/image-1')).toBe(true);
+    expect(shouldExclude('_quarantine/page')).toBe(true);
+    expect(shouldExclude('quarantine/page')).toBe(true);
+  });
+
+  test('code page_kind is excluded', () => {
+    expect(shouldExclude('src/core/engine', 'code')).toBe(true);
+  });
+
+  test('generated non-linkable page types are excluded', () => {
+    expect(shouldExclude('atoms/2026-06-20/foo', 'markdown', 'atom')).toBe(true);
+    expect(shouldExclude('extracts/2026-06-20/foo', 'markdown', 'extract_receipt')).toBe(true);
+    expect(shouldExclude('reports/daily/foo', 'markdown', 'report')).toBe(true);
+    expect(shouldExclude('meetings/weekly', 'markdown', 'meeting')).toBe(false);
   });
 
   test('first-segment exclusions fire', () => {

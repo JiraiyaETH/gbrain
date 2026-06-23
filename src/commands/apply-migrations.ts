@@ -186,12 +186,21 @@ interface Plan {
  * Codex H9: we never compare against `current VERSION >` — that rule would
  * skip v0.11.0 when running v0.11.1. Compare against completed.jsonl.
  */
-function buildPlan(idx: CompletedIndex, installed: string, filterVersion?: string): Plan {
+function buildPlan(
+  idx: CompletedIndex,
+  installed: string,
+  filterVersion?: string,
+  forceSpecific = false,
+): Plan {
   const plan: Plan = { applied: [], partial: [], pending: [], skippedFuture: [], wedged: [] };
   for (const m of migrations) {
     if (filterVersion && m.version !== filterVersion) continue;
     if (compareVersions(m.version, installed) > 0) {
       plan.skippedFuture.push(m);
+      continue;
+    }
+    if (filterVersion && forceSpecific) {
+      plan.pending.push(m);
       continue;
     }
     const status = statusForVersion(m.version, idx);
@@ -394,7 +403,8 @@ export async function runApplyMigrations(args: string[]): Promise<void> {
 
   const completed = loadCompletedMigrations();
   const idx = indexCompleted(completed);
-  const plan = buildPlan(idx, installed, cli.specificMigration);
+  const forceSpecific = Boolean(cli.specificMigration && !cli.list);
+  const plan = buildPlan(idx, installed, cli.specificMigration, forceSpecific);
 
   // Bug 3 — surface wedged migrations as a loud, actionable error.
   if (plan.wedged.length > 0) {

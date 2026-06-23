@@ -437,6 +437,12 @@ export interface SubagentHandlerData {
    */
   brain_id?: string;
   /**
+   * Source id that brain tools should read/write inside. Remote submit_agent
+   * populates this from oauth_clients.bound_source_id so a source-bound agent
+   * cannot silently fall back to the host default source.
+   */
+  source_id?: string;
+  /**
    * Trusted-workspace allow-list for put_page (v0.23 dream cycle).
    *
    * When set, the subagent's put_page calls are bounded to slugs matching

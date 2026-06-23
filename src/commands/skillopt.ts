@@ -12,6 +12,10 @@ import { runBootstrap, runBootstrapFromSkill } from '../core/skillopt/bootstrap-
 import { SKILLOPT_HELP_TEXT } from '../core/skillopt/help.ts';
 import { runSkillOpt, parseSplit } from '../core/skillopt/orchestrator.ts';
 import { serializeError, StructuredAgentError } from '../core/errors.ts';
+import {
+  DEFAULT_SKILLOPT_BRAIN_WIDE_MAX_COST_USD,
+  DEFAULT_SKILLOPT_MAX_COST_USD,
+} from '../core/skillopt/defaults.ts';
 import type { BrainEngine } from '../core/engine.ts';
 import type { SkillOptOpts } from '../core/skillopt/types.ts';
 
@@ -47,7 +51,7 @@ interface ParsedFlags {
   /** F4: optimize every skill under skillsDir with a benchmark. */
   all: boolean;
   /** F4: brain-wide cost cap for --all (per-skill cap stays --max-cost-usd). */
-  brainWideMaxCostUsd?: number;
+  brainWideMaxCostUsd: number;
   /** F5: comma-separated list of target models for fleet mode. */
   targetModelsFleet?: string[];
 }
@@ -141,7 +145,7 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
         engine,
         skillsDir,
         perSkillMaxCostUsd: parsed.maxCostUsd,
-        brainWideMaxCostUsd: parsed.brainWideMaxCostUsd ?? 10.0,
+        brainWideMaxCostUsd: parsed.brainWideMaxCostUsd,
         optimizerModel,
         targetModel,
         judgeModel,
@@ -160,7 +164,7 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
       } else {
         process.stderr.write(`[skillopt --all] Scanned ${result.skills_scanned} skills, ran ${result.skills_run}\n`);
         process.stderr.write(`[skillopt --all] Accepted: ${result.accepted}, no_improvement: ${result.no_improvement}, errored: ${result.errored}\n`);
-        process.stderr.write(`[skillopt --all] Total cost: $${result.cumulative_cost_usd.toFixed(2)} (cap $${(parsed.brainWideMaxCostUsd ?? 10).toFixed(2)})\n`);
+        process.stderr.write(`[skillopt --all] Total cost: $${result.cumulative_cost_usd.toFixed(2)} (cap $${parsed.brainWideMaxCostUsd.toFixed(2)})\n`);
       }
       // Exit code: 0 if at least one accepted, 1 if scanned but none accepted, 2 if errored.
       const exitCode = result.errored > 0 && result.accepted === 0 ? 2
@@ -352,14 +356,14 @@ export function parseFlags(args: string[]): ParsedFlags {
   let allowMutateBundled = false;
   let heldOutPath: string | undefined;
   let json = false;
-  let maxCostUsd = 5.0;
+  let maxCostUsd = DEFAULT_SKILLOPT_MAX_COST_USD;
   let maxRuntimeMin = 30;
   let force = false;
   let resumeRunId: string | undefined;
   let skillsDir: string | undefined;
   let help = false;
   let all = false;
-  let brainWideMaxCostUsd: number | undefined;
+  let brainWideMaxCostUsd = DEFAULT_SKILLOPT_BRAIN_WIDE_MAX_COST_USD;
   let targetModelsFleet: string[] | undefined;
 
   let i = 0;
@@ -482,7 +486,7 @@ export function parseFlags(args: string[]): ParsedFlags {
     ...(skillsDir !== undefined ? { skillsDir } : {}),
     help,
     all,
-    ...(brainWideMaxCostUsd !== undefined ? { brainWideMaxCostUsd } : {}),
+    brainWideMaxCostUsd,
     ...(targetModelsFleet !== undefined ? { targetModelsFleet } : {}),
   };
 }

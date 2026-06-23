@@ -17,6 +17,7 @@
 import type { BrainEngine } from '../engine.ts';
 import { runThink, persistSynthesis, type ThinkLLMClient } from '../think/index.ts';
 import { resolveModel } from '../model-config.ts';
+import { resolveAutonomousDailyCapUsd } from '../budget/autonomous-daily-cap.ts';
 import { BudgetMeter } from './budget-meter.ts';
 
 /**
@@ -108,10 +109,12 @@ export async function runPhaseAutoThink(
     return skipped('cooldown_active', `auto_think cooled down (${config.cooldownDays}d cooldown)`);
   }
 
+  const dailyCapUsd = await resolveAutonomousDailyCapUsd(engine);
   const meter = new BudgetMeter({
     budgetUsd: config.budgetUsd,
     phase: 'auto_think',
     auditPath: opts.auditPath,
+    dailyCapUsd,
   });
 
   const modelId = await resolveModel(engine, {

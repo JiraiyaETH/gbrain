@@ -8,8 +8,8 @@
  *
  * Push failure is intentionally NON-FATAL: a missing remote, expired
  * credentials, or a flaky network should never crash the autopilot cycle.
- * The phase returns status 'ok' with pushed:false and a console.warn so the
- * operator can investigate without losing the local commit.
+ * The phase returns status 'degraded' with pushed:false and a console.warn so
+ * the operator can investigate without losing the local commit.
  *
  * The caller (runCycle) overwrites duration_ms; every return here sets it
  * to 0 as a placeholder, matching every other phase in this codebase.
@@ -213,7 +213,7 @@ export async function runPhaseCommit(
     console.warn(`[cycle/commit] push to origin failed (non-fatal): ${pushMessage}`);
     return {
       phase: 'commit' as PhaseResult['phase'],
-      status: 'ok',
+      status: 'degraded',
       duration_ms: 0,
       summary: `committed ${commitSha}; push skipped (${cappedReason})`,
       details: { committed: true, commit_sha: commitSha, pushed: false, push_error: pushMessage },

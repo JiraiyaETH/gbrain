@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BudgetMeter, _resetBudgetMeterWarningsForTest, ANTHROPIC_PRICING } from '../src/core/cycle/budget-meter.ts';
@@ -67,6 +67,90 @@ describe('BudgetMeter', () => {
     expect(r1.unpriced).toBe(true);
     expect(r2.allowed).toBe(true);
     expect(meter.unpricedSubmits).toBe(2);
+  });
+
+  test('autonomous daily cap denies a submit before increasing cycle spend', () => {
+    writeFileSync(
+      auditPath,
+      JSON.stringify({
+        schema_version: 1,
+        phase: 'auto_think',
+        ts: '2026-06-20T02:00:00.000Z',
+        event: 'submit',
+        model: 'claude-opus-4-7',
+        label: 'already-spent',
+        estimated_cost_usd: 3.2,
+      }) + '\n',
+    );
+    const meter = new BudgetMeter({
+      budgetUsd: 10,
+      phase: 'auto_think',
+      auditPath,
+      dailyCapUsd: 3.33,
+      now: new Date('2026-06-20T12:00:00.000Z'),
+    });
+    const r = meter.check({
+      modelId: 'claude-opus-4-7',
+      estimatedInputTokens: 5000,
+      maxOutputTokens: 10000,
+      label: 'would-cross-day-cap',
+    });
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toContain('AUTONOMOUS_DAILY_BUDGET_EXHAUSTED');
+    expect(meter.totalSpent).toBe(0);
+    const lines = readLedger();
+    expect(lines[1].event).toBe('submit_denied');
+    expect(lines[1].daily_cap_usd).toBe(3.33);
+  });
+
+  test('autonomous daily cap resets on the UTC day boundary', () => {
+    writeFileSync(
+      auditPath,
+      JSON.stringify({
+        schema_version: 1,
+        phase: 'auto_think',
+        ts: '2026-06-19T23:59:59.000Z',
+        event: 'submit',
+        model: 'claude-opus-4-7',
+        label: 'yesterday',
+        estimated_cost_usd: 99,
+      }) + '\n',
+    );
+    const meter = new BudgetMeter({
+      budgetUsd: 10,
+      phase: 'auto_think',
+      auditPath,
+      dailyCapUsd: 3.33,
+      now: new Date('2026-06-20T00:00:01.000Z'),
+    });
+    const r = meter.check({
+      modelId: 'claude-haiku-4-5-20251001',
+      estimatedInputTokens: 1000,
+      maxOutputTokens: 1000,
+      label: 'fresh-day',
+    });
+    expect(r.allowed).toBe(true);
+    expect(r.estimatedCostUsd).toBeGreaterThan(0);
+  });
+
+  test('autonomous daily cap refuses unpriced models because spend cannot be capped', () => {
+    const meter = new BudgetMeter({
+      budgetUsd: 10,
+      phase: 'auto_think',
+      auditPath,
+      dailyCapUsd: 3.33,
+      now: new Date('2026-06-20T12:00:00.000Z'),
+    });
+    const r = meter.check({
+      modelId: 'mystery:model',
+      estimatedInputTokens: 1000,
+      maxOutputTokens: 1000,
+      label: 'unpriced',
+    });
+    expect(r.allowed).toBe(false);
+    expect(r.unpriced).toBe(true);
+    expect(r.reason).toContain('AUTONOMOUS_DAILY_BUDGET_UNPRICED');
+    expect(meter.totalSpent).toBe(0);
   });
 
   test('ledger captures every submit (allowed + denied + unpriced)', () => {

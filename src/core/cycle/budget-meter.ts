@@ -24,6 +24,7 @@ import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { isoWeekFilename, resolveAuditDir } from '../audit-week-file.ts';
 import { estimateMaxCostUsd, ANTHROPIC_PRICING } from '../anthropic-pricing.ts';
+import { checkAutonomousDailyCap } from '../budget/autonomous-daily-cap.ts';
 
 export interface BudgetMeterOpts {
   /** USD cap for the whole cycle. 0 hard-skips; negative is explicit unlimited. */
@@ -32,6 +33,10 @@ export interface BudgetMeterOpts {
   phase: string;
   /** Optional override for the audit file path (tests). */
   auditPath?: string;
+  /** Optional hard UTC-day cap shared by autonomous phases. Negative disables. */
+  dailyCapUsd?: number;
+  /** Frozen clock for tests. */
+  now?: Date;
 }
 
 export interface SubmitEstimate {
@@ -91,7 +96,7 @@ export class BudgetMeter {
       writeLedgerLine(this.auditPath, {
         schema_version: 1,
         phase: this.opts.phase,
-        ts: new Date().toISOString(),
+        ts: (this.opts.now ?? new Date()).toISOString(),
         event: 'submit_denied',
         model: estimate.modelId,
         label: estimate.label,
@@ -110,20 +115,43 @@ export class BudgetMeter {
 
     const cost = estimateMaxCostUsd(estimate.modelId, estimate.estimatedInputTokens, estimate.maxOutputTokens);
 
-    // Codex P1 #10: non-Anthropic / unpriced models bypass the gate.
+    // Without pricing, a hard daily cap cannot be enforced. Preserve the legacy
+    // bypass only for callers that did not opt into the daily cap.
     if (cost === null) {
       this.unpricedSubmitsThisCycle++;
       if (!_unpricedWarnings.has(estimate.modelId)) {
         _unpricedWarnings.add(estimate.modelId);
         process.stderr.write(
           `[budget] BUDGET_METER_NO_PRICING: model "${estimate.modelId}" not in ANTHROPIC_PRICING. ` +
-          `Budget gate disabled for this submit. (Per-provider pricing modules: TODO v0.29.)\n`,
+          `Budget gate disabled for this submit unless an autonomous daily cap is active. (Per-provider pricing modules: TODO v0.29.)\n`,
         );
+      }
+      if (this.opts.dailyCapUsd !== undefined && this.opts.dailyCapUsd >= 0) {
+        writeLedgerLine(this.auditPath, {
+          schema_version: 1,
+          phase: this.opts.phase,
+          ts: (this.opts.now ?? new Date()).toISOString(),
+          event: 'submit_denied',
+          model: estimate.modelId,
+          label: estimate.label,
+          estimated_input_tokens: estimate.estimatedInputTokens,
+          max_output_tokens: estimate.maxOutputTokens,
+          reason: 'AUTONOMOUS_DAILY_BUDGET_UNPRICED',
+          daily_cap_usd: this.opts.dailyCapUsd,
+        });
+        return {
+          allowed: false,
+          estimatedCostUsd: 0,
+          cumulativeCostUsd: this.cumulativeUsd,
+          budgetUsd: this.opts.budgetUsd,
+          reason: `AUTONOMOUS_DAILY_BUDGET_UNPRICED: no pricing for model "${estimate.modelId}"; refusing autonomous submit before provider call`,
+          unpriced: true,
+        };
       }
       writeLedgerLine(this.auditPath, {
         schema_version: 1,
         phase: this.opts.phase,
-        ts: new Date().toISOString(),
+        ts: (this.opts.now ?? new Date()).toISOString(),
         event: 'submit_unpriced',
         model: estimate.modelId,
         label: estimate.label,
@@ -139,13 +167,45 @@ export class BudgetMeter {
       };
     }
 
+    if (this.opts.dailyCapUsd !== undefined) {
+      const daily = checkAutonomousDailyCap(cost, {
+        dailyCapUsd: this.opts.dailyCapUsd,
+        auditPath: this.auditPath,
+        now: this.opts.now,
+      });
+      if (!daily.allowed) {
+        writeLedgerLine(this.auditPath, {
+          schema_version: 1,
+          phase: this.opts.phase,
+          ts: (this.opts.now ?? new Date()).toISOString(),
+          event: 'submit_denied',
+          model: estimate.modelId,
+          label: estimate.label,
+          estimated_cost_usd: cost,
+          cumulative_cost_usd: this.cumulativeUsd,
+          budget_usd: this.opts.budgetUsd,
+          daily_spent_usd: daily.spentTodayUsd,
+          daily_projected_usd: daily.projectedTotalUsd,
+          daily_cap_usd: daily.capUsd,
+          reason: daily.reason,
+        });
+        return {
+          allowed: false,
+          estimatedCostUsd: cost,
+          cumulativeCostUsd: this.cumulativeUsd,
+          budgetUsd: this.opts.budgetUsd,
+          reason: daily.reason,
+        };
+      }
+    }
+
     // Explicit unlimited sentinel: negative budget disables the cap.
     if (this.opts.budgetUsd < 0) {
       this.cumulativeUsd += cost;
       writeLedgerLine(this.auditPath, {
         schema_version: 1,
         phase: this.opts.phase,
-        ts: new Date().toISOString(),
+        ts: (this.opts.now ?? new Date()).toISOString(),
         event: 'submit',
         model: estimate.modelId,
         label: estimate.label,
@@ -161,7 +221,7 @@ export class BudgetMeter {
       writeLedgerLine(this.auditPath, {
         schema_version: 1,
         phase: this.opts.phase,
-        ts: new Date().toISOString(),
+        ts: (this.opts.now ?? new Date()).toISOString(),
         event: 'submit_denied',
         model: estimate.modelId,
         label: estimate.label,
@@ -182,7 +242,7 @@ export class BudgetMeter {
     writeLedgerLine(this.auditPath, {
       schema_version: 1,
       phase: this.opts.phase,
-      ts: new Date().toISOString(),
+      ts: (this.opts.now ?? new Date()).toISOString(),
       event: 'submit',
       model: estimate.modelId,
       label: estimate.label,

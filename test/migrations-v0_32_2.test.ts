@@ -14,6 +14,7 @@ import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:tes
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { v0_32_2, __setTestEngineOverride, __testing } from '../src/commands/migrations/v0_32_2.ts';
@@ -235,6 +236,35 @@ describe('phaseBFenceFacts — happy path backfill', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rows = await (engine as any).db.query('SELECT row_num FROM facts');
     expect(rows.rows[0].row_num).toBeNull();
+  });
+
+  test('allows unrelated dirty files in the source checkout', async () => {
+    execFileSync('git', ['init'], { cwd: brainDir, stdio: 'ignore' });
+    writeFileSync(join(brainDir, 'unrelated.md'), 'unrelated work in progress\n', 'utf-8');
+    await seedLegacyFact({ entity_slug: 'people/alice', fact: 'Backfillable despite unrelated dirt' });
+
+    const r = await __testing.phaseBFenceFacts(engine, OPTS);
+    expect(r.status).toBe('complete');
+    expect(r.detail).toContain('fenced=1');
+    expect(existsSync(join(brainDir, 'people/alice.md'))).toBe(true);
+  });
+
+  test('refuses when the target page itself is dirty', async () => {
+    execFileSync('git', ['init'], { cwd: brainDir, stdio: 'ignore' });
+    mkdirSync(join(brainDir, 'people'), { recursive: true });
+    writeFileSync(
+      join(brainDir, 'people/alice.md'),
+      '---\ntype: person\ntitle: Alice\nslug: people/alice\n---\n\n# Alice\n\nUser work in progress.\n',
+      'utf-8',
+    );
+    await seedLegacyFact({ entity_slug: 'people/alice', fact: 'Must not overwrite target dirt' });
+
+    const r = await __testing.phaseBFenceFacts(engine, OPTS);
+    expect(r.status).toBe('failed');
+    expect(r.detail).toContain('target page "people/alice.md"');
+
+    const body = readFileSync(join(brainDir, 'people/alice.md'), 'utf-8');
+    expect(body).not.toContain('Must not overwrite target dirt');
   });
 });
 

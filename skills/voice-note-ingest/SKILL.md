@@ -1,7 +1,7 @@
 ---
 name: voice-note-ingest
 version: 0.1.0
-description: Ingest a voice note with exact-phrasing preservation (never paraphrased). Routes content to originals/, concepts/, people/, companies/, ideas/, personal/, or voice-notes/ based on a decision tree. The user's exact words are the signal.
+description: Ingest a voice note with exact-phrasing preservation (never paraphrased). Routes content to ideas/, concepts/, people/, companies/, or reflections/ based on a decision tree. The user's exact words are the signal.
 triggers:
   - "voice note"
   - "ingest this voice memo"
@@ -12,13 +12,11 @@ triggers:
 mutating: true
 writes_pages: true
 writes_to:
-  - voice-notes/
-  - originals/
+  - ideas/
   - concepts/
   - people/
   - companies/
-  - ideas/
-  - personal/
+  - reflections/
 ---
 
 # voice-note-ingest — Exact-Phrasing Voice Capture
@@ -71,7 +69,7 @@ the primary directory and cross-link to the others.
 
 1. **Original idea, observation, or thesis** — the user is expressing a
    novel thought, framework, or connection THEY generated.
-   → `originals/<slug>.md`. Use the user's vivid language for the slug.
+   → `ideas/<slug>.md`. Use the user's vivid language for the slug.
 
 2. **About a world concept they encountered** — a framework or model
    someone else created that the user is referencing.
@@ -88,14 +86,14 @@ the primary directory and cross-link to the others.
    → `ideas/<slug>.md`.
 
 6. **A personal reflection** — therapy-adjacent, emotional, identity.
-   → Append to appropriate `personal/<slug>.md`.
+   → Append to appropriate `reflections/<slug>.md`.
 
 7. **None of the above / random thought / doesn't fit cleanly** —
-   → `voice-notes/YYYY-MM-DD-<slug>.md` (catch-all).
+   → `reflections/YYYY-MM-DD-<slug>.md` (catch-all).
 
 **Multiple categories?** Create the primary page, then cross-link to all
 others. If the voice note covers a person AND a novel idea, create the
-originals/ page AND update the person's timeline.
+ideas/ page AND update the person's timeline.
 
 ## Brain page format
 

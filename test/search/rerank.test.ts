@@ -12,9 +12,22 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { applyReranker, type RerankerOpts } from '../../src/core/search/rerank.ts';
 import { RerankError, type RerankResult } from '../../src/core/ai/gateway.ts';
 import type { SearchResult } from '../../src/core/types.ts';
+import { withEnv } from '../helpers/with-env.ts';
+
+async function withFreshAuditDir<T>(body: () => Promise<T>): Promise<T> {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gbrain-search-rerank-audit-'));
+  try {
+    return await withEnv({ GBRAIN_AUDIT_DIR: tmpDir }, body);
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
 
 function makeResult(slug: string, score: number, chunk: string): SearchResult {
   return {
@@ -156,7 +169,7 @@ describe('applyReranker — fail-open on every RerankError reason', () => {
       },
     };
     // Must not throw; must return input unchanged.
-    const out = await applyReranker('q', results, opts);
+    const out = await withFreshAuditDir(() => applyReranker('q', results, opts));
     expect(out).toEqual(results);
   });
 
@@ -170,7 +183,7 @@ describe('applyReranker — fail-open on every RerankError reason', () => {
         throw new Error('arbitrary');
       },
     };
-    const out = await applyReranker('q', results, opts);
+    const out = await withFreshAuditDir(() => applyReranker('q', results, opts));
     expect(out).toEqual(results);
   });
 

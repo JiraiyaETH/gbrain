@@ -157,6 +157,24 @@ describe('buildPlan — diff against completed + installed VERSION', () => {
     expect(plan.pending.map(m => m.version)).toEqual(['0.11.0']);
   });
 
+  test('--migration force-run puts an already applied version back in pending', () => {
+    const idx = indexCompleted([{ version: '0.32.2', status: 'complete' }]);
+    const normal = buildPlan(idx, '0.42.51', '0.32.2');
+    expect(normal.applied.map(m => m.version)).toEqual(['0.32.2']);
+    expect(normal.pending).toEqual([]);
+
+    const forced = buildPlan(idx, '0.42.51', '0.32.2', true);
+    expect(forced.applied).toEqual([]);
+    expect(forced.pending.map(m => m.version)).toEqual(['0.32.2']);
+  });
+
+  test('--migration force-run still respects future migrations', () => {
+    const idx = indexCompleted([{ version: '0.32.2', status: 'complete' }]);
+    const plan = buildPlan(idx, '0.31.0', '0.32.2', true);
+    expect(plan.pending).toEqual([]);
+    expect(plan.skippedFuture.map(m => m.version)).toEqual(['0.32.2']);
+  });
+
   test('--migration filter for unknown version → empty plan', () => {
     const idx = indexCompleted([]);
     const plan = buildPlan(idx, '0.11.1', '99.99.99');

@@ -119,6 +119,33 @@ describe('gbrain status E2E (PGLite)', () => {
     expect(parsed.cycle.last_targeted.totals).toEqual({ chunks_embedded: 100 });
   });
 
+  test('cycle status reflects partial result/report status, not only completed queue status', async () => {
+    await seedSource(engine, 'default');
+    await engine.executeRaw(
+      `INSERT INTO minion_jobs (queue, name, data, status, started_at, finished_at, result)
+       VALUES ('default', 'autopilot-cycle', '{}'::jsonb, 'completed',
+               NOW() - INTERVAL '5 seconds', NOW(),
+               '{"partial":true,"status":"partial","report":{"status":"partial","totals":{"atoms_written":61}}}'::jsonb)`,
+    );
+    let jsonOut = '';
+    await runStatus(engine, ['--json'], {
+      stdout: (s) => {
+        jsonOut += s;
+      },
+      stderr: () => {},
+    });
+    const parsed = JSON.parse(jsonOut.trim());
+    expect(parsed.cycle.last_full).toBeDefined();
+    expect(parsed.cycle.last_full.status).toBe('partial');
+    expect(parsed.cycle.last_full.totals).toEqual({ atoms_written: 61 });
+
+    // The human renderer intentionally omits OK statuses, but it must show
+    // degraded ones so operators do not read a partial cycle as healthy.
+    let humanOut = '';
+    await runStatus(engine, [], { stdout: (s) => { humanOut += s; }, stderr: () => {} });
+    expect(humanOut).toContain('status=partial');
+  });
+
   test('cycle totals come from result.report.totals, NOT result.totals (codex MINOR-3)', async () => {
     await seedSource(engine, 'default');
     // Hand-craft a row where totals are mis-placed at the top level — the

@@ -28,6 +28,14 @@ function makeTmpRepo(): string {
   return dir;
 }
 
+function addBareRemote(repoDir: string): string {
+  const remoteDir = mkdtempSync(join(tmpdir(), 'gbrain-commit-remote-'));
+  tmpDirs.push(remoteDir);
+  execFileSync('git', ['init', '--bare', remoteDir]);
+  execFileSync('git', ['-C', repoDir, 'remote', 'add', 'origin', remoteDir]);
+  return remoteDir;
+}
+
 function writeAndStage(repoDir: string, filename: string, content: string): void {
   writeFileSync(join(repoDir, filename), content, 'utf-8');
   // Don't stage here — let commit's `git add -A` stage everything.
@@ -46,6 +54,7 @@ afterEach(() => {
 describe('runPhaseCommit', () => {
   test('a. uncommitted file → ok, committed=true, commit_sha truthy, git log shows gbrain autopilot [', async () => {
     const dir = makeTmpRepo();
+    addBareRemote(dir);
     writeAndStage(dir, 'brain.md', '# Brain note\n');
 
     const result = await runPhaseCommit(dir, false);
@@ -98,14 +107,14 @@ describe('runPhaseCommit', () => {
     expect(result.details.reason).toBe('aborted');
   });
 
-  test('e. repo with changes but NO remote → push fails non-fatally: ok, committed=true, pushed=false, push_error truthy', async () => {
+  test('e. repo with changes but NO remote → push fails non-fatally: degraded, committed=true, pushed=false, push_error truthy', async () => {
     const dir = makeTmpRepo();
     writeAndStage(dir, 'page.md', '# page\n');
 
     const result = await runPhaseCommit(dir, false);
 
     // The commit should succeed; push to "origin" should fail (no remote configured).
-    expect(result.status).toBe('ok');
+    expect(result.status).toBe('degraded');
     expect(result.details.committed).toBe(true);
     expect(result.details.pushed).toBe(false);
     expect(typeof result.details.push_error).toBe('string');

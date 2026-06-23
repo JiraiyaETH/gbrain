@@ -18,7 +18,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -95,6 +95,99 @@ describe('BudgetTracker.reserve', () => {
     expect((caught as BudgetExhausted).modelId).toBe('claude-opus-4-7');
     const audit = readAudit();
     expect(audit.some((e) => e.event === 'reserve_denied')).toBe(true);
+  });
+
+  test('autonomous daily cap denies before provider reserve can proceed', () => {
+    writeFileSync(
+      auditPath,
+      JSON.stringify({
+        schema_version: 1,
+        ts: '2026-06-20T02:00:00.000Z',
+        event: 'record',
+        label: 'gateway.chat',
+        kind: 'chat',
+        model: 'claude-opus-4-7',
+        actual_cost_usd: 3.31,
+      }) + '\n',
+    );
+    const t = new BudgetTracker({
+      label: 'autonomous',
+      auditPath,
+      dailyCapUsd: 3.33,
+      now: new Date('2026-06-20T12:00:00.000Z'),
+    });
+    let caught: unknown = null;
+    try {
+      t.reserve({
+        modelId: 'claude-opus-4-7',
+        estimatedInputTokens: 1000,
+        maxOutputTokens: 1000,
+        kind: 'chat',
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(BudgetExhausted);
+    expect((caught as BudgetExhausted).reason).toBe('cost');
+    expect((caught as Error).message).toContain('AUTONOMOUS_DAILY_BUDGET_EXHAUSTED');
+    const audit = readAudit();
+    expect(audit[1].event).toBe('reserve_denied');
+    expect(audit[1].daily_cap_usd).toBe(3.33);
+  });
+
+  test('autonomous daily cap resets by UTC day', () => {
+    writeFileSync(
+      auditPath,
+      JSON.stringify({
+        schema_version: 1,
+        ts: '2026-06-19T23:59:59.000Z',
+        event: 'record',
+        label: 'gateway.chat',
+        kind: 'chat',
+        model: 'claude-opus-4-7',
+        actual_cost_usd: 99,
+      }) + '\n',
+    );
+    const t = new BudgetTracker({
+      label: 'autonomous',
+      auditPath,
+      dailyCapUsd: 3.33,
+      now: new Date('2026-06-20T00:00:01.000Z'),
+    });
+    expect(() =>
+      t.reserve({
+        modelId: 'claude-haiku-4-5-20251001',
+        estimatedInputTokens: 100,
+        maxOutputTokens: 100,
+        kind: 'chat',
+      }),
+    ).not.toThrow();
+  });
+
+  test('autonomous daily cap refuses unpriced gateway calls before provider work', () => {
+    const t = new BudgetTracker({
+      label: 'autonomous',
+      auditPath,
+      dailyCapUsd: 3.33,
+      now: new Date('2026-06-20T12:00:00.000Z'),
+    });
+    let caught: unknown = null;
+    try {
+      t.reserve({
+        modelId: 'mystery:model',
+        estimatedInputTokens: 100,
+        maxOutputTokens: 100,
+        kind: 'chat',
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(BudgetExhausted);
+    expect((caught as BudgetExhausted).reason).toBe('no_pricing');
+    expect((caught as Error).message).toContain('cannot enforce autonomous daily cap');
+    const audit = readAudit();
+    expect(audit[0].event).toBe('reserve_denied');
+    expect(audit[0].reason).toBe('AUTONOMOUS_DAILY_BUDGET_UNPRICED');
   });
 
   test('throws BudgetExhausted (reason: runtime) when wall-clock cap blown', () => {
@@ -225,6 +318,41 @@ describe('BudgetTracker.reserve', () => {
         kind: 'rerank',
       }),
     ).not.toThrow();
+  });
+
+  test('zeroentropyai zerank-2 rerank is paid-priced under --max-cost', () => {
+    const t = new BudgetTracker({ maxCostUsd: 1.0, label: 'test', auditPath });
+    expect(() =>
+      t.reserve({
+        modelId: 'zeroentropyai:zerank-2',
+        estimatedInputTokens: 1_000_000,
+        maxOutputTokens: 0,
+        kind: 'rerank',
+      }),
+    ).not.toThrow();
+
+    const audit = readAudit();
+    expect(audit[0].event).toBe('reserve');
+    expect(audit[0].projected_cost_usd).toBeCloseTo(0.025, 8);
+  });
+
+  test('zeroentropyai zerank-2 rerank trips cost gate instead of no_pricing', () => {
+    const t = new BudgetTracker({ maxCostUsd: 0.0001, label: 'test', auditPath });
+    let caught: unknown = null;
+    try {
+      t.reserve({
+        modelId: 'zeroentropyai:zerank-2',
+        estimatedInputTokens: 1_000_000,
+        maxOutputTokens: 0,
+        kind: 'rerank',
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(BudgetExhausted);
+    expect((caught as BudgetExhausted).reason).toBe('cost');
+    expect((caught as BudgetExhausted).modelId).toBe('zeroentropyai:zerank-2');
   });
 
   test('v0.40.6.1: chat kind for the same provider prefix is NOT zero-priced (rerank-only contract)', () => {
@@ -365,6 +493,21 @@ describe('BudgetTracker.record', () => {
     const audit = readAudit();
     expect(audit[0].embedding_dims).toBe(3072);
     expect(audit[0].kind).toBe('embed');
+  });
+
+  test('rerank record uses hosted ZeroEntropy pricing', () => {
+    const t = new BudgetTracker({ maxCostUsd: 1.0, label: 'test', auditPath });
+    t.record({
+      modelId: 'zeroentropyai:zerank-2',
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+      kind: 'rerank',
+    } as any);
+    expect(t.totalSpent).toBeCloseTo(0.025, 8);
+    const audit = readAudit();
+    expect(audit[0].event).toBe('record');
+    expect(audit[0].kind).toBe('rerank');
+    expect(audit[0].actual_cost_usd).toBeCloseTo(0.025, 8);
   });
 });
 

@@ -24,6 +24,15 @@ export interface OrphanPage {
   domain: string;
 }
 
+interface OrphanRow {
+  slug: string;
+  title: string;
+  domain: string | null;
+  type?: string | null;
+  page_kind?: string | null;
+  source_id?: string;
+}
+
 export interface OrphanResult {
   orphans: OrphanPage[];
   total_orphans: number;
@@ -50,10 +59,18 @@ const DENY_PREFIXES = [
   'scripts/',
   'templates/',
   'openclaw/config/',
+  'test/',
+  'sources/',
+  'attachments/',
+  '_quarantine/',
+  'quarantine/',
 ];
 
 /** First slug segments where no inbound links is expected */
 const FIRST_SEGMENT_EXCLUSIONS = new Set(['scratch', 'thoughts', 'catalog', 'entities']);
+
+/** Page types that are generated artifacts or operational ledgers, not curation targets */
+const NON_LINKABLE_TYPES = new Set(['atom', 'extract_receipt', 'report']);
 
 // --- Filter logic ---
 
@@ -61,7 +78,22 @@ const FIRST_SEGMENT_EXCLUSIONS = new Set(['scratch', 'thoughts', 'catalog', 'ent
  * Returns true if a slug should be excluded from orphan reporting by default.
  * These are pages where having no inbound links is expected / not a content problem.
  */
-export function shouldExclude(slug: string): boolean {
+export function shouldExclude(
+  slug: string,
+  pageKind?: string | null,
+  pageType?: string | null,
+): boolean {
+  // Code chunks are implementation artifacts, not brain-knowledge pages. They
+  // can still participate in code search and symbol graph traversal, but a lack
+  // of inbound brain links is not an orphan-health problem.
+  if (pageKind === 'code') return true;
+
+  // Generated atoms, extract receipts, and scheduled reports are useful
+  // retrieval/cycle artifacts, but they are not pages operators are expected to
+  // curate by adding inbound links. Counting them makes the orphan health check
+  // fail even after mention-link extraction is current.
+  if (pageType && NON_LINKABLE_TYPES.has(pageType)) return true;
+
   // Pseudo-pages (exact match)
   if (PSEUDO_SLUGS.has(slug)) return true;
 
@@ -107,7 +139,7 @@ export function deriveDomain(frontmatterDomain: string | null | undefined, slug:
  */
 export async function queryOrphanPages(
   engine: BrainEngine,
-): Promise<{ slug: string; title: string; domain: string | null }[]> {
+): Promise<OrphanRow[]> {
   return engine.findOrphanPages();
 }
 
@@ -145,7 +177,7 @@ export async function findOrphans(
   const progress = createProgress(cliOptsToProgressOptions(getCliOptions()));
   progress.start('orphans.scan');
   const stopHb = startHeartbeat(progress, 'scanning pages for missing inbound links…');
-  let allOrphans: { slug: string; title: string; domain: string | null }[];
+  let allOrphans: OrphanRow[];
   let total: number;
   let excludedAll: number;
   try {
@@ -169,14 +201,14 @@ export async function findOrphans(
       liveParams.push(sourceId);
       scopeClause = ` AND source_id = $${liveParams.length}`;
     }
-    const liveRows = await engine.executeRaw<{ slug: string }>(
-      `SELECT slug FROM pages WHERE deleted_at IS NULL${scopeClause}`,
+    const liveRows = await engine.executeRaw<{ slug: string; page_kind: string | null; type: string | null }>(
+      `SELECT slug, page_kind, type FROM pages WHERE deleted_at IS NULL${scopeClause}`,
       liveParams,
     );
     total = liveRows.length;
     excludedAll = includePseudo
       ? 0
-      : liveRows.reduce((n, r) => n + (shouldExclude(r.slug) ? 1 : 0), 0);
+      : liveRows.reduce((n, r) => n + (shouldExclude(r.slug, r.page_kind, r.type) ? 1 : 0), 0);
   } finally {
     stopHb();
     progress.finish();
@@ -184,7 +216,7 @@ export async function findOrphans(
 
   const filtered = includePseudo
     ? allOrphans
-    : allOrphans.filter(row => !shouldExclude(row.slug));
+    : allOrphans.filter(row => !shouldExclude(row.slug, row.page_kind, row.type));
 
   const orphans: OrphanPage[] = filtered.map(row => ({
     slug: row.slug,

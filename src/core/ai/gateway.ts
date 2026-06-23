@@ -3227,9 +3227,9 @@ export async function rerank(input: RerankInput): Promise<RerankResult[]> {
 
   const tracker = __budgetStore.getStore() ?? null;
   if (tracker) {
-    // Reranker pricing isn't in the canonical pricing map today — when no
-    // cap is set this fires the warn-once path; when a cap IS set TX2 hard-
-    // fails. record() below logs the actual size after success.
+    // Reranker pricing is input-only in BudgetTracker. Reserve pessimistically
+    // from query+document characters; record() logs the actual same-size
+    // estimate after success.
     const totalChars = input.query.length + input.documents.reduce((s, d) => s + d.length, 0);
     tracker.reserve({
       modelId: modelStr,

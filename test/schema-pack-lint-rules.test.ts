@@ -108,17 +108,14 @@ describe('aliasReferencesUndeclaredType', () => {
     expect(await aliasReferencesUndeclaredType(m)).toEqual([]);
   });
 
-  it('flags alias pointing at undeclared type', async () => {
+  it('allows legacy/free-text aliases that are not declared page types', async () => {
     const m = mk({ page_types: [baseType({ name: 'r', aliases: ['ghost'] })] });
-    const issues = await aliasReferencesUndeclaredType(m);
-    expect(issues.length).toBe(1);
-    expect(issues[0]!.severity).toBe('warning');
-    expect(issues[0]!.message).toContain('ghost');
+    expect(await aliasReferencesUndeclaredType(m)).toEqual([]);
   });
 
-  it('flags multiple undeclared references separately', async () => {
+  it('allows multiple undeclared aliases without schema lint noise', async () => {
     const m = mk({ page_types: [baseType({ name: 'r', aliases: ['g1', 'g2'] })] });
-    expect((await aliasReferencesUndeclaredType(m)).length).toBe(2);
+    expect(await aliasReferencesUndeclaredType(m)).toEqual([]);
   });
 });
 

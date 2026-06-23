@@ -127,6 +127,61 @@ describe('runDoctor — orphan_ratio check (local surface, D5)', () => {
     expect(check!.message).toMatch(/orphan ratio/i);
   });
 
+  test('generated pages and non-entity corpus sources do not make brain-wide ratio fail', async () => {
+    // Healthy primary/default entity graph: 80 linked, 20 orphan.
+    for (let i = 0; i < 100; i++) {
+      await engine.putPage(`people/default-person-${i}`, {
+        type: 'person', title: `Default Person ${i}`, compiled_truth: 'b', timeline: '', frontmatter: {},
+      }, { sourceId: 'default' });
+    }
+    await engine.putPage('writing/default-index', {
+      type: 'note', title: 'Default Index', compiled_truth: 'index', timeline: '', frontmatter: {},
+    }, { sourceId: 'default' });
+    const links = [];
+    for (let i = 0; i < 80; i++) {
+      links.push({
+        from_slug: 'writing/default-index',
+        to_slug: `people/default-person-${i}`,
+        link_type: 'mentions',
+        link_source: 'markdown',
+        context: '',
+        from_source_id: 'default',
+        to_source_id: 'default',
+      });
+    }
+    await engine.addLinksBatch(links);
+
+    // Generated artifacts in the primary source are useful retrieval/cycle
+    // pages, but are not pages operators curate by adding inbound links.
+    for (let i = 0; i < 120; i++) {
+      await engine.putPage(`atoms/2026-06-20/generated-${i}`, {
+        type: 'atom', title: `Atom ${i}`, compiled_truth: 'generated', timeline: '', frontmatter: {},
+      }, { sourceId: 'default' });
+    }
+    for (let i = 0; i < 60; i++) {
+      await engine.putPage(`reports/daily/generated-${i}`, {
+        type: 'report', title: `Report ${i}`, compiled_truth: 'generated', timeline: '', frontmatter: {},
+      }, { sourceId: 'default' });
+    }
+
+    // Code/docs corpus source with many orphan pages and no meaningful entity
+    // graph. Brain-wide doctor should not let this swamp the default brain
+    // graph signal; explicit --source checks still inspect such a source.
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, config) VALUES ('code-src', 'code-src', '{}'::jsonb) ON CONFLICT DO NOTHING`,
+    );
+    for (let i = 0; i < 200; i++) {
+      await engine.putPage(`docs/source-doc-${i}`, {
+        type: 'concept', title: `Source Doc ${i}`, compiled_truth: 'doc', timeline: '', frontmatter: {},
+      }, { sourceId: 'code-src' });
+    }
+
+    const report = await runDoctorJson();
+    const check = findCheck(report, 'orphan_ratio');
+    expect(check!.status).toBe('ok');
+    expect(check!.message).toMatch(/21%/);
+  });
+
   test('high orphan ratio (>0.5, <=0.8) → warn with fix-hint', async () => {
     for (let i = 0; i < 100; i++) {
       await engine.putPage(`companies/co-${i}`, {

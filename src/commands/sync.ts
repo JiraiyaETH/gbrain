@@ -1001,6 +1001,20 @@ async function writeSyncAnchor(
   await engine.setConfig(`sync.${which}`, value);
 }
 
+async function touchSyncFreshness(
+  engine: BrainEngine,
+  sourceId: string | undefined,
+): Promise<void> {
+  const syncedAt = new Date().toISOString();
+  if (sourceId) {
+    await engine.executeRaw(
+      `UPDATE sources SET last_sync_at = now() WHERE id = $1`,
+      [sourceId],
+    );
+  }
+  await engine.setConfig('sync.last_run', syncedAt);
+}
+
 /**
  * v0.20.0 Cathedral II Layer 12 (SP-1 fix) — read/write the chunker version
  * last used to sync a given source. When it mismatches CURRENT_CHUNKER_VERSION,
@@ -1786,6 +1800,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       detachedWorkingTreeManifest.renamed.length > 0);
 
   if (lastCommit === headCommit && !versionMismatch && !versionNeverSet && !hasDetachedWorkingTreeChanges) {
+    await touchSyncFreshness(engine, opts.sourceId);
     return {
       status: 'up_to_date',
       fromCommit: lastCommit,
@@ -2671,8 +2686,8 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     // v0.42.x (#1794): advance to the PINNED target (not live HEAD) — commits
     // past the pin are the next sync's pin..HEAD diff. `commitTimeMs(pin)` stamps
     // newest_content_at against the commit we drained to. `last_sync_at` is bumped
-    // HERE and ONLY here so the autopilot scheduler never sees a stuck source as
-    // "fresh". The checkpoint rows clear here — CONVERGENCE CONTRACT: sync
+    // here on content advancement; exact no-op syncs only refresh the sync
+    // health heartbeat without moving last_commit. The checkpoint rows clear here — CONVERGENCE CONTRACT: sync
     // convergence == IMPORT convergence; downstream extract/facts/embed is
     // decoupled (its own resumable stale sweeps).
     await writeSyncAnchor(engine, opts.sourceId, 'last_commit', pin, commitTimeMs(repoPath, pin));

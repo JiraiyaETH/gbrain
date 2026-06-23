@@ -12,6 +12,7 @@ import type { PaceKeyOverrides } from '../core/pace-mode.ts';
 import { loadConfig, isThinClient } from '../core/config.ts';
 import { callRemoteTool, unpackToolResult } from '../core/mcp-client.ts';
 import { parseNiceValue, applyNiceness, getEffectiveNiceness, formatNice } from '../core/minions/niceness.ts';
+import { DEFAULT_SKILLOPT_MAX_COST_USD } from '../core/skillopt/defaults.ts';
 
 function parseFlag(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
@@ -1978,7 +1979,7 @@ export async function registerBuiltinHandlers(
       bootstrapReviewed: Boolean(data.bootstrap_reviewed),
       ...(data.held_out_path ? { heldOutPath: String(data.held_out_path) } : {}),
       json: true,
-      maxCostUsd: Number(data.max_cost_usd ?? 5.0),
+      maxCostUsd: Number(data.max_cost_usd ?? DEFAULT_SKILLOPT_MAX_COST_USD),
       maxRuntimeMin: Number(data.max_runtime_min ?? 30),
       force: Boolean(data.force),
     });

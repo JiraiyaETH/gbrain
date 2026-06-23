@@ -58,6 +58,12 @@ export async function runPhaseConsolidate(
   let takesWritten = 0;
   let bucketsProcessed = 0;
   let bucketsSkipped = 0;
+  let factsConsidered = 0;
+  let factsWithEmbedding = 0;
+  let clustersConsidered = 0;
+  let clustersPromotable = 0;
+  let bucketsWithoutPage = 0;
+  let bucketsWithoutPromotableClusters = 0;
 
   // Pull every (source_id, entity_slug) bucket of unconsolidated facts.
   // Uses the partial idx_facts_unconsolidated index.
@@ -120,14 +126,23 @@ export async function runPhaseConsolidate(
     }
 
     bucketsProcessed += 1;
+    factsConsidered += unconsolidated.length;
+    factsWithEmbedding += unconsolidated.filter(f => Boolean(f.embedding)).length;
     const clusters = clusterFacts(unconsolidated, threshold);
+    clustersConsidered += clusters.length;
+    const promotableClusters = clusters.filter(c => c.length >= 2);
+    clustersPromotable += promotableClusters.length;
+    if (promotableClusters.length === 0) bucketsWithoutPromotableClusters += 1;
 
     // Resolve entity_slug → page_id. If page missing in this source, skip.
     const pageRows = await engine.executeRaw<{ id: number }>(
       `SELECT id FROM pages WHERE source_id = $1 AND slug = $2 AND deleted_at IS NULL LIMIT 1`,
       [b.source_id, b.entity_slug],
     );
-    if (pageRows.length === 0) continue;
+    if (pageRows.length === 0) {
+      bucketsWithoutPage += 1;
+      continue;
+    }
     const pageId = pageRows[0].id;
 
     // Existing row_num max for this page → start appending after it.
@@ -256,14 +271,27 @@ export async function runPhaseConsolidate(
     status: factsConsolidated > 0 ? 'ok' : 'ok',
     duration_ms: 0,
     summary: dryRun
-      ? `(dry-run) would promote ${factsConsolidated} facts into ${takesWritten} takes across ${bucketsProcessed} buckets`
-      : `promoted ${factsConsolidated} facts into ${takesWritten} takes across ${bucketsProcessed} buckets`,
+      ? `(dry-run) would promote ${factsConsolidated} facts into ${takesWritten} takes across ${bucketsProcessed} buckets` +
+        (clustersPromotable === 0 && bucketsProcessed > 0
+          ? ` (${clustersConsidered} clusters considered; 0 promotable at threshold ${threshold})`
+          : '')
+      : `promoted ${factsConsolidated} facts into ${takesWritten} takes across ${bucketsProcessed} buckets` +
+        (clustersPromotable === 0 && bucketsProcessed > 0
+          ? ` (${clustersConsidered} clusters considered; 0 promotable at threshold ${threshold})`
+          : ''),
     details: {
       dryRun,
       facts_consolidated: factsConsolidated,
       takes_written: takesWritten,
       buckets_processed: bucketsProcessed,
       buckets_skipped: bucketsSkipped,
+      facts_considered: factsConsidered,
+      facts_with_embedding: factsWithEmbedding,
+      clusters_considered: clustersConsidered,
+      clusters_promotable: clustersPromotable,
+      buckets_without_page: bucketsWithoutPage,
+      buckets_without_promotable_clusters: bucketsWithoutPromotableClusters,
+      cluster_threshold: threshold,
     },
   };
 }

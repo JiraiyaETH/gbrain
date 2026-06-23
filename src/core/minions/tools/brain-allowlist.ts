@@ -187,6 +187,12 @@ export interface BuildBrainToolsOpts {
    */
   brainId?: string;
   /**
+   * Source id for all allow-listed operation calls. Defaults to `default` for
+   * legacy CLI/protected jobs, but submit_agent passes the OAuth-bound source
+   * through SubagentHandlerData.source_id.
+   */
+  sourceId?: string;
+  /**
    * Trusted-workspace allow-list (v0.23). When set, put_page is bounded
    * to slugs matching these prefix globs instead of the legacy
    * `wiki/agents/<id>/...` namespace. Trust comes from PROTECTED_JOB_NAMES
@@ -203,10 +209,12 @@ interface OpContextDeps {
   jobId: number;
   signal?: AbortSignal;
   brainId?: string;
+  sourceId?: string;
   allowedSlugPrefixes?: readonly string[];
 }
 
 function buildOpContext(deps: OpContextDeps): OperationContext {
+  const sourceId = deps.sourceId ?? 'default';
   return {
     engine: deps.engine,
     config: deps.config,
@@ -217,7 +225,17 @@ function buildOpContext(deps: OpContextDeps): OperationContext {
     },
     dryRun: false,
     remote: true,                // match MCP trust boundary for auto-link skip
-    sourceId: 'default',         // v0.34 D4: required; subagent tools default to host source
+    sourceId,                    // v0.34 D4 default; submit_agent can bind a source
+    // Mirror the MCP AuthInfo source grant. Several allow-listed read ops accept
+    // explicit `source_id` params; without allowedSources, a subagent bound to
+    // one source could request another because the resolver had no grant to check.
+    auth: {
+      token: `subagent:${deps.subagentId}`,
+      clientId: `subagent:${deps.subagentId}`,
+      scopes: [],
+      sourceId,
+      allowedSources: [sourceId],
+    },
     jobId: deps.jobId,
     subagentId: deps.subagentId,
     viaSubagent: true,           // FAIL-CLOSED: put_page etc. enforce namespace
@@ -269,6 +287,7 @@ export function buildBrainTools(opts: BuildBrainToolsOpts): ToolDef[] {
           jobId: ctx.jobId,
           signal: ctx.signal,
           brainId: opts.brainId,
+          sourceId: opts.sourceId,
           allowedSlugPrefixes: opts.allowedSlugPrefixes,
         });
         const params = (input && typeof input === 'object') ? input as Record<string, unknown> : {};

@@ -732,6 +732,15 @@ describe('#1970: unreachable last_commit bookmark recovery', () => {
     return rows[0]?.last_commit ?? null;
   }
 
+  async function lastSyncTime(): Promise<number | null> {
+    const rows = await engine.executeRaw<{ last_sync_at: string | Date | null }>(
+      `SELECT last_sync_at FROM sources WHERE id = 'default'`,
+    );
+    const value = rows[0]?.last_sync_at ?? null;
+    if (value === null) return null;
+    return value instanceof Date ? value.getTime() : Date.parse(value);
+  }
+
   async function captureLog<T>(fn: () => Promise<T>): Promise<{ result: T; out: string }> {
     const lines: string[] = [];
     const origLog = console.log;
@@ -909,5 +918,36 @@ describe('#1970: unreachable last_commit bookmark recovery', () => {
     // No further changes → up_to_date (converged).
     const settled = await performSync(engine, { repoPath: repo, ...SYNC_OPTS });
     expect(settled.status).toBe('up_to_date');
+  });
+
+  test('exact no-op sync refreshes last_sync_at without moving last_commit', async () => {
+    const { performSync } = await import('../src/commands/sync.ts');
+    const repo = mkRepo({ 'people/alice.md': personMd('Alice', 'Alice is a person.') });
+
+    const first = await performSync(engine, { repoPath: repo, ...SYNC_OPTS });
+    expect(first.status).toBe('first_sync');
+    const syncedCommit = await bookmark();
+    expect(syncedCommit).not.toBeNull();
+
+    const staleIso = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+    await engine.executeRaw(
+      `UPDATE sources SET last_sync_at = $1 WHERE id = 'default'`,
+      [staleIso],
+    );
+    await engine.setConfig('sync.last_run', '1970-01-01T00:00:00.000Z');
+    const staleTime = Date.parse(staleIso);
+    const beforeRefresh = await lastSyncTime();
+    expect(beforeRefresh).not.toBeNull();
+    expect(beforeRefresh!).toBeLessThanOrEqual(staleTime + 1000);
+
+    const noOp = await performSync(engine, { repoPath: repo, ...SYNC_OPTS });
+    expect(noOp.status).toBe('up_to_date');
+    expect(await bookmark()).toBe(syncedCommit);
+
+    const refreshed = await lastSyncTime();
+    expect(refreshed).not.toBeNull();
+    expect(refreshed!).toBeGreaterThan(staleTime);
+    const lastRun = await engine.getConfig('sync.last_run');
+    expect(lastRun).not.toBe('1970-01-01T00:00:00.000Z');
   });
 });

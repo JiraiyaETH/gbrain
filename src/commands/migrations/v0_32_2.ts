@@ -129,21 +129,23 @@ interface PhaseBOutcome {
 }
 
 /**
- * Dirty-tree refusal: mirror src/core/dry-fix.ts behavior. Refuses to
- * write if any source's local_path has uncommitted changes. Dry-run
- * skips this check (no writes happen anyway).
+ * Dirty-target refusal: refuse to write a page that already has
+ * uncommitted changes. Other dirty files in the same source are allowed;
+ * active brains often have unrelated work in flight, and the migration is
+ * page-scoped.
  */
-function isLocalPathDirty(localPath: string): boolean {
+function isLocalPathDirty(localPath: string, relativePath: string): boolean {
   try {
-    const out = execFileSync('git', ['-C', localPath, 'status', '--porcelain'], {
+    const out = execFileSync('git', ['-C', localPath, 'status', '--porcelain', '--', relativePath], {
       encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 10_000,
     });
     return out.trim().length > 0;
   } catch {
-    // Not a git repo OR git not on PATH → treat as "not dirty" (the
-    // user opted out of git tracking, which is allowed). The fence
-    // writes are still atomic via .tmp + rename.
+    // Not a git repo OR git not on PATH → treat as "not dirty" (the user
+    // opted out of git tracking, which is allowed). Fence writes are still
+    // atomic via .tmp + rename.
     return false;
   }
 }
@@ -186,17 +188,6 @@ async function phaseBFenceFacts(
     const localPathById = new Map<string, string | null>();
     for (const s of sources) localPathById.set(s.id, s.local_path);
 
-    // Dirty-tree refusal: check every source's local_path before writing.
-    for (const [id, localPath] of localPathById) {
-      if (localPath && isLocalPathDirty(localPath)) {
-        return {
-          name: 'fence_facts',
-          status: 'failed',
-          detail: `source "${id}" has uncommitted changes in ${localPath}. Commit or stash, then re-run.`,
-        };
-      }
-    }
-
     // Walk legacy rows in (source_id, entity_slug) groups for per-page
     // atomic writes.
     const legacy = await engine.executeRaw<LegacyFactRow>(
@@ -233,6 +224,21 @@ async function phaseBFenceFacts(
       const list = groups.get(key) ?? [];
       list.push(row);
       groups.set(key, list);
+    }
+
+    // Dirty-target refusal: check only files this migration would touch.
+    for (const [key] of groups) {
+      const [sourceId, entitySlug] = key.split('\0');
+      const localPath = localPathById.get(sourceId);
+      if (!localPath) continue;
+      const relativePath = `${entitySlug}.md`;
+      if (isLocalPathDirty(localPath, relativePath)) {
+        return {
+          name: 'fence_facts',
+          status: 'failed',
+          detail: `target page "${relativePath}" in source "${sourceId}" has uncommitted changes. Commit or stash that file, then re-run.`,
+        };
+      }
     }
 
     for (const [key, group] of groups) {

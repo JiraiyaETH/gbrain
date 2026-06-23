@@ -136,7 +136,11 @@ export async function buildCycleSnapshot(engine: BrainEngine): Promise<CycleSnap
     name: string;
     status: string;
     started_at: string | Date | null;
-    result: { partial?: unknown; status?: unknown; report?: { totals?: Record<string, unknown> } } | null;
+    result: {
+      partial?: unknown;
+      status?: unknown;
+      report?: { status?: unknown; totals?: Record<string, unknown> };
+    } | null;
   };
 
   const isoOrNull = (v: string | Date | null): string | null => {
@@ -153,10 +157,20 @@ export async function buildCycleSnapshot(engine: BrainEngine): Promise<CycleSnap
 
   const toCycleRow = (r: Row | undefined): CycleRow | null => {
     if (!r) return null;
+    const reportStatus = typeof r.result?.report?.status === 'string'
+      ? r.result.report.status
+      : null;
+    const resultStatus = typeof r.result?.status === 'string'
+      ? r.result.status
+      : null;
+    const effectiveStatus = reportStatus
+      ?? resultStatus
+      ?? (r.result?.partial === true ? 'partial' : null)
+      ?? r.status;
     return {
       finished_at: isoOrNull(r.finished_at),
       name: r.name,
-      status: r.status,
+      status: effectiveStatus,
       duration_ms: durationMs(r.started_at, r.finished_at),
       totals: r.result?.report?.totals ?? null,
     };
@@ -431,10 +445,13 @@ function renderHuman(report: StatusReport): string {
     const fmt = (row: CycleRow | null, label: string) => {
       if (!row) return `  ${label}: never run`;
       const dur = row.duration_ms != null ? ` (${(row.duration_ms / 1000).toFixed(1)}s)` : '';
+      const statusStr = row.status && !['ok', 'completed'].includes(row.status)
+        ? `  status=${row.status}`
+        : '';
       const totalsStr = row.totals && Object.keys(row.totals).length > 0
         ? `  totals=${JSON.stringify(row.totals)}`
         : '';
-      return `  ${label}: ${row.finished_at}${dur}${totalsStr}`;
+      return `  ${label}: ${row.finished_at}${dur}${statusStr}${totalsStr}`;
     };
     lines.push(fmt(report.cycle.last_full, 'Last full cycle'));
     lines.push(fmt(report.cycle.last_targeted, 'Last targeted run'));

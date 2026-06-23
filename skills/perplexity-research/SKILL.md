@@ -13,7 +13,7 @@ triggers:
 mutating: true
 writes_pages: true
 writes_to:
-  - research/
+  - analysis/
 ---
 
 # perplexity-research — Brain-Augmented Web Research
@@ -51,7 +51,7 @@ instead of repeating settled fact.
 
 ## Output structure
 
-The research output lands as a brain page under `research/<slug>.md` with
+The research output lands as a brain page under `analysis/<slug>.md` with
 this structure:
 
 ```markdown
@@ -112,7 +112,7 @@ gbrain query "<topic keywords>"
 #      -d '{"model": "sonar-pro", "messages": [{"role":"user","content":"..."}]}'
 
 # 4. Write the structured research page via put_page:
-gbrain put_page research/<slug>      # via the put_page operation
+gbrain put_page analysis/<slug>      # via the put_page operation
 
 # 5. Cross-link entities mentioned (people, companies) per Iron Law.
 ```
@@ -142,7 +142,7 @@ BRAIN=$(gbrain get people/<slug> 2>/dev/null)
 
 ### Deal / company monitoring (cron)
 
-For each active item under `deals/` or `companies/`:
+For each active item under `projects/` or `companies/`:
 
 ```bash
 # Weekly: pull recent news per company; flag changes for review.

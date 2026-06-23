@@ -41,6 +41,7 @@ import { resolvePaceMode, loadPaceModeConfig, readPaceEnv } from '../../pace-mod
 import type { BrainEngine } from '../../engine.ts';
 import type { MinionJobContext } from '../types.ts';
 import { parseUsdLimit, usdLimitToCap, resolveSpendPosture } from '../../spend-posture.ts';
+import { resolveAutonomousDailyCapUsd } from '../../budget/autonomous-daily-cap.ts';
 
 import { embedBackfillLockId, EMBED_BACKFILL_LOCK_TTL_MIN } from '../../embed-backfill-lock.ts';
 
@@ -154,8 +155,10 @@ export function makeEmbedBackfillHandler(engine: BrainEngine) {
     // auto-compose via AsyncLocalStorage; if pricing pushes cumulative spend
     // past the cap, gateway throws BudgetExhausted BEFORE the next API call.
     const capUsd = await readMaxUsd(engine);
+    const dailyCapUsd = await resolveAutonomousDailyCapUsd(engine);
     const tracker = new BudgetTracker({
       maxCostUsd: capUsd,
+      dailyCapUsd,
       label: `embed-backfill:${sourceId}`,
     });
 

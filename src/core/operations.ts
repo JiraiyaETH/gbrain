@@ -30,6 +30,7 @@ import type { SearchResult } from './types.ts';
 import { CJK_SLUG_CHARS } from './cjk.ts';
 import * as db from './db.ts';
 import { VERSION } from '../version.ts';
+import { DEFAULT_SKILLOPT_MAX_COST_USD } from './skillopt/defaults.ts';
 import {
   GET_RECENT_SALIENCE_DESCRIPTION,
   FIND_ANOMALIES_DESCRIPTION,
@@ -4945,7 +4946,7 @@ const run_skillopt: Operation = {
     epochs: { type: 'number', description: 'Default 4' },
     batch_size: { type: 'number', description: 'Default 8' },
     lr: { type: 'number', description: 'Default 4' },
-    max_cost_usd: { type: 'number', description: 'Default 5.00' },
+    max_cost_usd: { type: 'number', description: `Default ${DEFAULT_SKILLOPT_MAX_COST_USD.toFixed(2)}` },
     no_mutate: { type: 'boolean', description: 'Write proposed.md without replacing SKILL.md' },
     allow_mutate_bundled: { type: 'boolean', description: 'Required to mutate bundled skills' },
     held_out_path: { type: 'string', description: 'Path to a held-out test set (JSONL). REQUIRED (>=5 rows) to mutate a bundled skill in place — otherwise the run hard-refuses. Remote callers: must resolve within the skills directory.' },
@@ -5044,7 +5045,7 @@ const run_skillopt: Operation = {
       bootstrapReviewed: false,
       ...(heldOutPath ? { heldOutPath } : {}),
       json: true,
-      maxCostUsd: (p.max_cost_usd as number) ?? 5.0,
+      maxCostUsd: (p.max_cost_usd as number) ?? DEFAULT_SKILLOPT_MAX_COST_USD,
       maxRuntimeMin: 30,
       force: false,
     });

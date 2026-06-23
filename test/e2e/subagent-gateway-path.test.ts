@@ -70,15 +70,25 @@ interface FakeJobOpts {
   prompt: string;
   model?: string;
   allowed_tools?: string[];
+  max_turns?: number;
+  ownerClientId?: string;
 }
 
 async function makeFakeJob(opts: FakeJobOpts): Promise<{ jobId: number; ctx: MinionJobContext; tokenSink: any[] }> {
+  const data: Record<string, unknown> = {
+    prompt: opts.prompt,
+    model: opts.model,
+    allowed_tools: opts.allowed_tools,
+  };
+  if (opts.max_turns !== undefined) data.max_turns = opts.max_turns;
+  if (opts.ownerClientId) data.__owner_client_id = opts.ownerClientId;
+
   // Insert a minion_jobs row so foreign keys validate (subagent_tool_executions.job_id FK).
   const rows = await engine.executeRaw<{ id: number }>(
     `INSERT INTO minion_jobs (name, status, data, queue, priority, created_at)
      VALUES ('subagent', 'active', $1::jsonb, 'default', 0, now())
      RETURNING id`,
-    [JSON.stringify({ prompt: opts.prompt, model: opts.model, allowed_tools: opts.allowed_tools })],
+    [JSON.stringify(data)],
   );
   const jobId = rows[0].id;
 
@@ -89,7 +99,7 @@ async function makeFakeJob(opts: FakeJobOpts): Promise<{ jobId: number; ctx: Min
   const ctx: MinionJobContext = {
     id: jobId,
     name: 'subagent',
-    data: { prompt: opts.prompt, model: opts.model, allowed_tools: opts.allowed_tools },
+    data,
     attempts_made: 0,
     signal: abortCtrl.signal,
     shutdownSignal: shutdownCtrl.signal,
@@ -100,6 +110,18 @@ async function makeFakeJob(opts: FakeJobOpts): Promise<{ jobId: number; ctx: Min
     readInbox: async () => [],
   };
   return { jobId, ctx, tokenSink };
+}
+
+async function seedBudgetClient(clientId: string, capUsd: number | null): Promise<void> {
+  await engine.executeRaw(
+    `INSERT INTO oauth_clients
+       (client_id, client_name, client_secret_hash, scope, grant_types,
+        redirect_uris, token_endpoint_auth_method, budget_usd_per_day, created_at, deleted_at)
+     VALUES ($1, $1, '', 'agent', ARRAY['client_credentials'],
+             ARRAY[]::text[], 'client_secret_post', $2, now(), NULL)
+     ON CONFLICT (client_id) DO UPDATE SET budget_usd_per_day = EXCLUDED.budget_usd_per_day`,
+    [clientId, capUsd],
+  );
 }
 
 /**
@@ -158,6 +180,85 @@ function buildHandler(toolRegistry: ToolDef[]) {
 
 describe('runSubagentViaGateway (v0.38 Slice 1 — full handler path through gateway.toolLoop)', () => {
   afterAll(() => clearGateway());
+
+  it('owned gateway subagent refuses over-budget job before gateway chat transport', async () => {
+    await seedBudgetClient('tight-gateway-client', 0.01);
+    let calls = 0;
+    __setChatTransportForTests(async () => {
+      calls++;
+      return {
+        text: 'should not run',
+        blocks: [{ type: 'text', text: 'should not run' }] as ChatBlock[],
+        stopReason: 'end',
+        usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0 },
+        model: 'anthropic:claude-sonnet-4-6',
+        providerId: 'anthropic',
+      } satisfies ChatResult;
+    });
+
+    const tools = makeStubTools([]);
+    const handler = buildHandler(tools);
+    const { ctx } = await makeFakeJob({
+      prompt: 'blocked',
+      model: 'anthropic:claude-sonnet-4-6',
+      max_turns: 1,
+      ownerClientId: 'tight-gateway-client',
+    });
+
+    await expect(handler(ctx)).rejects.toThrow(/budget exceeded/i);
+    expect(calls).toBe(0);
+  });
+
+  it('owned gateway subagent settles aggregate usage into mcp_spend_log', async () => {
+    await seedBudgetClient('metered-gateway-client', 2.00);
+    let turn = 0;
+    __setChatTransportForTests(async () => {
+      turn++;
+      if (turn === 1) {
+        return {
+          text: '',
+          blocks: [
+            { type: 'tool-call', toolCallId: 'budget-tc', toolName: 'search', input: { q: 'budget' } },
+          ] as ChatBlock[],
+          stopReason: 'tool_calls',
+          usage: { input_tokens: 100000, output_tokens: 20000, cache_read_tokens: 0, cache_creation_tokens: 0 },
+          model: 'anthropic:claude-sonnet-4-6',
+          providerId: 'anthropic',
+        } satisfies ChatResult;
+      }
+      return {
+        text: 'settled',
+        blocks: [{ type: 'text', text: 'settled' }] as ChatBlock[],
+        stopReason: 'end',
+        usage: { input_tokens: 50000, output_tokens: 30000, cache_read_tokens: 0, cache_creation_tokens: 0 },
+        model: 'anthropic:claude-sonnet-4-6',
+        providerId: 'anthropic',
+      } satisfies ChatResult;
+    });
+
+    const executions: Array<{ name: string; input: unknown; ts: number }> = [];
+    const handler = buildHandler(makeStubTools(executions));
+    const { ctx } = await makeFakeJob({
+      prompt: 'meter this',
+      model: 'anthropic:claude-sonnet-4-6',
+      allowed_tools: ['search'],
+      max_turns: 2,
+      ownerClientId: 'metered-gateway-client',
+    });
+
+    const result = await handler(ctx);
+    expect(result.result).toBe('settled');
+    expect(executions.length).toBe(1);
+
+    const spendRows = await engine.executeRaw<{ spend_cents: string; operation: string }>(
+      `SELECT spend_cents::text AS spend_cents, operation
+         FROM mcp_spend_log
+        WHERE client_id = 'metered-gateway-client'`,
+    );
+    expect(spendRows.length).toBe(1);
+    expect(parseFloat(spendRows[0]!.spend_cents)).toBeCloseTo(120, 3);
+    expect(spendRows[0]!.operation).toBe('subagent_loop');
+  });
 
   it('happy path 1-turn: gateway returns text, handler returns SubagentResult', async () => {
     __setChatTransportForTests(async () => ({

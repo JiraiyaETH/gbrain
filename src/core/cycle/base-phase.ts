@@ -32,6 +32,7 @@
 
 import { BudgetMeter, type SubmitEstimate, type BudgetCheckResult } from './budget-meter.ts';
 import { sourceScopeOpts, type OperationContext } from '../operations.ts';
+import { resolveAutonomousDailyCapUsd } from '../budget/autonomous-daily-cap.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { CyclePhase, PhaseResult, PhaseStatus, PhaseError } from '../cycle.ts';
 import type { ProgressReporter } from '../progress.ts';
@@ -201,7 +202,11 @@ export abstract class BaseCyclePhase {
     // Budget meter construction. The default path reads config; tests inject.
     if (!opts.meter) {
       const budgetUsd = await this.resolveBudgetUsd(ctx, opts);
-      this.meter = new BudgetMeter({ budgetUsd, phase: this.name });
+      const dailyCapUsd = await resolveAutonomousDailyCapUsd(
+        ctx.engine,
+        ctx.config as unknown as Record<string, unknown>,
+      );
+      this.meter = new BudgetMeter({ budgetUsd, phase: this.name, dailyCapUsd });
     } else {
       this.meter = opts.meter;
     }

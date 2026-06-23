@@ -70,6 +70,26 @@ describe('shouldExclude', () => {
     expect(shouldExclude('openclaw/config/agent')).toBe(true);
   });
 
+  test('excludes search-policy hidden prefixes', () => {
+    expect(shouldExclude('test/fixtures/foo')).toBe(true);
+    expect(shouldExclude('sources/fireflies/raw-packet')).toBe(true);
+    expect(shouldExclude('attachments/image-1')).toBe(true);
+    expect(shouldExclude('_quarantine/page')).toBe(true);
+    expect(shouldExclude('quarantine/page')).toBe(true);
+  });
+
+  test('excludes code pages by page_kind', () => {
+    expect(shouldExclude('src/core/engine', 'code')).toBe(true);
+    expect(shouldExclude('docs/architecture/notes', 'markdown')).toBe(false);
+  });
+
+  test('excludes generated non-linkable page types', () => {
+    expect(shouldExclude('atoms/2026-06-20/foo', 'markdown', 'atom')).toBe(true);
+    expect(shouldExclude('extracts/2026-06-20/foo', 'markdown', 'extract_receipt')).toBe(true);
+    expect(shouldExclude('reports/daily/foo', 'markdown', 'report')).toBe(true);
+    expect(shouldExclude('meetings/weekly', 'markdown', 'meeting')).toBe(false);
+  });
+
   test('excludes first-segment: scratch', () => {
     expect(shouldExclude('scratch/idea-dump')).toBe(true);
   });
@@ -281,6 +301,79 @@ describe('findOrphans (engine-injected)', () => {
     const rows = await queryOrphanPages(engine);
     const slugs = rows.map(r => r.slug);
     expect(slugs).toContain('topic/standalone');
+  });
+
+  test('excludes code and search-hidden pages from orphan numerator and denominator', async () => {
+    await engine.putPage('people/alice', {
+      type: 'person',
+      title: 'Alice',
+      compiled_truth: 'Alice is a real orphaned knowledge page.',
+      timeline: '',
+    });
+    await engine.putPage('test/fixtures/example', {
+      type: 'note',
+      title: 'Fixture',
+      compiled_truth: 'Test fixture with no inbound links.',
+      timeline: '',
+    });
+    await engine.putPage('sources/fireflies/raw-packet', {
+      type: 'source',
+      title: 'Raw Packet',
+      compiled_truth: 'Raw provider packet with no inbound links.',
+      timeline: '',
+    });
+    await engine.putPage('src/core/engine', {
+      type: 'source',
+      title: 'Engine Source',
+      compiled_truth: 'Code page with no inbound links.',
+      timeline: '',
+    });
+    await engine.executeRaw(
+      `UPDATE pages SET page_kind = 'code' WHERE slug = 'src/core/engine'`,
+    );
+
+    const result = await findOrphans(engine);
+
+    expect(result.orphans.map(o => o.slug)).toEqual(['people/alice']);
+    expect(result.total_pages).toBe(4);
+    expect(result.total_linkable).toBe(1);
+    expect(result.total_orphans).toBe(1);
+    expect(result.excluded).toBe(3);
+  });
+
+  test('excludes generated non-linkable types from orphan numerator and denominator', async () => {
+    await engine.putPage('people/alice', {
+      type: 'person',
+      title: 'Alice',
+      compiled_truth: 'Alice is a real orphaned knowledge page.',
+      timeline: '',
+    });
+    await engine.putPage('atoms/2026-06-20/generated', {
+      type: 'atom',
+      title: 'Generated Atom',
+      compiled_truth: 'Generated atom with no inbound links.',
+      timeline: '',
+    });
+    await engine.putPage('extracts/2026-06-20/generated', {
+      type: 'extract_receipt',
+      title: 'Generated Extract Receipt',
+      compiled_truth: 'Generated receipt with no inbound links.',
+      timeline: '',
+    });
+    await engine.putPage('reports/daily/generated', {
+      type: 'report',
+      title: 'Generated Report',
+      compiled_truth: 'Generated report with no inbound links.',
+      timeline: '',
+    });
+
+    const result = await findOrphans(engine);
+
+    expect(result.orphans.map(o => o.slug)).toEqual(['people/alice']);
+    expect(result.total_pages).toBe(4);
+    expect(result.total_linkable).toBe(1);
+    expect(result.total_orphans).toBe(1);
+    expect(result.excluded).toBe(3);
   });
 
   test('zero pages: empty result (no crash on empty brain)', async () => {

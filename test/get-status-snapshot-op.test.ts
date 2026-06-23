@@ -18,6 +18,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { operations, operationsByName } from '../src/core/operations.ts';
+import { buildCycleSnapshot } from '../src/commands/status.ts';
 
 describe('get_status_snapshot op definition', () => {
   test('exists and is registered in the operations array', () => {
@@ -68,5 +69,39 @@ describe('get_status_snapshot handler shape', () => {
     expect(result).not.toHaveProperty('workers');
     expect(result).not.toHaveProperty('queue');
     expect(result).not.toHaveProperty('autopilot');
+  });
+});
+
+describe('cycle snapshot status semantics', () => {
+  test('surfaces embedded partial autopilot result status instead of outer completed job status', async () => {
+    const row = {
+      finished_at: '2026-06-20T08:00:00.000Z',
+      name: 'autopilot-cycle',
+      status: 'completed',
+      started_at: '2026-06-20T07:59:00.000Z',
+      result: {
+        partial: true,
+        status: 'partial',
+        report: {
+          status: 'partial',
+          totals: { extract_atoms_atoms_written: 61 },
+        },
+      },
+    };
+    const stubEngine: any = {
+      kind: 'pglite',
+      executeRaw: async (sql: string) => {
+        if (sql.includes("name = 'autopilot-cycle'")) return [row];
+        if (sql.includes("name LIKE 'autopilot-%'")) return [row];
+        return [];
+      },
+      getConfig: async () => null,
+    };
+
+    const snapshot = await buildCycleSnapshot(stubEngine);
+
+    expect(snapshot.last_full?.status).toBe('partial');
+    expect(snapshot.last_targeted?.status).toBe('partial');
+    expect(snapshot.last_full?.totals).toEqual({ extract_atoms_atoms_written: 61 });
   });
 });

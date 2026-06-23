@@ -92,26 +92,13 @@ export const aliasDeclaredByTwoTypes: LintRule = (manifest) => {
 };
 
 export const aliasReferencesUndeclaredType: LintRule = (manifest) => {
-  // codex C14 — alias should be a known type OR a known alias of another
-  // type. For v0.40.6.0 we lint the simpler case: alias must match a
-  // declared page_type name. Closure validation is a v0.41+ extension.
-  const issues: LintIssue[] = [];
-  const typeNames = new Set(manifest.page_types.map((t) => t.name));
-  for (const t of manifest.page_types) {
-    for (const a of t.aliases) {
-      if (!typeNames.has(a)) {
-        issues.push({
-          rule: 'alias_references_undeclared_type',
-          severity: 'warning',
-          message: `type '${t.name}' aliases '${a}' which is not a declared page_type in this pack`,
-          pack: manifest.name,
-          type: t.name,
-          hint: `add a page_type for '${a}' OR remove the alias`,
-        });
-      }
-    }
-  }
-  return issues;
+  void manifest;
+  // v0.42 base-v2 uses aliases as legacy/free-text type labels so queries for
+  // canonical types still include rows that have not been unified yet. Those
+  // aliases are intentionally not page_type declarations. Keep the rule name
+  // as a compatibility no-op; alias_shadows_type and
+  // alias_declared_by_two_types still catch the unsafe alias shapes.
+  return [];
 };
 
 export const enrichableTypesUndeclared: LintRule = (manifest) => {

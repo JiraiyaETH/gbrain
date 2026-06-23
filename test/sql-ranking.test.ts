@@ -209,7 +209,7 @@ describe('parseHardExcludesEnv', () => {
 
 describe('resolveBoostMap', () => {
   test('returns defaults when env is unset', () => {
-    expect(resolveBoostMap(undefined)).toEqual(DEFAULT_SOURCE_BOOSTS);
+    expect(resolveBoostMap('')).toEqual(DEFAULT_SOURCE_BOOSTS);
   });
 
   test('env override takes precedence over defaults', () => {
@@ -272,16 +272,16 @@ describe('archive demote (issue #1777)', () => {
 
   test('archive/ is demoted to 0.5 in the boost map', () => {
     expect(DEFAULT_SOURCE_BOOSTS['archive/']).toBe(0.5);
-    expect(resolveBoostMap()['archive/']).toBe(0.5);
+    expect(resolveBoostMap('')['archive/']).toBe(0.5);
   });
 
   test('buildSourceFactorCase emits an archive/ demote branch', () => {
-    const sql = buildSourceFactorCase('p.slug', resolveBoostMap(), undefined);
+    const sql = buildSourceFactorCase('p.slug', resolveBoostMap(''), undefined);
     expect(sql).toContain("WHEN p.slug LIKE 'archive/%' THEN 0.5");
   });
 
   test('detail=high bypasses the source factor (archive ranks normally)', () => {
-    expect(buildSourceFactorCase('p.slug', resolveBoostMap(), 'high')).toBe('1.0');
+    expect(buildSourceFactorCase('p.slug', resolveBoostMap(''), 'high')).toBe('1.0');
   });
 
   test('escapeLikePattern is exported at top level (CV-3a contract)', () => {

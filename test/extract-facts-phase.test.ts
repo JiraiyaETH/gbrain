@@ -79,6 +79,35 @@ describe('runExtractFacts — happy path', () => {
     ]);
   });
 
+  test('reconciles fence facts stored after the timeline split', async () => {
+    await engine.putPage('meetings/walter-michelle', {
+      title: 'Walter <> Michelle',
+      type: 'meeting',
+      compiled_truth: '# Walter <> Michelle\n\n## Summary\nBody before timeline.',
+      timeline: FACT_FENCE(
+        `| 1 | Michelle was assigned to create a content calendar. | commitment | 1.0 | world | medium | 2026-06-18 |  | mcp:extract_facts |  |`,
+      ),
+      frontmatter: {},
+    });
+
+    const r = await runExtractFacts(engine, { slugs: ['meetings/walter-michelle'] });
+    expect(r.pagesScanned).toBe(1);
+    expect(r.pagesWithFacts).toBe(1);
+    expect(r.factsInserted).toBe(1);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dbRows = await (engine as any).db.query(
+      `SELECT fact, row_num, source_markdown_slug FROM facts ORDER BY row_num`,
+    );
+    expect(dbRows.rows).toEqual([
+      expect.objectContaining({
+        fact: 'Michelle was assigned to create a content calendar.',
+        row_num: 1,
+        source_markdown_slug: 'meetings/walter-michelle',
+      }),
+    ]);
+  });
+
   test('idempotent: running twice produces the same final DB state', async () => {
     const body = FACT_FENCE(
       `| 1 | A | fact | 1.0 | world | medium | 2026-01-01 |  | s |  |

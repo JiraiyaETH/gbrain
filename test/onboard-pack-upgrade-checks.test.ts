@@ -52,6 +52,23 @@ async function seedPages(types: string[]) {
   }
 }
 
+async function seedPagesForSource(sourceId: string, types: string[]) {
+  await engine.executeRaw(
+    `INSERT INTO sources (id, name, local_path)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (id) DO NOTHING`,
+    [sourceId, sourceId, `/tmp/${sourceId}`],
+  );
+  for (let i = 0; i < types.length; i++) {
+    await engine.putPage(`p${i}`, {
+      title: `${sourceId} p${i}`,
+      type: types[i] as never,
+      compiled_truth: 'body that is long enough to pass any minimum-length guards in the codebase',
+      timeline: '', frontmatter: {}, source_path: `p${i}.md`,
+    }, { sourceId });
+  }
+}
+
 describe('checkPackUpgradeAvailable', () => {
   it('fires on gbrain-base brain with gbrain-base-v2 available', async () => {
     // Default active pack is gbrain-base; gbrain-base-v2 declares
@@ -89,6 +106,18 @@ describe('checkTypeProliferation (D16 pack-aware ratio)', () => {
     const result = await checkTypeProliferation(engine);
     expect(result.check.status).toBe('warn');
     expect(result.check.message).toMatch(/32 distinct/);
+  });
+
+  it('does not warn when only the cross-source union exceeds the threshold', async () => {
+    // gbrain-base declares 24 types. Each source has 20 distinct types, below
+    // the per-source warn threshold (29), while the aggregate union is 40.
+    await seedPagesForSource('alpha', Array.from({ length: 20 }, (_, i) => `alpha-type-${i}`));
+    await seedPagesForSource('beta', Array.from({ length: 20 }, (_, i) => `beta-type-${i}`));
+
+    const result = await checkTypeProliferation(engine);
+    expect(result.check.status).toBe('ok');
+    expect(result.check.message).toContain('20 max distinct typed values/source');
+    expect(result.check.message).toContain('aggregate union 40');
   });
 });
 

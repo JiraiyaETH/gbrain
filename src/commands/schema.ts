@@ -49,6 +49,7 @@ import type { SchemaPackManifest, PackPrimitive } from '../core/schema-pack/mani
 import { PACK_PRIMITIVES } from '../core/schema-pack/manifest-v1.ts';
 import { bundledPackPath, BUNDLED_PACK_LIST } from '../core/schema-pack/bundled-packs.ts';
 import { gbrainPath, loadConfig, configPath } from '../core/config.ts';
+import type { BrainEngine } from '../core/engine.ts';
 
 export async function runSchema(args: string[]): Promise<void> {
   const sub = args[0];
@@ -164,10 +165,45 @@ Resolution chain (7-tier, tier 1 trust-gated):
 `);
 }
 
-async function runActive(_args: string[]): Promise<void> {
+async function readDbSchemaPack(engine: BrainEngine): Promise<string | undefined> {
+  try {
+    return (await engine.getConfig('schema_pack'))?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadActivePackForCli(engine: BrainEngine): Promise<{
+  pack: Awaited<ReturnType<typeof loadActivePack>>;
+  resolution: ReturnType<typeof resolveActivePackNameOnly>;
+}> {
   const cfg = loadConfig();
-  const resolution = resolveActivePackNameOnly({ cfg, remote: false });
-  const pack = await loadActivePack({ cfg, remote: false });
+  const dbConfig = await readDbSchemaPack(engine);
+  const input = { cfg, remote: false, dbConfig };
+  return {
+    pack: await loadActivePack(input),
+    resolution: resolveActivePackNameOnly(input),
+  };
+}
+
+async function loadActivePackForCliBestEffort(): Promise<{
+  pack: Awaited<ReturnType<typeof loadActivePack>>;
+  resolution: ReturnType<typeof resolveActivePackNameOnly>;
+}> {
+  try {
+    return await withConnectedEngine((engine) => loadActivePackForCli(engine));
+  } catch {
+    const cfg = loadConfig();
+    const input = { cfg, remote: false };
+    return {
+      pack: await loadActivePack(input),
+      resolution: resolveActivePackNameOnly(input),
+    };
+  }
+}
+
+async function runActive(_args: string[]): Promise<void> {
+  const { pack, resolution } = await loadActivePackForCliBestEffort();
   console.log(`Active pack: ${pack.manifest.name} v${pack.manifest.version}`);
   console.log(`Source: ${resolution.source}`);
   console.log(`Pack identity: ${pack.identity}`);
@@ -675,8 +711,7 @@ async function runDiffCmd(args: string[]): Promise<void> {
 
 async function runGraphCmd(args: string[]): Promise<void> {
   const { json } = parseFlags(args);
-  const cfg = loadConfig();
-  const pack = await loadActivePack({ cfg, remote: false });
+  const { pack } = await loadActivePackForCliBestEffort();
   if (json) {
     console.log(JSON.stringify({
       schema_version: 1,
@@ -698,13 +733,12 @@ async function runLintCmd(args: string[]): Promise<void> {
   const { json, positional } = parseFlags(args);
   const withDb = args.includes('--with-db');
   const name = positional[0];
-  const cfg = loadConfig();
   let pack: SchemaPackManifest | null;
   if (name) {
     const p = packPathByName(name);
     try { pack = p ? loadPackFromFile(p) : null; } catch { pack = null; }
   } else {
-    pack = (await loadActivePack({ cfg, remote: false })).manifest;
+    pack = (await loadActivePackForCliBestEffort()).pack.manifest;
   }
   if (!pack) {
     console.error(`Pack not found: ${name}`);
@@ -746,8 +780,7 @@ async function runExplainCmd(args: string[]): Promise<void> {
     console.error('Usage: gbrain schema explain <type-name>  (experimental)');
     process.exit(2);
   }
-  const cfg = loadConfig();
-  const pack = await loadActivePack({ cfg, remote: false });
+  const { pack } = await loadActivePackForCliBestEffort();
   const found = pack.manifest.page_types.find((t) => t.name === typeName);
   if (!found) {
     console.error(`Type \`${typeName}\` not in active pack \`${pack.manifest.name}\`.`);

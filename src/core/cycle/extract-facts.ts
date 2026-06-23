@@ -210,7 +210,9 @@ export async function runExtractFacts(
       continue;
     }
 
-    const body = page.compiled_truth ?? '';
+    const body = [page.compiled_truth ?? '', page.timeline ?? '']
+      .filter(part => part.trim().length > 0)
+      .join('\n\n');
     const parsed = parseFactsFence(body);
     if (parsed.warnings.length > 0) {
       result.warnings.push(
