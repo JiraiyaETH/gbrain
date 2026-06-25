@@ -19,11 +19,11 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { bundledPackNames, bundledPackPath } from '../core/schema-pack/bundled-packs.ts';
 import {
   addAliasToType,
   addLinkTypeToPack,
   addPrefixToType,
-  BUNDLED_PACK_NAMES,
   addTypeToPack,
   invalidatePackCache,
   loadActivePack,
@@ -180,7 +180,7 @@ async function runActive(_args: string[]): Promise<void> {
 }
 
 function runList(_args: string[]): void {
-  const bundled = [...BUNDLED_PACK_NAMES];
+  const bundled = bundledPackNames();
   const installedDir = gbrainPath('schema-packs');
   const installed: string[] = [];
   if (existsSync(installedDir)) {
@@ -367,18 +367,11 @@ function runUse(args: string[]): void {
 }
 
 function packPathByName(name: string): string | null {
-  if (BUNDLED_PACK_NAMES.has(name)) {
-    // Resolve bundled YAML — try a few locations.
-    const here = dirname(new URL(import.meta.url).pathname);
-    const candidates = [
-      join(here, '..', 'core', 'schema-pack', 'base', `${name}.yaml`),
-      join(here, '..', '..', 'src', 'core', 'schema-pack', 'base', `${name}.yaml`),
-    ];
-    for (const c of candidates) {
-      if (existsSync(c)) return c;
-    }
-    return null;
-  }
+  // Bundled packs resolve to their embedded YAML (bundled-packs.ts) — works
+  // in dev AND the compiled binary, for EVERY bundled pack. The old resolver
+  // hardcoded only gbrain-base, so `show gbrain-base-v2` failed even in dev.
+  const embedded = bundledPackPath(name);
+  if (embedded) return embedded;
   const baseDir = gbrainPath('schema-packs', name);
   for (const c of ['pack.yaml', 'pack.yml', 'pack.json']) {
     const candidate = join(baseDir, c);
