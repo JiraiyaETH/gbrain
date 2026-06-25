@@ -95,6 +95,20 @@ async function loadCfg(engine: BrainEngine): Promise<ResolvedConfig> {
     const n = parseFloat(raw);
     return Number.isFinite(n) && n > 0 ? n : fallback;
   };
+  // LOCAL CARRY (not upstream): honor the USD-knob sentinels off/unlimited/none →
+  // Infinity (no ceiling), mirroring the CLI's --max-usd handling
+  // (src/commands/enrich.ts ~634) + gbrain's documented spend-knob convention
+  // (docs/operations/spend-controls.md). Without this the cycle wrapper cannot
+  // express "no cap": parseFloat("off")=NaN fell back to the finite default,
+  // which fail-closes runEnrichCore's BudgetTracker (budget_exhausted at ~$0) for
+  // unpriced models like deepseek. runEnrichCore maps Infinity → no ceiling.
+  const parseUsdCap = (raw: string | null, fallback: number): number => {
+    if (raw == null) return fallback;
+    const v = raw.trim().toLowerCase();
+    if (['off', 'unlimited', 'none'].includes(v)) return Infinity;
+    const n = parseFloat(raw);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
   const parseIntOrDefault = (raw: string | null, fallback: number): number => {
     if (raw == null) return fallback;
     const n = parseInt(raw, 10);
@@ -121,8 +135,8 @@ async function loadCfg(engine: BrainEngine): Promise<ResolvedConfig> {
 
   return {
     enabled: enabledFlag,
-    maxCostUsd: parseFloatOrDefault(maxCost, 1.0),
-    maxTotalCostUsd: parseFloatOrDefault(maxTotalCost, 5.0),
+    maxCostUsd: parseUsdCap(maxCost, 1.0),
+    maxTotalCostUsd: parseUsdCap(maxTotalCost, 5.0),
     maxTotalWalltimeMin: parseFloatOrDefault(maxTotalWall, 30),
     maxPagesPerTick: parseIntOrDefault(maxPages, 3),
     types,

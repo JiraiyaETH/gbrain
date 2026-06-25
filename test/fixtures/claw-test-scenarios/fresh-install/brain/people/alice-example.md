@@ -1,13 +1,17 @@
 ---
 type: person
+title: Alice Example
 name: Alice Example
 x_handle: alice_example
+enriched_at: '2026-06-23T12:51:49.840Z'
+enriched_by: 'cli:enrich'
+ingested_via: put_page
+ingested_at: '2026-06-23T12:51:54.442Z'
+source_kind: put_page
 ---
 
-# Alice Example
+## Overview
+Alice Example is an early founder. [Source: test-cli-format-volunteer-test-ts]
 
-Alice is a fictional founder used for claw-test fixtures. She started [acme-example](companies/acme-example) in 2024.
-
-## Background
-
-Alice has spent 10 years in software and 2 years in AI tooling. She is exploring product-market fit for an [agentic-workflow](concepts/agentic-workflows) tool.
+## Notable work
+Alice founded WidgetCo. [Source: test-enrich-thin-test-ts]

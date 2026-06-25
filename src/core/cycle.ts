@@ -362,6 +362,20 @@ function disabledPaidCalibrationPhaseResult(phase: PaidCalibrationPhase): PhaseR
   };
 }
 
+// LOCAL CARRY (not upstream): v0.31 `consolidate` ships as a DETERMINISTIC
+// PLACEHOLDER for the unbuilt v0.32 Sonnet-synthesis pass (see consolidate.ts
+// header). It re-clusters the full unconsolidated fact set every cycle
+// (extract_facts clears consolidated_at each run) and promotes nothing until
+// facts genuinely cluster, so on a large brain its synchronous clustering
+// exceeds the 30s worker lease and stalls the cycle job. Gate it default-OFF —
+// like the takes/calibration phases it feeds, which are already default-OFF —
+// until the synthesis (and a yielding/incremental rewrite) lands upstream.
+// Re-enable with `gbrain config set cycle.consolidate.enabled true`.
+async function isConsolidateEnabled(engine: BrainEngine): Promise<boolean> {
+  const raw = await engine.getConfig('cycle.consolidate.enabled').catch(() => null);
+  return isTruthyConfig(raw);
+}
+
 export type CycleStatus = 'ok' | 'clean' | 'partial' | 'skipped' | 'failed';
 
 export interface CycleReport {
@@ -2104,6 +2118,17 @@ export async function runCycle(
           duration_ms: 0,
           summary: 'no database connected',
           details: { reason: 'no_database' },
+        });
+      } else if (!(await isConsolidateEnabled(engine))) {
+        phaseResults.push({
+          phase: 'consolidate',
+          status: 'skipped',
+          duration_ms: 0,
+          summary: 'cycle.consolidate.enabled=false (default OFF — v0.31 placeholder pending v0.32 synthesis)',
+          details: {
+            reason: 'disabled',
+            enable_hint: 'gbrain config set cycle.consolidate.enabled true',
+          },
         });
       } else {
         progress.start('cycle.consolidate');

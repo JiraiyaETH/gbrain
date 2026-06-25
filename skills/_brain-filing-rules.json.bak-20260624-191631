@@ -1,0 +1,298 @@
+{
+  "version": "1.1.1",
+  "companion": "_brain-filing-rules.md",
+  "description": "Canonical (machine-readable) brain filing rules for the Jarvis Brain (/Users/jarvis/brain, source `default`). The .md companion is the human explainer; this JSON is what `gbrain check-resolvable` audits against. Keep the gbrain-repo copy and the ~/.hermes/skills copy byte-identical. Customized 2026-06-10 from the stock pack to match /Users/jarvis/brain/RESOLVER.md. v1.1.1 (2026-06-22): corrected the food_log kind and added food/workout kind notes to match the live corpus (those pages are type 'note' with frontmatter.kind, not top-level types). CANONICAL DIRECTION: this file should be DERIVED from the active schema pack via 'gbrain schema show --as-filing-rules' once upstream T18 wires the consumer to read the pack; until then it is hand-maintained.",
+  "rules": [
+    {
+      "kind": "person",
+      "directory": "people/",
+      "examples": [
+        "clients",
+        "prospects",
+        "founders",
+        "TAP members",
+        "creators",
+        "contacts"
+      ],
+      "description": "A page whose primary subject is one human. Relationship state (client, prospect, vendor) is metadata on the page, never a separate shelf."
+    },
+    {
+      "kind": "company",
+      "directory": "companies/",
+      "examples": [
+        "clients",
+        "prospects",
+        "vendors",
+        "protocols",
+        "products",
+        "funds"
+      ],
+      "description": "A page whose primary subject is one company, protocol, product, vendor, fund, or organization."
+    },
+    {
+      "kind": "meeting",
+      "directory": "meetings/",
+      "examples": [
+        "1:1s",
+        "client calls",
+        "transcript-derived meeting pages"
+      ],
+      "description": "A dated call, meeting record, or transcript-derived meeting page. Propagate entities to companies/ and people/ pages. Raw provider packets go to sources/<provider>/."
+    },
+    {
+      "kind": "concept",
+      "directory": "concepts/",
+      "examples": [
+        "mental models",
+        "frameworks",
+        "systems concepts"
+      ],
+      "description": "A reusable idea, framework, or mental model not tied to a specific person/company."
+    },
+    {
+      "kind": "project",
+      "directory": "projects/",
+      "examples": [
+        "durable workstreams",
+        "initiatives",
+        "implementation plans"
+      ],
+      "description": "A durable initiative, workstream, project boundary, or account plan with its own arc."
+    },
+    {
+      "kind": "analysis",
+      "directory": "analysis/",
+      "examples": [
+        "market intelligence",
+        "competitive deep dives",
+        "technical research syntheses"
+      ],
+      "description": "Synthesized market, competitive, commercial, technical, or research intelligence. Not raw source dumps; raw evidence stays in sources/."
+    },
+    {
+      "kind": "idea",
+      "directory": "ideas/",
+      "examples": [
+        "product ideas",
+        "essay seeds",
+        "theses not yet hardened"
+      ],
+      "description": "Rough seeds, theses, and possibilities not yet hardened into concepts/ or projects/. Stub-shaped pages that mature over time."
+    },
+    {
+      "kind": "reflection",
+      "directory": "reflections/",
+      "examples": [
+        "self-knowledge notes",
+        "decision-pattern notes",
+        "cross-session patterns"
+      ],
+      "description": "User-originated self-knowledge and decision-pattern notes, including dream-cycle reflection and pattern output."
+    },
+    {
+      "kind": "decision",
+      "directory": "decisions/",
+      "examples": [
+        "architecture decisions",
+        "operating decisions",
+        "tradeoff records"
+      ],
+      "description": "A durable decision record: what was decided, why, evidence, owner, and revisit trigger."
+    },
+    {
+      "kind": "capability",
+      "directory": "capabilities/",
+      "examples": [
+        "agent capabilities",
+        "tooling capability cards",
+        "workflow surfaces"
+      ],
+      "description": "A durable capability card describing what a system/agent/tool can do, boundaries, owner, and live-truth pointers. Live runtime truth stays outside the Brain."
+    },
+    {
+      "kind": "lesson",
+      "directory": "lessons/",
+      "examples": [
+        "reusable failure lessons",
+        "operational learnings",
+        "debugging lessons"
+      ],
+      "description": "A durable lesson that should change future behavior, with evidence, caveats, and applicable scope."
+    },
+    {
+      "kind": "reference",
+      "directory": "reference/",
+      "examples": [
+        "role maps",
+        "registries",
+        "proof indexes",
+        "relationship maps"
+      ],
+      "description": "Stable maps, registries, role maps, proof indexes, and resolver-like indexes."
+    },
+    {
+      "kind": "report",
+      "directory": "reports/",
+      "examples": [
+        "cron run artifacts",
+        "watchdog reports",
+        "job output receipts"
+      ],
+      "description": "Cron/job output artifacts and operational receipts. Full backend detail is searchable here; Telegram/operator delivery remains a separate styled summary, never a raw dump."
+    },
+    {
+      "kind": "dream-cycle",
+      "directory": "dream-cycles/",
+      "examples": [
+        "dream cycle summaries",
+        "maintenance receipts"
+      ],
+      "description": "Dream maintenance receipts and cycle indexes. Not live scheduler state."
+    },
+    {
+      "kind": "writing",
+      "directory": "writing/",
+      "examples": [
+        "essays",
+        "drafts",
+        "published pieces"
+      ],
+      "description": "A piece of prose authored by Jiraiya/Tailored."
+    },
+    {
+      "kind": "food_log",
+      "directory": "food/",
+      "examples": [
+        "food logs",
+        "meal records",
+        "nutrition coaching data"
+      ],
+      "description": "Health/coaching food operating data, kept separate from business/company retrieval. In practice these pages are type 'note' with frontmatter.kind 'food_log' (the modern note+kind convention), not a top-level 'food-log' type."
+    },
+    {
+      "kind": "workout",
+      "directory": "workout/",
+      "examples": [
+        "workout logs",
+        "active sessions",
+        "proposed sessions",
+        "fitness intelligence notes"
+      ],
+      "description": "Health/coaching workout operating data, kept separate from business/company retrieval. In practice these pages are type 'note' with frontmatter.kind 'workout_log' | 'workout_active_session' | 'workout_proposed_session' | 'workout_generation_audit' | 'fitness_intelligence_note' (modern note+kind convention). See workout/resolver.md for sub-shelf detail."
+    },
+    {
+      "kind": "media-format",
+      "directory": "media/",
+      "examples": [
+        "media/x/{handle}/",
+        "media/articles/",
+        "media/books/"
+      ],
+      "description": "Processed content objects and synthesized reading/listening/watching artifacts. Format-prefix lives only when the content is sui generis to the source format AND lacks a clean primary-subject directory. Prefer subject-by-subject filing."
+    },
+    {
+      "kind": "synthesis-output",
+      "directory": "media/books/",
+      "examples": [
+        "personalized book mirrors",
+        "two-column chapter analyses"
+      ],
+      "description": "Sanctioned exception to 'file by primary subject' for sui generis synthesized output that is one-of-one to a single book and a specific reader. Never for raw ingest. See _brain-filing-rules.md."
+    },
+    {
+      "kind": "synthesis-output",
+      "directory": "media/articles/",
+      "examples": [
+        "personalized article reads",
+        "long-form content tailored to reader"
+      ],
+      "description": "Same sanctioned exception as media/books/. One-of-one synthesis output of an article personalized for the reader. Raw article ingest goes to the article's primary-subject directory."
+    },
+    {
+      "kind": "inbox-triage",
+      "directory": "inbox/",
+      "examples": [
+        "unresolved captures pending review"
+      ],
+      "description": "Temporary triage only. Not durable truth; resolve and refile to a canonical shelf before import. Do not import as durable truth unless explicitly reviewed."
+    },
+    {
+      "kind": "atom",
+      "directory": "atoms/",
+      "examples": [
+        "machine-extracted insight granules"
+      ],
+      "description": "Machine-extracted single-insight granule records (extract-atoms pipeline). DB-only storage tier: zero content chunks, excluded from search, never written to the git corpus (see ~/brain/gbrain.yml db_only). Agents do not write here by hand."
+    },
+    {
+      "kind": "extract_receipt",
+      "directory": "extracts/",
+      "examples": [
+        "pipeline run receipts (atoms, takes.proposed)"
+      ],
+      "description": "Machine pipeline run receipts. DB-only storage tier (see ~/brain/gbrain.yml db_only). Not for human-authored content."
+    }
+  ],
+  "sources_dir": {
+    "directory": "sources/",
+    "purpose": "Raw/provider/evidence packets only: transcripts, contracts, Telegram/X/web captures, bulk imports, API dumps, periodic captures, legacy page evidence. A page with a clear primary subject (person, company, concept) does NOT belong here \u2014 promote distilled truth to the matching shelf and keep the raw packet here for provenance.",
+    "not_for": [
+      "articles about a person",
+      "analyses of a company",
+      "reusable frameworks"
+    ]
+  },
+  "retired_directories": [
+    "clients/",
+    "agents/",
+    "domains/",
+    "ops/",
+    "memory/",
+    "personal/",
+    "deals/",
+    "daily/",
+    "civic/",
+    "guides/",
+    "tech/",
+    "finance/",
+    "research/",
+    "originals/",
+    "voice-notes/",
+    "conversations/",
+    "openclaw/",
+    "wiki/",
+    "tweets/",
+    "articles/"
+  ],
+  "notes": [
+    "The PRIMARY SUBJECT of the content determines the directory, not the format or source skill.",
+    "When in doubt: what would you search for to find this page again?",
+    "Cross-link from related directories via back-links \u2014 do not duplicate content.",
+    "Relationship labels (client, prospect, vendor, TAP member) are metadata on pages, never shelves.",
+    "Live runtime truth (gateways, cron, queues, credentials, process health) never lives in the Brain.",
+    "Corpus governance and the pre-import gate live in /Users/jarvis/brain/RESOLVER.md.",
+    "reports/ stores cron/job output artifacts; visible Telegram delivery remains a separate styled operator digest."
+  ],
+  "dream_synthesize_paths": {
+    "description": "Single source of truth for the dream-cycle synthesize/patterns trusted-workspace allow-list and prompt route templates. The cycle's synthesize/patterns phases read these routes and thread `globs` as `allowed_slug_prefixes` to every subagent they dispatch; put_page enforces it server-side. Editing this block is the ONLY way to add a new directory the synthesis subagent may write to.",
+    "globs": [
+      "reflections/*",
+      "ideas/*",
+      "people/*",
+      "dream-cycles/*",
+      "dream-cycle-summaries/*"
+    ],
+    "routes": {
+      "reflection": "reflections/{date}-{topic}",
+      "original": "ideas/{date}-{topic}",
+      "pattern": "reflections/patterns/{topic}",
+      "cycleSummary": "dream-cycle-summaries/{date}"
+    },
+    "reflection_query_prefixes": [
+      "reflections/"
+    ],
+    "pattern_query_prefixes": [
+      "reflections/patterns/"
+    ]
+  }
+}
