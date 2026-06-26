@@ -30,11 +30,15 @@ This skill guarantees:
 ## Phases
 
 1. **Identify the primary subject.** What would you search for to find this page?
-2. **Walk the decision tree:**
+2. **Walk the decision tree.** The ACTIVE schema pack is authoritative: run
+   `gbrain schema show --json` or consult `skills/brain-taxonomist/SKILL.md`
+   for the live type/path list. The examples below are illustrative stock-pack
+   routing, not a substitute for the active pack.
    - About a person → `people/{name-slug}.md`
    - About a company → `companies/{name-slug}.md`
    - A reusable concept/framework → `concepts/{slug}.md`
    - An original idea → `originals/{slug}.md`
+   - Ongoing work, initiative, workstream, or spec → `projects/{slug}.md` (`type: project`)
    - A meeting → `meetings/{slug}.md`
    - Media content → `media/{type}/{slug}.md`
    - Raw data import → `sources/{slug}.md`
