@@ -1664,8 +1664,8 @@ export async function registerBuiltinHandlers(
       // immediately if source is gone or archived; runCycle never even
       // acquires a lock. Also fetches local_path so FS phases bind to the
       // source's own checkout (the #2227/#2194 mixed-scope fix).
-      const rows = await engine.executeRaw<{ archived: boolean | null; local_path: string | null }>(
-        `SELECT archived, local_path FROM sources WHERE id = $1`,
+      const rows = await engine.executeRaw<{ archived: boolean | null; local_path: string | null; config: Record<string, unknown> | null }>(
+        `SELECT archived, local_path, config FROM sources WHERE id = $1`,
         [rawSourceId],
       );
       if (rows.length === 0) {
@@ -1680,6 +1680,13 @@ export async function registerBuiltinHandlers(
           partial: false,
           status: 'skipped',
           report: { reason: 'source_archived', source_id: rawSourceId },
+        };
+      }
+      if (rows[0].config?.strategy === 'code') {
+        return {
+          partial: false,
+          status: 'skipped',
+          report: { reason: 'source_strategy_code', source_id: rawSourceId },
         };
       }
       sourceId = rawSourceId;

@@ -77,6 +77,8 @@ export interface FanoutResult {
   skipped_cap: string[];
   /** Source ids skipped because they're in failure cooldown (#2194 fix #2). */
   skipped_cooldown: string[];
+  /** Source ids skipped because they're maintained by the code sync pipeline. */
+  skipped_code_source: string[];
   /** True when this tick fell back to the legacy single-job path
    *  (no sources rows / engine empty). */
   legacy_fallback: boolean;
@@ -405,7 +407,17 @@ export async function dispatchPerSource(
     } else {
       log(`[dispatch] job #${job.id} autopilot-cycle (legacy single-source)`);
     }
-    return { dispatched: [], skipped_fresh: [], skipped_cap: [], skipped_cooldown: [], legacy_fallback: true };
+    return { dispatched: [], skipped_fresh: [], skipped_cap: [], skipped_cooldown: [], skipped_code_source: [], legacy_fallback: true };
+  }
+
+  const markdownSources: SourceRow[] = [];
+  const skippedCodeSource: SourceRow[] = [];
+  for (const src of sources) {
+    if (src.config?.strategy === 'code') {
+      skippedCodeSource.push(src);
+    } else {
+      markdownSources.push(src);
+    }
   }
 
   // #2194 fix #2: load recent per-source failures + cooldown knobs so a
@@ -425,7 +437,7 @@ export async function dispatchPerSource(
   }
 
   const { dispatch, skippedFresh, skippedCap, skippedCooldown } =
-    selectSourcesForDispatch(sources, opts.fanoutMax, Date.now(), FULL_CYCLE_FLOOR_MIN, recentFailures, cooldownOpts);
+    selectSourcesForDispatch(markdownSources, opts.fanoutMax, Date.now(), FULL_CYCLE_FLOOR_MIN, recentFailures, cooldownOpts);
 
   const dispatched: string[] = [];
   for (const src of dispatch) {
@@ -502,11 +514,19 @@ export async function dispatchPerSource(
     }));
   }
 
+  if (skippedCodeSource.length > 0 && opts.jsonMode) {
+    emit(JSON.stringify({
+      event: 'fanout_code_source_skipped',
+      sources: skippedCodeSource.map(s => s.id),
+    }));
+  }
+
   return {
     dispatched,
     skipped_fresh: skippedFresh.map(s => s.id),
     skipped_cap: skippedCap.map(s => s.id),
     skipped_cooldown: skippedCooldown.map(s => s.id),
+    skipped_code_source: skippedCodeSource.map(s => s.id),
     legacy_fallback: false,
   };
 }
