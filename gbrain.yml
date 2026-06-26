@@ -16,3 +16,8 @@ storage:
     - media/x/
     - media/articles/
     - meetings/transcripts/
+
+# archive-crawler safety fence: explicit allow-list of trees the archivist may scan.
+archive-crawler:
+  scan_paths:
+    - /Users/jarvis/data/telegram
