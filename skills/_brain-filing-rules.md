@@ -12,11 +12,57 @@ not the source, not the skill that's running.
 3. Cross-link from related directories
 4. When in doubt: what would you search for to find this page again?
 
+## Cron Brain-Report Contract (MANDATORY for scheduled jobs that write Brain pages)
+
+Any scheduled job that writes a page into the brain must guarantee the page is
+well-formed before reporting success. This applies to cron jobs, managed
+scheduler jobs, native schedule APIs, and agentless/no-agent scripts. A page
+with missing frontmatter or invalid YAML can break ingestion, commit hooks, and
+fact extraction.
+
+1. **Write path:** prefer `gbrain report <category> --dir <brain-dir>` or
+   `put_page` so frontmatter and DB import stay coupled. Do not hand-append raw
+   markdown into report directories without an opening frontmatter block.
+
+2. **Required frontmatter:** every report page opens with `---` on line 1 and
+   closes the block before the first heading:
+
+   ```yaml
+   ---
+   title: <descriptive, under 60 chars>
+   type: report
+   category: <stable job/category name>
+   date: <YYYY-MM-DD>
+   time: <HH:MM TZ>
+   ---
+   ```
+
+   Quote YAML values that contain special characters such as `:`, `#`, `[`, `]`,
+   `{`, or `}`. Do not include a `slug` field unless it exactly matches the path.
+
+3. **Self-verify at the source:** before claiming success, run
+   `gbrain frontmatter validate <written-file> --json`. Exit 0 means clean.
+   Exit 1 means fix and re-validate; never report a dirty page as done. For
+   agentless/no-agent scripts, bake this validation into the script after the
+   write and treat failure as a hard failure.
+
+4. **Folder-level repair:** when one generated report has a frontmatter defect,
+   validate the containing folder and fix confirmed sibling files from the same
+   generator in the same pass. Minimal report frontmatter repair is acceptable
+   for clearly generated report output after operator approval; never silently
+   wrap an unfinished human-authored draft in `---`.
+
+5. **Routing:** cron prompts that write brain pages must follow
+   `skills/reports/SKILL.md` and `skills/frontmatter-guard/SKILL.md`. Keep the
+   full report artifact in the brain and any short operator notification as a
+   separate delivery surface.
+
 ## Common Misfiling Patterns -- DO NOT DO THESE
 
 | Wrong | Right | Why |
 |-------|-------|-----|
 | Analysis of a topic -> `sources/` | -> appropriate subject directory | sources/ is for raw data only |
+| Cron/job backend output -> notification body only | -> full artifact in `reports/{category}/YYYY-MM-DD-HHMM.md`; short digest stays separate | Reports and operator messages are different documents |
 | Article about a person -> `sources/` | -> `people/` | Primary subject is a person |
 | Meeting-derived company info -> `meetings/` only | -> ALSO update `companies/` | Entity propagation is mandatory |
 | Research about a company -> `sources/` | -> `companies/` | Primary subject is a company |
@@ -163,11 +209,11 @@ examples lives in `docs/takes-vs-facts.md`.
 1. **Holder ≠ subject.** The test: did this person SAY or CLEARLY IMPLY this?
    - YES → `holder = people/<slug>`
    - NO, it's your analysis OF them → `holder = brain`
-   - Example: "Garry has a hero/rescuer pattern" → `holder=brain` (analysis ABOUT Garry, not stated BY Garry)
+   - Example: "Alice has a hero/rescuer pattern" → `holder=brain` (analysis ABOUT Alice, not stated BY Alice)
 2. **Atomic claims.** Split compound rows into separate rows. One claim per row.
 3. **Amplification ≠ endorsement.** A retweet-only signal caps at `weight 0.55`.
    The user shared something; they didn't necessarily endorse every clause.
-4. **Self-reported ≠ verified.** "Saif reports 7 figures" → `holder=people/saif`,
+4. **Self-reported ≠ verified.** "Bob reports 7 figures" → `holder=people/bob`,
    `weight=0.75`, NOT `holder=world/1.0`. Self-report is a strong individual
    signal, not consensus fact.
 5. **No false precision.** Use 0.05 increments only (`0.35`, `0.55`, `0.75`).
@@ -183,10 +229,10 @@ examples lives in `docs/takes-vs-facts.md`.
 - `people/<slug>` (individual's stated belief)
 - `companies/<slug>` (institutional fact, no individual claimant)
 
-Slugs use the standard grammar (`[a-z0-9._-]+`). `Garry`, `people/Garry-Tan`,
-and `world/garry-tan` all fail validation.
+Slugs use the standard grammar (`[a-z0-9._-]+`). `Alice`, `people/Alice-Example`,
+and `world/alice-example` all fail validation.
 
 **Founder-describing-own-company rule.** When a founder describes their own
 company, the holder is the FOUNDER, not the company. "We can hit $10M ARR"
-said by Bo Lu → `holder=people/bo-lu`, NOT `holder=companies/clipboard-health`.
+said by Alice → `holder=people/alice-example`, NOT `holder=companies/acme-example`.
 Companies don't speak; their employees do.
