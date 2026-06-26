@@ -12,6 +12,12 @@ not the source, not the skill that's running.
 3. Cross-link from related directories
 4. When in doubt: what would you search for to find this page again?
 
+**Authoritative shelf/type source:** the ACTIVE schema pack. Consult
+`skills/brain-taxonomist/SKILL.md` or `gbrain schema show --json` (or the
+brain-root `RESOLVER.md`) for the live shelf list — people/, companies/,
+meetings/, contracts/, projects/, concepts/, ideas/, notes/, sources/, … This
+file carries the conventions; the pack carries the shelves.
+
 ## Cron Brain-Report Contract (MANDATORY for scheduled jobs that write Brain pages)
 
 Any scheduled job that writes a page into the brain must guarantee the page is
