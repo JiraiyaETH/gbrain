@@ -10,6 +10,11 @@
       "description": "Route content to specialized ingestion skills. Detects input type and delegates."
     },
     {
+      "name": "contract-ingestion",
+      "path": "contract-ingestion/SKILL.md",
+      "description": "Ingest / reshape a signed contract into the brain's contracts/ shelf as a typed contract page plus thin entity stubs."
+    },
+    {
       "name": "query",
       "path": "query/SKILL.md",
       "description": "Answer questions using 3-layer search, synthesis, and citation propagation"
