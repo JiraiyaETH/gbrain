@@ -1,6 +1,6 @@
 ---
 name: meeting-ingestion
-version: 1.0.0
+version: 1.4.0
 description: |
   Ingest meeting transcripts into brain pages with attendee enrichment, entity
   propagation, and timeline merge. A meeting is NOT fully ingested until the
@@ -32,6 +32,7 @@ writes_to:
 ## Contract
 
 This skill guarantees:
+- **Idempotent**: a meeting already ingested is detected and SKIPPED (Phase 0), never duplicated or overwritten — safe to re-point at the same corpus
 - Meeting page created with attendees, summary, key decisions, action items
 - EVERY attendee gets a people page (created or updated)
 - EVERY company discussed gets entity propagation
@@ -46,6 +47,31 @@ the meeting page. An unlinked mention is a broken brain.
 
 ## Phases
 
+### Phase 0: Idempotency — skip if already ingested (MANDATORY, run FIRST)
+
+A corpus often contains meetings already in the brain (re-runs, overlapping batches,
+Fireflies recording the same call under two recorder ids). Before ANY other work:
+
+1. Compute the target slug `meetings/<YYYY-MM-DD>-<kebab-title>` AND the deterministic
+   page **`id: fireflies-<recording_id>`** (see "Minimal frontmatter" below). That `id`
+   is the ENGINE's cross-slug dedup hook — `put_page`/import skips a re-ingest of the
+   same recording even under a different slug (matched on `frontmatter->>'id'`), so it
+   closes the unattended-batch dedup gap on its own.
+2. `gbrain get meetings/<slug>` (and `gbrain search "<title> <date>"`). If a page for
+   THIS SAME meeting already exists (same date + participants, has a transcript body,
+   `status: ingested` or `lean-ingest`) → **STOP. Do not re-ingest or overwrite.**
+   Report "already ingested — skipped". Re-ingest ONLY when explicitly asked to
+   re-process a specific meeting.
+3. If only a thin/dangling prior page exists (e.g. an old `lean-ingest` stub with
+   attendee wikilinks but no backing people pages), **RECONCILE** it — fill the gaps,
+   never create a second page. Treat same date + duration + participants as ONE meeting
+   even if Fireflies gives two recording ids; on a real reconcile only, note the second
+   recording id in the body provenance (not as a default frontmatter key).
+
+This makes the skill idempotent: the `id` dedups at the engine, and the slug check +
+manual reconcile cover the rare same-meeting-different-recording case. Pointing it at
+the same corpus twice is safe.
+
 ### Phase 1: Parse the transcript
 
 Extract from the transcript:
@@ -58,6 +84,24 @@ Extract from the transcript:
 
 ### Phase 2: Create meeting page
 
+**Minimal frontmatter (write THIS; push everything else to the body):**
+```yaml
+---
+type: meeting
+title: {Meeting Title}
+date: 'YYYY-MM-DD'
+status: ingested              # 'lean-ingest' for a stub; Phase-0 idempotency reads this
+id: fireflies-{recording_id}  # deterministic dedup hook (engine-level, cross-slug)
+---
+```
+Frontmatter is stripped before embedding and inert for retrieval; every non-excluded
+key is also folded into `content_hash`, so inert/volatile keys (`attendees`,
+`duration_min`, `source`, `updated`, …) bust the hash and force needless re-embeds.
+**Everything else lives in the body** — the attendee graph comes from body
+`[[people/<slug>]]` links (NOT a frontmatter list); duration, source, and summary are
+prose. (Model verified against `import-file.ts` content_hash/dedup + `markdown.ts` strip.)
+
+Body:
 ```markdown
 # {Meeting Title} — {Date}
 
@@ -84,27 +128,56 @@ For EACH attendee:
 1. `gbrain search "{name}"` — does a people page exist?
 2. If NO → create via enrich skill (this is mandatory, not optional)
 3. If YES → update compiled truth with meeting context
-4. Add timeline entry on the person's page:
-   `gbrain timeline-add <person-slug> <date> "Attended <meeting-title>"`
+4. Add a timeline entry IN THE PERSON'S PAGE FILE (under `## Timeline`):
+   `- <date> — Attended <meeting-title>… → [[meetings/<slug>]]`, then `gbrain put`.
+5. **Capture archetype signals** — when stated or reasonably inferable, record on the
+   person's page **where they are from / based in the world** and their **noted
+   interests or hobbies** (e.g. `Location / origin:` and `Interests:` lines in compiled
+   truth). These signals are what make the enrich pass materially richer downstream;
+   capture what the transcript reveals, never invent.
 
-**Note (v0.10.1):** Once the meeting page is written via `gbrain put`, the
-auto-link post-hook automatically creates `attended` links from the meeting
-to each attendee whose page is referenced as `[Name](people/slug)`. You don't
-need to call `gbrain link` for attendees. You DO still need `gbrain timeline-add`
-for dated events (auto-link only handles links, not timeline entries).
+**DO NOT use `gbrain timeline-add` for this (v1.1.0 fix).** That command writes a
+DB-only timeline row — it does NOT create the `person → meeting` graph edge and does
+NOT appear in the page file, so the Iron-Law back-link is silently missing. The
+brain's convention (every page) is a `## Timeline` wikilink in the FILE, which creates
+BOTH the edge and the display in one write.
+
+**Attended links:** when the meeting page is written via `gbrain put`, the auto-link
+hook types every body wikilink from the meeting as `attended`
+(`meeting --attended--> person`). So reference each attendee in the meeting body as
+`[[people/<slug>]]` (or `[Name](people/slug)`) — no manual `gbrain link` needed.
+
+**OWNER EXCEPTION — timeline bloat (v1.1.0).** Do NOT add a per-meeting timeline entry
+to the BRAIN OWNER's page: the owner attends ~every meeting, so their timeline would
+balloon to hundreds of entries. The owner's meetings are already reachable via the
+`meeting --attended--> owner` back-links (`gbrain backlinks people/<owner>`). Per
+Garry's pattern the owner lives in `USER.md`, not the people graph; if they have a
+`people/` page, keep it free of per-meeting entries. Apply the same cap to heavy
+internal-team attendees who recur across most meetings.
 
 ### Phase 4: Entity propagation (MANDATORY)
 
 For each company, project, or concept discussed:
-1. Check brain for existing page
-2. Create/update as needed
-3. Add timeline entry referencing the meeting
-4. Back-link from entity page to meeting page
+1. Check brain for existing page (reconcile — never clobber a richer existing page;
+   for an already-rich page, insert ONE timeline line via a surgical file edit).
+2. Create/update as needed.
+3. Add a `## Timeline` entry on the ENTITY page (`- <date> — … → [[meetings/<slug>]]`).
+4. The entity page links to the meeting (entity → meeting). Done.
+
+**NEVER wikilink a company/contract inside the MEETING body (v1.1.0 fix).** The
+auto-link hook types every meeting-body wikilink as `attended`, so `[[companies/X]]`
+in a meeting creates a nonsensical `meeting --attended--> company` edge (a company
+can't attend). Reference companies/contracts in the meeting body as PLAIN PROSE — the
+company is reachable from the meeting transitively via its attendees' `works_at`, and
+directly via the company page's own `→ [[meetings/...]]` back-link (step 3).
 
 ### Phase 5: Timeline merge
 
-The same event appears on ALL mentioned entities' timelines. If Alice met Bob at
-Acme Corp, the event goes on Alice's page, Bob's page, AND Acme Corp's page.
+The same event appears on ALL mentioned entities' timelines — authored as a
+`## Timeline` wikilink in EACH entity's page FILE (see Phase 3; NOT `timeline-add`).
+If Alice met Bob at Acme Corp, the entry goes on Alice's page, Bob's page, AND Acme
+Corp's page. EXCEPTION: skip the brain owner / ubiquitous internal attendees (Phase 3
+owner-exception) — their meetings are reachable via the `attended` back-links.
 
 ### Phase 6: Sync
 
@@ -122,3 +195,12 @@ updated, {N} action items captured."
 - Not merging timelines across all mentioned entities
 - Creating attendee stubs without meaningful content
 - Filing meeting pages without cross-linking to all participants
+- **Using `gbrain timeline-add` for attendee back-links** — it makes a DB-only row,
+  NOT the `person → meeting` edge, and isn't in the file. Author a `## Timeline`
+  wikilink in the page file instead.
+- **Wikilinking a company/contract in the MEETING body** — creates a spurious
+  `meeting --attended--> company` edge. Reference them in prose.
+- **Adding a per-meeting timeline entry to the brain owner** (timeline bloat) — their
+  meetings are reachable via `attended` back-links.
+- **Rewriting/clobbering an already-rich entity page on reconcile** — the autopilot
+  enriches pages from other sources (e.g. DMs); insert one timeline line surgically.

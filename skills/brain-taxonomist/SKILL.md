@@ -133,6 +133,57 @@ gbrain doctor --json | jq '.checks[] | select(.name == "schema_pack_consistency"
 When `schema_pack_consistency` warns at >10% untyped, run the EIIRP
 Phase 3 SCHEMA CHECK flow to surface candidate types via `schema detect`.
 
+## Schema Pack Mismatch Debugging
+
+When the expected schema pack differs from what `gbrain schema active` reports,
+investigate read-only before mutating config. The runtime activation layer may
+be stale even when the repo docs and pack files are correct.
+
+Checklist:
+1. Run `gbrain schema active` and record the reported source tier.
+2. Run `gbrain schema list` and verify the expected pack is installed.
+3. Run `gbrain schema validate <expected-pack>` and
+   `gbrain schema show <expected-pack> --json`.
+4. Check configured `schema_pack` and any `GBRAIN_SCHEMA_PACK` environment
+   override.
+5. Compare repo docs such as `brain/schema.md`, but treat runtime config as the
+   activation layer to align.
+6. Test the expected pack without mutation:
+   `GBRAIN_SCHEMA_PACK=<expected-pack> gbrain schema active`.
+7. Test type resolution under normal env and under
+   `GBRAIN_SCHEMA_PACK=<expected-pack>` for representative kinds/slugs.
+
+If the expected pack is installed and valid, and the env override works, but
+normal resolution reports a different configured pack, report that finding and
+ask before running `gbrain schema use` or changing config.
+
+Before applying a fix, dry-run activation with an isolated HOME so the user's
+real config is untouched:
+
+```bash
+TMP=$(mktemp -d /tmp/gbrain-schema-dryrun.XXXXXX)
+mkdir -p "$TMP/.gbrain/schema-packs"
+cp "$HOME/.gbrain/config.json" "$TMP/.gbrain/config.json"
+cp -R "$HOME/.gbrain/schema-packs/<expected-pack>" "$TMP/.gbrain/schema-packs/"
+HOME="$TMP" gbrain schema use <expected-pack>
+HOME="$TMP" gbrain schema active
+```
+
+Smoke both layers:
+- Pack layer: `gbrain schema validate <expected-pack>`,
+  `GBRAIN_SCHEMA_PACK=<expected-pack> gbrain schema active`, `schema show`, and
+  `schema lint`.
+- Resolver layer: compare representative type and slug resolution under normal
+  env versus `GBRAIN_SCHEMA_PACK=<expected-pack>`.
+- Writer layer: run helpers that generate frontmatter in dry-run or pure-render
+  mode; pack activation can be correct while writer-specific semantic kinds
+  still fall back to `note`.
+
+Pitfall: `gbrain schema use <pack>` only fixes the active pack. It does not make
+undeclared semantic aliases resolve. If writers call `resolve_type("custom_kind")`
+but the pack only aliases another spelling, path inference may be correct while
+generated frontmatter is still wrong.
+
 ## Output Format
 
 Advisory: a single recommendation block plus a one-line reasoning trail.

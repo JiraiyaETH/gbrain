@@ -77,6 +77,40 @@ If the user skips soul-audit on first boot:
 Four files generated/updated. Report: "Soul audit complete: SOUL.md, USER.md,
 ACCESS_POLICY.md, HEARTBEAT.md created. Re-run any phase anytime to update."
 
+## Runtime Reality
+
+Be explicit with the user: these files are alignment artifacts, not magic
+automation.
+
+- `SOUL.md` shapes identity only when the active profile actually loads it into
+  the system prompt or agent instructions.
+- `USER.md` is useful only if the profile loader or memory system injects that
+  path.
+- `ACCESS_POLICY.md` is a policy reference unless disclosure guardrails or
+  agent instructions explicitly read and enforce it.
+- `HEARTBEAT.md` does not schedule jobs by itself. It is a cadence spec; making
+  it real requires cron jobs or recurring workflows that reference the chosen
+  cadence.
+
+After writing the files, state which parts are active now versus merely
+documented, and offer the wiring step separately.
+
+## Preflight for Established Profiles
+
+Before creating or overwriting audit files on an already-lived-in profile:
+
+1. Inspect whether the profile already has an active identity file, user memory,
+   disclosure guardrails, cron jobs, or equivalent operating doctrine.
+2. Tell the user what would actually change in runtime behavior versus what
+   would be inert documentation.
+3. Prefer updating active memory or already-loaded identity files only when
+   there is a clear delta.
+4. Do not create extra template files just to complete the checklist if the
+   profile already has the same truth elsewhere and those files are not wired
+   into runtime.
+5. If the user decides the audit added no value, cleanly remove any newly
+   created inert files and leave active memory alone unless explicitly asked.
+
 ## Anti-Patterns
 
 - Shipping pre-filled SOUL.md or USER.md content (privacy violation)
