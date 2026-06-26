@@ -142,6 +142,32 @@ Rules:
 If a search result has `source_id: "gstack"` and `slug: "plans/foo"`,
 the citation is `[gstack:plans/foo]`. That's the whole rule.
 
+## Deletion / Purge Protocol
+
+When deleting brain pages from local files and the database, use targeted
+soft-delete first and verify each target before any hard purge:
+
+1. Resolve the exact brain/source and exact slugs to delete.
+2. Delete each page with the normal delete operation (`gbrain delete <slug>` or
+   `delete_page`).
+3. Verify each target with `get_page include_deleted=true` before claiming it is
+   gone.
+4. Remove matching local `.md` files only after the DB delete is confirmed; prune
+   only empty local directories.
+5. Verify representative deleted slugs with `get_links` and `get_backlinks`;
+   deleted-page graph edges should be empty.
+6. Treat hard purge as global over matching soft-deleted pages, not scoped to the
+   slugs just handled. Use immediate purge only when the user explicitly wants
+   permanent deletion and report that global scope.
+7. Prove absence with structural checks (`list_pages`, slug-specific `get_page`)
+   before using semantic query as an extra smoke test. Semantic query can surface
+   unrelated topic-adjacent pages and is not deletion proof by itself.
+
+Before resetting or recreating a brain path, freeze active writers first:
+scheduled sync, autopilot, webhooks, ingestion workers, and queued jobs. Record
+what was paused and how to reverse it before moving paths or creating a fresh
+brain.
+
 ## Anti-Patterns
 
 - Answering questions about people/companies without checking the brain first
@@ -150,6 +176,8 @@ the citation is `[gstack:plans/foo]`. That's the whole rule.
 - Blocking the response to do enrichment
 - Overwriting user's direct statements with lower-authority sources
 - Creating brain pages for non-notable entities
+- Renaming or recreating a brain path while scheduled writers, webhooks, or job
+  workers can still write into that path or database
 
 ## Tools Used
 

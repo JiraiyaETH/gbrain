@@ -2,9 +2,9 @@
 name: signal-detector
 version: 1.0.0
 description: |
-  Always-on ambient signal capture. Fires on every inbound message to detect
-  original thinking and entity mentions. Spawn as a cheap sub-agent in parallel,
-  never block the main response.
+  Cost-aware ambient signal capture. Evaluates inbound messages for original
+  thinking and entity mentions, skips operational noise, and delegates only
+  when enrichment is ambiguous or heavy. Never block the main response.
 triggers:
   - every inbound message (always-on)
 tools:
@@ -24,7 +24,7 @@ writes_to:
 
 # Signal Detector — Ambient Brain Capture
 
-Lightweight sub-agent that fires on every inbound message to capture TWO things
+Cost-aware ambient capture that evaluates inbound messages to detect TWO things
 with EQUAL priority:
 
 1. **Original thinking** — the user's ideas, observations, theses, frameworks
@@ -33,11 +33,30 @@ with EQUAL priority:
 Original thinking is AT LEAST as valuable as entity extraction. Ideas are the
 intellectual capital. Entities are bookkeeping. Both compound over time.
 
+## Cost Discipline
+
+Do not blindly spawn a full subagent for every message. Use the cheapest
+adequate path:
+
+1. Trivial/operational message (`ok`, `thanks`, `do it`, simple
+   acknowledgement) -> skip.
+2. Obvious single signal -> main agent writes the page/fact directly with native
+   GBrain tools after a quick read/resolve.
+3. Ambiguous but potentially durable signal -> run cheap background
+   classification/delegation only if it will not block the response.
+4. Heavy enrichment (multiple entities, prior-page reconciliation, external
+   lookup, link cleanup) -> use background subagent delegation.
+
+The goal is quiet compounding memory, not an always-on expensive second
+conversation.
+
 ## Contract
 
 This skill guarantees:
-- Fires on every message (no exceptions unless purely operational)
-- Runs in parallel (spawned, never blocks main response)
+- Evaluates every message, but skips purely operational noise
+- Uses the cheapest adequate path: inline native write for obvious single
+  signals; background delegation for ambiguous or heavy enrichment
+- Never blocks the main response
 - Captures ideas with the user's EXACT phrasing (no paraphrasing)
 - Detects entity mentions and creates/enriches brain pages
 - Logs a one-line summary of what was captured

@@ -81,6 +81,33 @@ per-source cron pattern doesn't benefit from the parallelism that
 `gbrain doctor` surfaces the recommended line as a `sync_consolidation`
 check whenever it detects 2+ active sources. Paste-ready from there.
 
+## Migrating Ad-Hoc Cron Into Managed Jobs
+
+When replacing a hand-written system cron entry with a managed scheduler job,
+prove delivery and duplicate-run safety before cleanup:
+
+1. Inspect the existing entry and preserve its schedule, command, log path, and
+   delivery intent.
+2. Move deterministic behavior into a small script or command. For script-only
+   monitors, prefer an agentless/no-agent path; green/no-change runs should
+   print nothing so they do not generate noise.
+3. Let the scheduler own routing/delivery when possible. Avoid direct delivery
+   code inside the watcher if scheduler delivery can handle it.
+4. Smoke the command locally before scheduling: syntax/compile check, a forced
+   harmless alert mode, and a normal green run proving stdout is empty.
+5. Create the managed job with explicit schedule, delivery target, command, and
+   enabled state; verify the job list reflects those values.
+6. Prove delivery with a temporary smoke job or dry-run artifact before removing
+   the old cron block.
+7. Only after successful delivery proof, remove the old system cron entry and
+   re-check for zero stale matches.
+8. Re-list managed jobs and run the production command normally once more.
+
+Report-producing jobs must also satisfy the Cron Brain-Report Contract in
+`skills/_brain-filing-rules.md`: write valid frontmatter, validate it before
+claiming success, and keep full report artifacts separate from short operator
+notifications.
+
 ## Anti-Patterns
 
 - Scheduling jobs at the same minute (:00 for everything)
@@ -91,3 +118,6 @@ check whenever it detects 2+ active sources. Paste-ready from there.
 - Separate per-source `gbrain sync --source <id>` cron entries when
   `gbrain sync --all --parallel N --workers N` would replace them with
   one line that auto-picks-up future sources.
+- Leaving an old cron entry active after the managed scheduler replacement is
+  proved
+- Reporting a brain page write as complete before frontmatter validation passes
