@@ -36,12 +36,13 @@ beforeEach(async () => {
   brainDir = mkdtempSync(join(tmpdir(), 'gbrain-autopilot-handler-'));
 });
 
-async function seedSource(id: string, opts: { archived?: boolean } = {}): Promise<void> {
+async function seedSource(id: string, opts: { archived?: boolean; strategy?: 'code' | 'markdown' } = {}): Promise<void> {
+  const config = opts.strategy ? { strategy: opts.strategy } : {};
   await engine.executeRaw(
     `INSERT INTO sources (id, name, local_path, config, archived, created_at)
-     VALUES ($1, $2, $3, '{}'::jsonb, $4, NOW())
-     ON CONFLICT (id) DO UPDATE SET archived = EXCLUDED.archived`,
-    [id, id, brainDir, opts.archived === true],
+     VALUES ($1, $2, $3, $4::text::jsonb, $5, NOW())
+     ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, archived = EXCLUDED.archived`,
+    [id, id, brainDir, JSON.stringify(config), opts.archived === true],
   );
 }
 
@@ -88,6 +89,13 @@ describe('autopilot-cycle handler source_id validation + archive recheck', () =>
     const result = await runHandlerOnce({ repoPath: brainDir, source_id: 'archived-src', phases: ['lint'] });
     expect(result.status).toBe('skipped');
     expect(result.report.reason).toBe('source_archived');
+  });
+
+  test('source_id pointing at code-strategy source returns skipped', async () => {
+    await seedSource('gbrain-code', { strategy: 'code' });
+    const result = await runHandlerOnce({ repoPath: brainDir, source_id: 'gbrain-code', phases: ['sync'] });
+    expect(result.status).toBe('skipped');
+    expect(result.report.reason).toBe('source_strategy_code');
   });
 
   test('malformed source_id (regex fail) throws (codex P1-B)', async () => {

@@ -243,6 +243,20 @@ describe('dispatchPerSource — integration with stubbed engine + queue', () => 
     expect(added.length).toBe(1);
   });
 
+  test('code-strategy sources are skipped by fanout', async () => {
+    const codeSource = src('gbrain-code', undefined, { strategy: 'code' });
+    const notesSource = src('notes');
+    const { engine, queue, added, events, fanoutOpts } = makeStubs([codeSource, notesSource]);
+    const result = await dispatchPerSource(engine, queue, fanoutOpts);
+    expect(result.dispatched).toEqual(['notes']);
+    expect(result.skipped_code_source).toEqual(['gbrain-code']);
+    expect(added.length).toBe(1);
+    expect((added[0].data as Record<string, unknown>).source_id).toBe('notes');
+    const event = events.find(e => e.includes('fanout_code_source_skipped'));
+    expect(event).toBeDefined();
+    expect(JSON.parse(event!).sources).toEqual(['gbrain-code']);
+  });
+
   test('per-submit error does NOT abort the tick', async () => {
     const sources = [src('alpha'), src('boom'), src('charlie')];
     const added: AddedJob[] = [];
