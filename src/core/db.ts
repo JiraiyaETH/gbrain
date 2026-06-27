@@ -70,6 +70,20 @@ const DEFAULT_POOL_SIZE_FALLBACK = 10;
  */
 const AUTO_DETECT_PORTS = new Set(['6543']);
 
+export const POSTGRES_KEEP_ALIVE_SECONDS = 30;
+
+export function createPostgresBaseOptions(): Record<string, unknown> {
+  return {
+    idle_timeout: 20,
+    connect_timeout: 10,
+    keep_alive: POSTGRES_KEEP_ALIVE_SECONDS,
+    types: {
+      // Register pgvector type
+      bigint: postgres.BigInt,
+    },
+  };
+}
+
 /**
  * Decide whether to force `prepare: true`/`false` on the postgres.js client.
  *
@@ -236,13 +250,8 @@ export async function connect(config: EngineConfig): Promise<boolean> {
     const prepare = resolvePrepare(url);
     const timeouts = resolveSessionTimeouts();
     const opts: Record<string, unknown> = {
+      ...createPostgresBaseOptions(),
       max: resolvePoolSize(),
-      idle_timeout: 20,
-      connect_timeout: 10,
-      types: {
-        // Register pgvector type
-        bigint: postgres.BigInt,
-      },
       // Silence postgres NOTICE-level messages by default ("relation already
       // exists, skipping" floods stdout under idempotent CREATE statements
       // during migrations + initSchema, and breaks stdout-parsing callers like

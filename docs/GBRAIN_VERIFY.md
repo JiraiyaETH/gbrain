@@ -88,15 +88,17 @@ find /data/brain -name '*.md' \
 Some difference is normal (files added since last sync), but if page count is
 less than half the file count, sync is silently skipping pages.
 
-**If page count is way too low:** The #1 cause is an unreachable direct
-connection on an IPv4-only host. GBrain uses the Transaction pooler (port 6543)
-for reads, but routes migrations, DDL, and sync transactions to a derived direct
-connection (`db.<ref>.supabase.co:5432`), which is IPv6-only.
-- On an IPv4-only host, reads work but sync transactions fail and silently skip
-  pages.
-- Fix: set `GBRAIN_DIRECT_DATABASE_URL` to the **Session pooler** string (port
-  5432 on the `pooler.supabase.com` host, IPv4), or enable Supabase's IPv4
-  add-on. Then run `gbrain sync --full` to reimport everything.
+**If page count is way too low:** The #1 cause is an unreachable write-side
+connection. For Supabase pooler configs, GBrain uses the Transaction pooler
+(port 6543) for reads, but now derives the write-side connection from the same
+IPv4 pooler host on port 5432 (the Session pooler), preserving the
+`postgres.<ref>` username. The IPv6-only `db.<ref>.supabase.co` host is no
+longer used for native Supabase-pooler configs.
+- If sync transactions still fail on an IPv4-only host, confirm your configured
+  URL is a `pooler.supabase.com` host and run `gbrain doctor`.
+- `GBRAIN_DIRECT_DATABASE_URL` remains the escape hatch for operators who use
+  Supabase's IPv4 add-on, a true direct host, or a custom PgBouncer topology.
+  Then run `gbrain sync --full` to reimport everything.
 
 ### 4b. Embed Check
 

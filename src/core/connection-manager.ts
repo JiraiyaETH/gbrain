@@ -37,7 +37,13 @@
  */
 
 import postgres from 'postgres';
-import { resolvePrepare, resolveSessionTimeouts, resolvePoolSize, endPoolBounded } from './db.ts';
+import {
+  createPostgresBaseOptions,
+  resolvePrepare,
+  resolveSessionTimeouts,
+  resolvePoolSize,
+  endPoolBounded,
+} from './db.ts';
 import { redactPgUrl } from './url-redact.ts';
 import { logConnectionEvent } from './connection-audit.ts';
 
@@ -89,79 +95,56 @@ const DDL_IDLE_TX_TIMEOUT_MS = 5 * 60 * 1000; // 5min
 const BULK_MAINTENANCE_WORK_MEM = '256MB';
 
 /**
- * Hostname patterns that indicate a Supabase pooler. Used for auto-detection
- * of the dual-pool topology. Adding more patterns is safe; mis-detection
- * just means we open a "direct" pool against the same URL — wasteful but
- * not broken (the kill-switch is the operator's escape hatch).
+ * Hostname patterns that indicate a Supabase pooler. Used for auto-deriving a
+ * session-pooler URL. Port 6543 is handled separately by resolvePrepare(),
+ * because generic PgBouncer deployments use the same convention.
  */
 const SUPABASE_POOLER_HOSTNAME_PATTERNS = [
   /\.pooler\.supabase\.com$/i,
   /^pooler\.supabase\.com$/i,
 ];
 
-const SUPABASE_POOLER_PORTS = new Set(['6543']);
+export function isSupabasePoolerHostname(hostname: string): boolean {
+  return SUPABASE_POOLER_HOSTNAME_PATTERNS.some(re => re.test(hostname));
+}
 
 /**
- * True if the URL looks like a Supabase pooler endpoint. Used for kill-switch
- * activation and dual-pool routing.
+ * True if the URL host looks like a Supabase pooler endpoint.
  */
 export function isSupabasePoolerUrl(url: string): boolean {
   try {
     const parsed = new URL(url.replace(/^postgres(ql)?:\/\//, 'http://'));
-    if (SUPABASE_POOLER_PORTS.has(parsed.port)) return true;
-    if (SUPABASE_POOLER_HOSTNAME_PATTERNS.some(re => re.test(parsed.hostname))) return true;
-    return false;
+    return isSupabasePoolerHostname(parsed.hostname);
   } catch {
     return false;
   }
 }
 
 /**
- * Derive a direct (non-pooler) URL from a Supabase pooler URL. Two known shapes:
+ * Derive a session-pooler URL from a Supabase transaction-pooler URL.
  *
  *   Pooler hostname: aws-N-region.pooler.supabase.com on port 6543
- *      → swap to db.<project-ref>.supabase.co on port 5432
- *      (project-ref encoded in the user component as postgres.<ref>)
- *   Direct hostname: db.<ref>.supabase.co already on port 5432 → returned as-is
+ *      → same host on port 5432, preserving user postgres.<project-ref>
+ *   Direct hostname: db.<ref>.supabase.co already on port 5432 → null
  *
- * For the modern shape, we try to extract project-ref from the user component.
- * If we cannot, we fall back to swapping port-only and the caller may warn.
- *
- * Returns null when the URL isn't a recognized Supabase pooler.
+ * Returns null when the URL isn't a recognized Supabase pooler host.
  */
 export function deriveDirectUrl(url: string): string | null {
   try {
     const parsed = new URL(url.replace(/^postgres(ql)?:\/\//, 'http://'));
-    const port = parsed.port;
     const hostname = parsed.hostname;
-    const isPoolerHost = SUPABASE_POOLER_HOSTNAME_PATTERNS.some(re => re.test(hostname));
-    if (port !== '6543' && !isPoolerHost) return null;
-    // User part on Supabase pooler is typically `postgres.<project-ref>`.
-    // Extract <project-ref> for the direct hostname.
-    const user = parsed.username || '';
-    const decodedUser = decodeURIComponent(user);
-    const refMatch = decodedUser.match(/^postgres\.([a-z0-9]+)$/i);
-    let directHost = hostname;
-    let directUser = parsed.username;
-    if (refMatch && refMatch[1] && isPoolerHost) {
-      directHost = `db.${refMatch[1]}.supabase.co`;
-      // Supabase direct connections use bare `postgres`; the `postgres.<ref>`
-      // form is pooler-only (Supavisor uses the suffix for tenant routing).
-      // Without this strip, direct auth fails with `password authentication
-      // failed for user "postgres.<ref>"` even though the password is correct.
-      directUser = 'postgres';
-    }
-    // Compose direct URL by swapping host + port. Preserve auth, db, query.
-    parsed.hostname = directHost;
+    if (!isSupabasePoolerHostname(hostname)) return null;
+    // Compose session-pooler URL by swapping only the port. Preserve auth, db,
+    // query, and the `postgres.<ref>` username Supavisor uses for tenant routing.
     parsed.port = '5432';
     // Reconstruct with the original scheme.
     const scheme = url.match(/^postgres(?:ql)?:\/\//i)?.[0] ?? 'postgres://';
-    const auth = directUser
-      ? `${directUser}${parsed.password ? `:${parsed.password}` : ''}@`
+    const auth = parsed.username
+      ? `${parsed.username}${parsed.password ? `:${parsed.password}` : ''}@`
       : '';
     const search = parsed.search ?? '';
     const path = parsed.pathname ?? '';
-    return `${scheme}${auth}${directHost}:5432${path}${search}`;
+    return `${scheme}${auth}${hostname}:5432${path}${search}`;
   } catch {
     return null;
   }
@@ -198,6 +181,7 @@ export class ConnectionManager {
   private _killSwitch: boolean;
   private _directUrl: string | null;
   private _isSupabase: boolean;
+  private _hasExplicitDirectUrl: boolean;
 
   constructor(opts: ConnectionManagerOpts) {
     this.opts = opts;
@@ -208,6 +192,7 @@ export class ConnectionManager {
       this._killSwitch = opts.parent.isKillSwitchActive();
       this._isSupabase = opts.parent.isSupabase();
       this._directUrl = opts.parent.resolveDirectUrl();
+      this._hasExplicitDirectUrl = opts.parent.hasExplicitDirectUrl();
       this._readPool = opts.parent.peekReadPool();
       this._readPoolOwnedExternally = true; // never end the parent's pool
     } else {
@@ -215,16 +200,21 @@ export class ConnectionManager {
       this._isSupabase = isSupabasePoolerUrl(opts.url);
       // Direct URL: explicit override > env > derive > null
       const envOverride = process.env.GBRAIN_DIRECT_DATABASE_URL;
-      this._directUrl = opts.directUrl ?? envOverride ?? deriveDirectUrl(opts.url);
+      const explicitDirectUrl = opts.directUrl ?? envOverride ?? null;
+      this._hasExplicitDirectUrl = typeof explicitDirectUrl === 'string' && explicitDirectUrl.length > 0;
+      this._directUrl = explicitDirectUrl ?? deriveDirectUrl(opts.url);
     }
   }
 
-  /** Whether dual-pool routing is active (false on non-Supabase or kill-switch). */
+  /** Whether dual-pool routing is active. */
   isDualPoolActive(): boolean {
-    return this._isSupabase && !this._killSwitch && !!this._directUrl;
+    return (this._isSupabase || this._hasExplicitDirectUrl) &&
+      !this._killSwitch &&
+      !!this._directUrl;
   }
 
   isSupabase(): boolean { return this._isSupabase; }
+  hasExplicitDirectUrl(): boolean { return this._hasExplicitDirectUrl; }
   isKillSwitchActive(): boolean { return this._killSwitch; }
   resolveDirectUrl(): string | null { return this._directUrl; }
 
@@ -253,10 +243,8 @@ export class ConnectionManager {
       throw new Error('connection-manager: read pool marked as externally-owned but not provided');
     }
     const opts: Record<string, unknown> = {
+      ...createPostgresBaseOptions(),
       max: resolvePoolSize(this.opts.readPoolSize),
-      idle_timeout: 20,
-      connect_timeout: 10,
-      types: { bigint: postgres.BigInt },
     };
     const timeouts = resolveSessionTimeouts();
     if (Object.keys(timeouts).length > 0) opts.connection = timeouts;
@@ -280,8 +268,8 @@ export class ConnectionManager {
   }
 
   /**
-   * Acquire (and lazy-init) the direct DDL pool. When kill-switch is active
-   * or non-Supabase, returns the read pool (single-pool fallback).
+   * Acquire (and lazy-init) the DDL/write pool. When kill-switch is active
+   * or no write-side route is configured, returns the read pool.
    *
    * A1: lazy init wraps in a cached Promise<Sql> so concurrent first-callers
    * await the same init instead of racing two pool constructions.
@@ -333,12 +321,10 @@ export class ConnectionManager {
     }
     const size = resolveDirectPoolSize(this.opts.directPoolSize);
     const opts: Record<string, unknown> = {
+      ...createPostgresBaseOptions(),
       max: size,
-      idle_timeout: 20,
-      connect_timeout: 10,
-      types: { bigint: postgres.BigInt },
-      // Always use prepared statements on the direct pool — no PgBouncer
-      // here, so the prepare-cache invalidation issue doesn't apply.
+      // Use prepared statements on the write-side pool. Supabase auto-derived
+      // URLs use the session pooler, and explicit direct URLs opt into this path.
       prepare: true,
       // Apply DDL session GUCs as connection startup parameters (durable
       // through any intermediary pooling layer, same trick as
@@ -427,8 +413,9 @@ export class ConnectionManager {
     direct_pool_size: number;
   } {
     let mode: 'split' | 'single (kill-switch)' | 'single (non-supabase)' | 'single (no-direct-url)';
-    if (!this._isSupabase) mode = 'single (non-supabase)';
-    else if (this._killSwitch) mode = 'single (kill-switch)';
+    if (this._killSwitch) mode = 'single (kill-switch)';
+    else if (this.isDualPoolActive()) mode = 'split';
+    else if (!this._isSupabase && !this._hasExplicitDirectUrl) mode = 'single (non-supabase)';
     else if (!this._directUrl) mode = 'single (no-direct-url)';
     else mode = 'split';
     return {
