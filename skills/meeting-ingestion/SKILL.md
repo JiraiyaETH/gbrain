@@ -1,6 +1,6 @@
 ---
 name: meeting-ingestion
-version: 1.4.0
+version: 1.6.0
 description: |
   Ingest meeting transcripts into brain pages with attendee enrichment, entity
   propagation, and timeline merge. A meeting is NOT fully ingested until the
@@ -39,11 +39,29 @@ This skill guarantees:
 - Timeline entries on ALL mentioned entities (timeline merge)
 - Meeting is NOT fully ingested until enrich runs for every entity
 - Back-links created bidirectionally
+- **Verified**: a meeting is NOT "done" until the Phase 7 QA gate AND a cache-busted before/after `/query` back-test both pass (structure, edges, traversal). "Looks fine" is not a gate.
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
 
 Every attendee and company mentioned MUST get a back-link from their page to
 the meeting page. An unlinked mention is a broken brain.
+
+> **Deployment config (read FIRST).** This skill is brain-portable. The method and
+> conventions — source routing, the timeline-CAP concept (the owner + recurring
+> internal team keep the forward `attended` edge but drop the reverse per-meeting
+> timeline line so their pages don't balloon), enrichment depth, the edge model, and
+> entity/dedup rules — live in `references/doctrine.md` next to this skill. Read it
+> first. This brain's specific VALUES (which slugs are capped, the source name, the
+> repo + binary paths) are supplied by the deploying agent at run time via env
+> (`BRAIN_DIR`, `GBRAIN_SOURCE`, `GBRAIN_BIN`, `EXEMPT_PAGES`) — those carry real
+> names, so they stay out of this shipped reference.
+
+**House style (edges + citations) — load-bearing:**
+- **Bare wikilinks** `[[people/<slug>]]`, not piped `[[people/<slug>|Display]]` (identical edge; bare is the convention).
+- **No self-citations in the meeting body** — the meeting page IS the source; provenance is the `id:` frontmatter + the transcript below the line. (ENTITY pages DO cite their source meeting per fact.)
+- **Never write a slug PATH (`people/x`, `companies/x`, `contracts/x`) in body PROSE** — only inside the attendee `[[people/x]]` links. FS-path extraction turns a bare path in prose into a real (false) edge; in prose use display NAMES.
+- **Wikilink ONLY actual attendees** in the body; people merely mentioned go in a `**Mentioned**` line, by name.
+- **DEDUP by date, not title**: a different DATE = a different meeting even with an identical title (recurring "Monday Meeting" / "tailored-sync" / weekly syncs). Only collapse a SAME-DATE + SAME-PARTICIPANT dup-pair (two recorder ids of one call); note the sibling id in body provenance, never `delete` a distinct meeting.
 
 ## Phases
 
@@ -122,6 +140,41 @@ Body:
 {Structured notes by topic}
 ```
 
+**Two-layer body (Garry's standard) — REQUIRED; supersedes the bare template above.**
+A meeting page has the ANALYSIS layer ABOVE a `---` separator and the FULL DIARIZED
+TRANSCRIPT below it (the transcript is the source of truth). A meeting is an immutable
+EVENT, so it carries a one-time synthesis at the top — NOT an evolving "Compiled Truth +
+State" block (that two-layer Compiled-Truth pattern is for the ENTITY pages: person,
+company, deal, project, concept). Shape:
+
+```markdown
+# {Title} — {Date}
+
+**Attendees:** {[[people/<slug>]] wikilinks, with (org)} — ATTENDEES ONLY
+**Duration:** {N min} · **Source:** Fireflies [Source: Meeting "{Title}", {Date}]
+
+## Crux
+{YOUR analysis — what actually matters, what was decided, what was left unsaid. NOT a copy of the AI notes.}
+
+## What changed / Key decisions
+## Action items
+{owner-attributed}
+
+**Mentioned (not yet filed):** {display NAMES only — never a slug-path like people/x; a bare path mints a false edge via FS-path extraction}
+
+---
+
+## Transcript (diarized — source of truth)
+**Speaker:** text …
+{optional Fireflies auto-summary appendix, medium-trust}
+```
+
+**Entity-page ordering (prevents silently-missing edges) — REQUIRED.** Link extraction only
+creates an edge to a page that EXISTS at extraction time. So create each attendee/company
+page (Phases 3–4) and THEN re-write the meeting page once more (`put`) so its
+`[[people/<slug>]]` resolve and the `attended` edges form. Afterward verify every attendee
+in the `**Attendees:**` line has an `attended` edge (no missing, no extra).
+
 ### Phase 3: Attendee enrichment (MANDATORY)
 
 For EACH attendee:
@@ -182,6 +235,35 @@ owner-exception) — their meetings are reachable via the `attended` back-links.
 ### Phase 6: Sync
 
 `gbrain sync` to update the index.
+
+### Phase 7: Verify (MANDATORY) — the gate that makes ingestion rigorous
+
+A meeting is NOT "done" until BOTH checks pass. Skipping this is the #1 way a
+meeting silently lands broken (missing attendee edge, over-collapsed dup,
+slug-path leak, schema drift) — every one of those was caught here, not by eye.
+
+1. **Run the QA gate** (deterministic, ships with this skill):
+   ```bash
+   BRAIN_DIR=<brain> GBRAIN_SOURCE=<src> EXEMPT_PAGES="<owner + capped team>" \
+     bash skills/meeting-ingestion/scripts/qa-meeting.sh <slug>
+   ```
+   Exit 0 = clean. It checks frontmatter conformance; two-layer structure; body
+   links people-only; the DB `attended` edges MATCH the Attendees line EXACTLY
+   (catches BOTH missing and spurious edges); no meeting→company/contract edge;
+   reverse backlinks live (unless all attendees are capped); cap respected. FIX
+   every FAIL and re-run — never proceed on HAS-FAILURES.
+
+2. **Query back-test (traversal proof).** Run a cache-busted `/query` the meeting
+   should answer, BEFORE and AFTER ingest; confirm the meeting + its attendees/
+   company now surface and the answer is richer. Use a NOVEL phrasing each time —
+   `gbrain query` caches by string similarity (~0.92, TTL 3600s), so the identical
+   query replays a stale result. This proves the edges are live + traversable, not
+   just that the page exists.
+
+**Bulk runs** add, after the batch: `gbrain extract --stale` + `gbrain embed
+--stale`; a dup-scan (same-date meetings sharing a non-capped attendee); and a
+corpus normalize (de-pipe wikilinks, strip self-citations). See the brain's
+convention doc + `scripts/` for the bulk helpers.
 
 ## Output Format
 
