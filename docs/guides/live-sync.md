@@ -19,16 +19,16 @@ with the brain repo automatically. You never have to remember to run sync.
 
 GBrain is tuned for the Supabase **Transaction pooler** (port 6543): it
 auto-disables prepared statements there and routes `engine.transaction()`
-(migrations, DDL, sync imports) to a derived **direct** connection
-(`db.<ref>.supabase.co:5432`). That direct host is IPv6-only, so on an
-IPv4-only host, reads work but sync **silently skips most pages**. This is the
-number one cause of "sync ran but nothing happened."
+(migrations, DDL, sync imports) to the native **Session pooler** connection on
+the same `pooler.supabase.com` host, port 5432, preserving the
+`postgres.<ref>` username. That keeps the write-side connection on IPv4. The
+IPv6-only `db.<ref>.supabase.co` host is no longer used for native
+Supabase-pooler configs.
 
-Fix: make the direct connection reachable over IPv4. Either set
-`GBRAIN_DIRECT_DATABASE_URL` to the **Session pooler** string (port 5432 on the
-`pooler.supabase.com` host, IPv4), or enable Supabase's IPv4 add-on. Verify by
-running `gbrain sync` and checking that the page count in `gbrain stats` matches
-the syncable file count in the repo.
+If sync still fails because your topology needs a different write-side route,
+set `GBRAIN_DIRECT_DATABASE_URL` to the explicit Session pooler, IPv4 add-on, or
+true direct-host URL. Verify by running `gbrain sync` and checking that the page
+count in `gbrain stats` matches the syncable file count in the repo.
 
 ### The Primitives
 
@@ -62,8 +62,8 @@ Name: gbrain-auto-sync
 Schedule: */15 * * * *
 Prompt: "Run: gbrain sync --repo /data/brain && gbrain embed --stale
   Log the result. If sync errors mention an unreachable host or timeout,
-  the direct connection isn't reachable over IPv4 (set
-  GBRAIN_DIRECT_DATABASE_URL to the Session pooler, or enable the IPv4 add-on)."
+  confirm the configured URL is a pooler.supabase.com host or set
+  GBRAIN_DIRECT_DATABASE_URL to the explicit write-side URL."
 ```
 
 **Hermes:**

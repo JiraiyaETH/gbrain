@@ -7,10 +7,11 @@ import {
   ConnectionManager,
   DEFAULT_DIRECT_POOL_SIZE,
 } from '../src/core/connection-manager.ts';
+import { resolvePrepare } from '../src/core/db.ts';
 
 describe('isSupabasePoolerUrl', () => {
-  test('detects port 6543', () => {
-    expect(isSupabasePoolerUrl('postgresql://u:p@host:6543/db')).toBe(true);
+  test('does not classify generic port 6543 as Supabase', () => {
+    expect(isSupabasePoolerUrl('postgresql://u:p@host:6543/db')).toBe(false);
   });
 
   test('detects pooler.supabase.com hostname', () => {
@@ -35,35 +36,49 @@ describe('isSupabasePoolerUrl', () => {
 });
 
 describe('deriveDirectUrl', () => {
-  test('swaps pooler hostname + port for known shape', () => {
+  test('keeps pooler session host + postgres.<ref> user when source is already port 5432', () => {
+    const direct = deriveDirectUrl(
+      'postgresql://postgres.abcxyz:secret@aws-0-us-east-1.pooler.supabase.com:5432/postgres'
+    );
+    expect(direct).toBe(
+      'postgresql://postgres.abcxyz:secret@aws-0-us-east-1.pooler.supabase.com:5432/postgres'
+    );
+  });
+
+  test('converts pooler transaction port to session port without swapping host or user', () => {
     const direct = deriveDirectUrl(
       'postgresql://postgres.abcxyz:secret@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
     );
-    expect(direct).toBeTruthy();
-    expect(direct).toContain('db.abcxyz.supabase.co:5432');
-    expect(direct).toContain(':secret@'); // creds preserved
+    expect(direct).toBe(
+      'postgresql://postgres.abcxyz:secret@aws-0-us-east-1.pooler.supabase.com:5432/postgres'
+    );
   });
 
-  test('strips .<project-ref> suffix from username when going pooler→direct', () => {
-    // Supabase direct connections require bare `postgres`; the `postgres.<ref>`
-    // form is pooler-only (Supavisor uses the suffix for tenant routing).
-    // Without the strip, direct auth fails with "password authentication
-    // failed for user postgres.<ref>" even with the correct password.
+  test('preserves postgres.<ref> suffix when going transaction pooler to session pooler', () => {
     const direct = deriveDirectUrl(
       'postgresql://postgres.abcxyz:secret@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
     );
-    expect(direct).toContain('postgres:secret@'); // bare username
-    expect(direct).not.toContain('postgres.abcxyz:secret@'); // no pooler suffix
+    expect(direct).toContain('postgres.abcxyz:secret@');
+    expect(direct).not.toContain('postgres:secret@');
   });
 
-  test('falls back to port-only swap when project-ref unparseable', () => {
+  test('keeps recognized pooler host on session port for alternate pooler hostnames', () => {
     const direct = deriveDirectUrl(
-      'postgresql://customuser:secret@some.pooler.supabase.com:6543/db'
+      'postgresql://postgres.abcxyz:secret@some.pooler.supabase.com:6543/db'
     );
-    expect(direct).toBeTruthy();
-    expect(direct).toContain(':5432');
-    expect(direct).toContain('some.pooler.supabase.com'); // host preserved
-    expect(direct).toContain('customuser:secret@'); // non-pooler username preserved
+    expect(direct).toBe(
+      'postgresql://postgres.abcxyz:secret@some.pooler.supabase.com:5432/db'
+    );
+  });
+
+  test('returns null for true Supabase direct host', () => {
+    expect(
+      deriveDirectUrl('postgresql://postgres:secret@db.abcxyz.supabase.co:5432/postgres')
+    ).toBeNull();
+  });
+
+  test('returns null for non-Supabase port 6543', () => {
+    expect(deriveDirectUrl('postgresql://u:p@db.example.com:6543/db')).toBeNull();
   });
 
   test('returns null for non-pooler URL', () => {
@@ -145,13 +160,18 @@ describe('resolveDirectPoolSize', () => {
 
 describe('ConnectionManager — describeMode + dual-pool routing', () => {
   let originalKillSwitch: string | undefined;
+  let originalDirectUrl: string | undefined;
   beforeEach(() => {
     originalKillSwitch = process.env.GBRAIN_DISABLE_DIRECT_POOL;
+    originalDirectUrl = process.env.GBRAIN_DIRECT_DATABASE_URL;
     delete process.env.GBRAIN_DISABLE_DIRECT_POOL;
+    delete process.env.GBRAIN_DIRECT_DATABASE_URL;
   });
   afterEach(() => {
     if (originalKillSwitch === undefined) delete process.env.GBRAIN_DISABLE_DIRECT_POOL;
     else process.env.GBRAIN_DISABLE_DIRECT_POOL = originalKillSwitch;
+    if (originalDirectUrl === undefined) delete process.env.GBRAIN_DIRECT_DATABASE_URL;
+    else process.env.GBRAIN_DIRECT_DATABASE_URL = originalDirectUrl;
   });
 
   test('non-Supabase URL → single mode', () => {
@@ -168,7 +188,7 @@ describe('ConnectionManager — describeMode + dual-pool routing', () => {
     expect(cm.isSupabase()).toBe(true);
     expect(cm.isDualPoolActive()).toBe(true);
     expect(cm.describeMode().mode).toBe('split');
-    expect(cm.describeMode().direct_host).toContain('db.abc.supabase.co:5432');
+    expect(cm.describeMode().direct_host).toContain('aws.pooler.supabase.com:5432');
   });
 
   test('kill-switch active → single mode (kill-switch)', () => {
@@ -188,6 +208,35 @@ describe('ConnectionManager — describeMode + dual-pool routing', () => {
       directUrl: 'postgresql://u:p@custom-direct.example.com:5432/db',
     });
     expect(cm.resolveDirectUrl()).toContain('custom-direct.example.com');
+  });
+
+  test('non-Supabase port 6543 disables prepare but stays single-pool without direct derivation', () => {
+    const originalPrepare = process.env.GBRAIN_PREPARE;
+    try {
+      delete process.env.GBRAIN_PREPARE;
+      const url = 'postgresql://u:p@db.example.com:6543/db';
+      const cm = new ConnectionManager({ url });
+      expect(deriveDirectUrl(url)).toBeNull();
+      expect(resolvePrepare(url)).toBe(false);
+      expect(cm.isSupabase()).toBe(false);
+      expect(cm.isDualPoolActive()).toBe(false);
+      expect(cm.describeMode().mode).toBe('single (non-supabase)');
+    } finally {
+      if (originalPrepare === undefined) delete process.env.GBRAIN_PREPARE;
+      else process.env.GBRAIN_PREPARE = originalPrepare;
+    }
+  });
+
+  test('GBRAIN_DIRECT_DATABASE_URL activates dual-pool mode on non-Supabase hosts', () => {
+    process.env.GBRAIN_DIRECT_DATABASE_URL = 'postgresql://u:p@direct.example.com:5432/db';
+    const cm = new ConnectionManager({
+      url: 'postgresql://u:p@db.example.com:6543/db',
+    });
+    expect(cm.isSupabase()).toBe(false);
+    expect(cm.resolveDirectUrl()).toBe('postgresql://u:p@direct.example.com:5432/db');
+    expect(cm.isDualPoolActive()).toBe(true);
+    expect(cm.describeMode().mode).toBe('split');
+    expect(cm.describeMode().direct_host).toBe('direct.example.com:5432');
   });
 
   test('host string contains creds neither in describeMode nor resolveDirectUrl logging', () => {
