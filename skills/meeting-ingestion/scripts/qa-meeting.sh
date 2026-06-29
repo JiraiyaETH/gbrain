@@ -31,6 +31,7 @@ EXEMPT_PAGES="${EXEMPT_PAGES:-}"
 raw="${1:?usage: qa-meeting.sh <slug>}"; slug="${raw#meetings/}"; mpath="meetings/$slug"
 file="$BRAIN/$mpath.md"; fail=0
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$*"; }
+W(){ printf '  \033[33mWARN\033[0m %s\n' "$*"; }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$*"; fail=1; }
 gb(){ "$GB" "$@" --source "$SRC" 2>/dev/null | grep -v "Prepared statements disabled" ; }
 is_exempt(){ case " $EXEMPT_PAGES " in *" $1 "*) return 0;; *) return 1;; esac; }
@@ -45,6 +46,9 @@ grep -q '^date:'                           <<<"$fm" && P "fm date"        || F "
 grep -qE '^status: (ingested|lean-ingest)' <<<"$fm" && P "fm status"      || F "fm status missing/invalid"
 grep -qE '^id: '                           <<<"$fm" && P "fm id (dedup hook)" || F "fm 'id:' dedup hook missing"
 grep -qE '^(attendees|source|duration_min|fireflies_id):' <<<"$fm" && printf '  \033[33mWARN\033[0m drop inert frontmatter key(s) (belong in body)\n' || P "fm minimal"
+mtitle="$(awk '/^title:/{sub(/^title:[[:space:]]*/,""); gsub(/^['\''\"]|['\''\"]$/,"",$0); print; exit}' <<<"$fm")"
+mdate="$(awk '/^date:/{sub(/^date:[[:space:]]*/,""); gsub(/^['\''\"]|['\''\"]$/,"",$0); print; exit}' <<<"$fm")"
+msource="[Source: Meeting \"$mtitle\", $mdate]"
 
 body="$(awk 'c>=2{print} /^---$/{c++}' "$file")"
 [ "$(grep -cE '^---$' "$file")" -ge 3 ] && P "two-layer --- separator" || F "missing body '---' separator (need >=3)"
@@ -61,6 +65,15 @@ grep -qE '\[\[people/|\]\(people/' "$file" && P "people links present" || F "no 
 for px in $(grep -oE '(\[\[|\]\()people/[a-z0-9-]+' "$file" | sed -E 's/^(\[\[|\]\()//' | sort -u); do
   pf="$BRAIN/$px.md"
   if [ ! -f "$pf" ]; then F "iron-law: $px page MISSING (dangling link)"; continue; fi
+  if grep -qE '^_Source note: unless otherwise noted, this page is derived from ' "$pf"; then
+    F "entity source model: $px has top-of-page source note (use timeline/back-link + claim-level citations instead)"
+  fi
+  meeting_cite_count="$(awk -v pat="$msource" 'BEGIN{c=0} /^<!-- timeline -->/{exit} index($0, pat)>0{c++} END{print c+0}' "$pf")"
+  if [ "${meeting_cite_count:-0}" -gt 1 ]; then
+    W "entity source model: $px has $meeting_cite_count pre-timeline meeting citations; check for citation wallpaper"
+  else
+    P "entity source model sane: $px"
+  fi
   if is_exempt "$px"; then P "cap-exempt (forward attended edge only): $px"; continue; fi
   if grep -qE "\[\[$mpath\]\]|\]\($mpath\)" "$pf"; then P "iron-law back-link: $px"; else F "iron-law: $px has NO link to $mpath"; fi
   if grep -qE "^- (\*\*)?[0-9]{4}-[0-9]{2}-[0-9]{2}.*(\[\[$mpath\]\]|\]\($mpath\))" "$pf"; then P "timeline entry dated+links: $px"; else F "no dated ## Timeline entry linking $mpath: $px"; fi
