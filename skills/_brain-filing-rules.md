@@ -125,11 +125,21 @@ Format for back-links (append to Timeline or See Also):
 
 An unlinked mention is a broken brain. The graph is the intelligence.
 
-## Citation Requirements (MANDATORY)
+## Source Traceability Requirements (MANDATORY)
 
-Every fact written to a brain page must carry an inline `[Source: ...]` citation.
+Every durable fact written to a brain page must be traceable to evidence. Inline
+`[Source: ...]` citations are one traceability mechanism, not the only one: a
+dated timeline/back-link to the source page, an explicit source edge, or a raw
+source artifact link can carry provenance when the source set is obvious.
 
-Three formats:
+Use inline `[Source: ...]` when the claim needs claim-level provenance: direct
+user statements, contact fields, dates, numbers, commitments, sensitive or
+conflicting facts, facts copied from external/API sources, and synthesis across
+multiple sources. Do not repeat the same inline citation as wallpaper across a
+run of adjacent bullets when a timeline/back-link or source edge already makes
+the source relationship clear.
+
+Common inline formats:
 - **Direct attribution:** `[Source: User, {context}, YYYY-MM-DD]`
 - **API/external:** `[Source: {provider}, YYYY-MM-DD]` or `[Source: {publication}, {URL}]`
 - **Synthesis:** `[Source: compiled from {list of sources}]`
