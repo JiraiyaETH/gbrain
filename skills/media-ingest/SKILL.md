@@ -45,8 +45,11 @@ This skill guarantees:
 - Every ingested media item has a brain page with analysis (not just a transcript dump)
 - Transcripts (video/audio) saved in raw and human-readable formats
 - Entity extraction: every person and company mentioned gets back-linked
-- Raw source files preserved via `gbrain files upload-raw`
-- Filing by primary subject, not by media format
+- Raw source files preserved via `gbrain files upload-raw` when the raw file is appropriate for Brain provenance
+- Sensitive personal media archives are handled as an exception: keep originals outside the Brain in a topic-specific `/Users/jarvis/data/...` folder, generate metadata/OCR/index artifacts there, and write only distilled summaries/timelines/pointers to Brain
+- Filing by primary subject, not format
+
+**Private personal media exception:** when the source is a private personal photo/video collection, relationship evidence set, family archive, wedding evidence pool, guest list material, passport/ID-adjacent collection, or anything with sensitive personal context, do **not** default to raw-uploading originals into Brain. Keep raw media outside Brain in a private local data folder or secure vault; write only distilled indexes, timelines, proof summaries, and pointers into Brain. See `references/personal-photo-evidence-source-pools.md`. For relationship/legal evidence curation specifically, including screenshot/call-history guidance and MAS-style shortlist workflow, see `references/private-relationship-evidence-curation.md`.
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
 
@@ -65,9 +68,11 @@ Every mention of a person or company with a brain page MUST create a back-link.
 | Screenshot/image | OCR via vision model, extract text and entities |
 | GitHub repo | Clone, read README + key files, summarize architecture |
 
-### Phase 2: Upload raw source
+### Phase 2: Preserve raw source
 
-Save the original file for provenance: `gbrain files upload-raw <file> --page <slug>`
+For public/reference media and ordinary ingests, save the original file for provenance: `gbrain files upload-raw <file> --page <slug>`.
+
+For private personal media collections, preserve originals outside Brain instead, then write only a distilled index/timeline into the relevant Brain project or note. Use the personal source-pool layout in `references/personal-photo-evidence-source-pools.md`.
 
 ### Phase 3: Create brain page
 
@@ -112,10 +117,34 @@ A media item is NOT fully ingested until entity propagation is complete.
 Brain page created with summary, highlights, and entity cross-links. Report to user:
 "Ingested {title}: {N} entities detected, {N} pages updated."
 
+## Sensitive personal media archives
+
+For private photo/video archives (wedding evidence, family photos, IDs-adjacent material, private relationship media), do **not** default to uploading originals into the Brain. Use a private data landing folder such as:
+
+```text
+/Users/jarvis/data/personal/<topic>/evidence/
+  00_inbox/
+  01_photos/
+  02_screenshots/
+  03_documents/
+  metadata/
+```
+
+Then generate:
+- EXIF/date/location index
+- OCR text from screenshots/documents
+- curated evidence shortlist
+- distilled relationship/timeline summary
+- pointers to the external file location
+
+Only the distilled, non-sensitive planning state belongs in Brain. Keep raw photos/videos outside Brain unless Jiraiya explicitly asks to attach a selected artifact and the privacy boundary is clear.
+
 ## Anti-Patterns
 
 - Dumping raw transcripts without analysis
 - Skipping entity extraction ("I'll do that separately")
 - Filing **raw ingest** by format (all videos in `media/videos/`) instead of by subject. Note: format-prefixed paths under `media/<format>/<slug>` ARE sanctioned for **synthesized one-of-one output** like book-mirror's `media/books/<slug>-personalized.md`. The anti-pattern is for raw ingest, not for sui generis synthesis. See `skills/_brain-filing-rules.md` "Sanctioned exception: synthesis output is sui generis."
-- Not preserving raw source files
+- Uploading broad private photo/video archives into Brain when a private `/Users/jarvis/data/...` landing folder plus distilled Brain index is safer
+- Not preserving raw source files when the raw file is appropriate for Brain provenance
 - Creating stub pages without meaningful content
+- Bulk-uploading private personal photo/video originals into Brain when a private local data folder plus distilled Brain index is safer and more useful

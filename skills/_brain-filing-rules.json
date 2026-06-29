@@ -88,6 +88,12 @@
       "description": "Generative ideas the user might build, write, or expand later. Stub-shaped pages that mature over time. voice-note-ingest, archive-crawler, and similar capture-flavored skills file here when content is something to potentially act on."
     },
     {
+      "kind": "note",
+      "directory": "notes/",
+      "examples": ["planning satellites", "compact standalone insights", "working trackers"],
+      "description": "Lean working notes, planning satellites, and compact insights that are useful to retrieve but are not full concepts, projects, sources, or authored writing."
+    },
+    {
       "kind": "research",
       "directory": "research/",
       "examples": ["web-research deltas", "freshness checks", "citation-verified claims"],

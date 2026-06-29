@@ -11,9 +11,14 @@ triggers:
 mutating: true
 writes_pages: true
 writes_to:
-  - originals/
-  - personal/
+  - sources/
+  - writing/
+  - concepts/
+  - notes/
   - ideas/
+  - people/
+  - companies/
+  - personal/
 ---
 
 # archive-crawler — The Universal Archivist
@@ -134,37 +139,32 @@ Work through folders in priority order:
 
 ### Phase 3: Ingest
 
-When an item is worth keeping, file it by **primary subject** per
-`_brain-filing-rules.md`:
+When an item is worth keeping, file it by **primary subject** using the active brain's resolver/schema, not this skill's historical examples:
 
-- User's own writing / ideas / origin-story content → `originals/<slug>.md`
-- Reflections / personal-life content → `personal/<slug>.md`
-- Product / business ideas → `ideas/<slug>.md`
-- Letters or threads about a specific person → `people/<person>/timeline`
-  back-link plus the letter at `personal/<slug>.md` or `originals/<slug>.md`
+- User-authored prose / posts / old voice samples → the brain's authored-prose shelf (often `writing/`, not necessarily `originals/`).
+- Reusable frameworks / mental models / lessons you'd teach → `concepts/` or the schema-resolved concept shelf.
+- Product / business possibilities nobody is actively building → `ideas/`.
+- Compact standalone insights or phrases → `notes/` when the active resolver has one.
+- Person/company relationship signals → update existing `people/` / `companies/` timeline entries after brain-first lookup; don't create mention spam.
+- Raw/bulk archive provenance → create one `sources/` manifest page; keep the raw archive in `~/data/...`.
 
-**The skill is schema-generic.** It does NOT bake in any specific
-era-folder structure (e.g., `originals/archive/` for pre-2003,
-`originals/yc-era/` for post-2019, etc.). The user's filing rules from
-`_brain-filing-rules.json` are read at runtime; the agent decides per-page
-where content lands within those sanctioned directories.
+**The skill is schema-generic.** It does NOT bake in any specific shelf such as `originals/` or any era-folder structure. Read the active `RESOLVER.md`, schema docs, and/or filing rules at runtime; the agent decides per-page where content lands within sanctioned directories.
 
-Brain page format:
+Brain page format should follow the active brain's lean-frontmatter convention. Frontmatter is for consumed/query-useful keys (`type`, `title`, `id`, `published/date`, `aliases`, `tags`); searchable provenance and source paths belong in the body as citations or a `## Source` section, not in inert custom YAML.
 
 ```markdown
 ---
 title: "[Title or first line]"
-type: original
-source_type: "[local|dropbox|backblaze|gmail-takeout|mbox|pst]"
-source_path: "[path within the allow-listed scan_paths]"
-date: "YYYY-MM-DD"  # date from the file metadata or content
-people: ["person-1", "person-2"]
-tags: ["tag-1", "tag-2"]
+type: writing | concept | note | source | company
+id: stable-external-id-if-useful
+published: YYYY-MM-DD
+aliases: ["query phrase", "name variant"]
+tags: ["archive-slug", "topic"]
 ---
 
 # [Title]
 
-[Summary: what it is, when it's from, why it matters]
+[Compiled truth: what it is, when it's from, why it matters. Include source citation inline.]
 
 **User's reaction:** [exact quote, no paraphrasing]
 
@@ -172,9 +172,14 @@ tags: ["tag-1", "tag-2"]
 
 [Cross-links to people, concepts, projects.]
 
+## Source
+
+- Local source path: `[path within the allow-listed scan_paths]`
+- Archive/source manifest: `[[sources/<archive-slug>]]`
+
 ---
 
-[Raw source material below the line — full text]
+[Raw source material below the line when useful — full text for authored writing, concise evidence for concepts/notes]
 ```
 
 ## File-type handlers
@@ -230,6 +235,8 @@ readpst -o /tmp/pst-output /path/to/file.pst
 
 Extract to a temp dir, then recurse through the extracted tree.
 
+**Twitter/X archives:** do not crawl or ingest the 1GB zip raw. Normalize the structured `data/*.js` payloads first, keep media as a manifest, build ranked review queues, and gate DMs before any Brain write. See `references/twitter-archive-normalization.md`.
+
 ### Images
 
 Note existence + metadata (filename, size, date). Don't show unless the
@@ -282,6 +289,12 @@ scan_paths: ["paths from gbrain.yml"]
 - Next: [what's queued]
 ```
 
+## References
+
+- `references/twitter-archive-brain-ingestion.md` — Twitter/X archive normalization, packetization, selective Brain ingestion, privacy gates, and personal-voice mining pattern.
+
+- `references/twitter-archive-mining.md` — proven workflow for receiving, normalizing, packetizing, and Brain-ingesting a large Twitter/X archive without blind raw import.
+
 ## Anti-Patterns
 
 - ❌ Running without `archive-crawler.scan_paths:` set. Hard refusal.
@@ -294,6 +307,10 @@ scan_paths: ["paths from gbrain.yml"]
 - ❌ Wrapping found content in lessons or takeaways. Let stories breathe.
 - ❌ Skipping back-links when content references people / companies who
   have brain pages. Iron Law per conventions/quality.md.
+
+## Specialized archive workflows
+
+- `references/twitter-x-archive-mining.md` — normalization-first workflow for Twitter/X archive zips: parse `data/*.js` wrappers into JSONL, keep media as a manifest, build public/private review packets, and avoid blind Brain ingest.
 
 ## Related skills
 
