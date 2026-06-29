@@ -77,6 +77,19 @@ Walk these questions in order:
 6. Is it BULK SOURCE DATA? → source-typed directory
 7. None of the above → consult EIIRP Phase 3 for schema-pack candidate creation.
 
+### Personal planning packages: hub + satellites, not monolith
+
+See `references/personal-planning-hub-pattern.md` for the session-derived wedding-prep example and edge verification pattern.
+
+When the user wants to track a real personal outcome with multiple moving parts — e.g. wedding prep, relocation, travel/admin prep, estate/family admin — treat it like an outcome/workstream if the active pack has `project`:
+
+- Create a small `projects/{slug}.md` hub only when there is an actual outcome, status, next actions, blockers, dates, and links.
+- Put substantial detail in linked `notes/{slug}-*.md` satellites by subject: documents, itinerary, guests, dress code, vendor questions, etc.
+- Use `sources/` only for raw-ish imports that feed multiple pages, such as copied vendor policies, quote dumps, booking confirmations, or exported guest/contact data. Do not put analysis/checklists there.
+- Keep sensitive originals outside the Brain: passports, IDs, visas, certificates, signatures, payment data, full guest PII. Brain pages may track collection/status and secure-location pointers, not the raw files.
+- Do not invent a new shelf such as `trips/` or `personal/wedding/` unless the active schema pack already defines it or the user approves a schema change.
+- After creating a hub + satellites, verify directed markdown edges with `gbrain backlinks <slug>` and `gbrain graph <slug> --depth 1`; if expected wiki-link edges are missing, run a scoped/recent extract before reporting the graph shape.
+
 ### Step 2: Look up the directory for that type in the active pack
 
 ```bash
@@ -108,6 +121,40 @@ walk it from `gbrain schema show --json` instead of hardcoding here.
 - [ ] Slug is kebab-case, descriptive
 - [ ] Frontmatter includes `type:` matching one of the pack's `page_types[].name`
 - [ ] Cross-links to related pages are included
+
+For user-facing planning structures, also inspect local exemplars in the target
+shelves before writing. The active schema tells you the valid shelves/types;
+existing pages show the user's live frontmatter conventions. Prefer native
+GBrain write paths (`put_page` / `gbrain capture --file ... --slug ... --type
+... --source ...`) and verify with `gbrain frontmatter validate` plus search/readback.
+
+**Life-event planning pattern:** for weddings, moves, major trips, and similar
+personal initiatives with multiple workstreams, use a project hub plus note
+satellites rather than one monolithic file. Keep sensitive originals and full
+private data outside Brain; store only distilled status, decisions, checklists,
+and pointers. See `references/life-event-planning-hub-satellites.md`.
+
+**Simplification pass before write:** when the user pushes back on file/link sprawl,
+merge satellites aggressively before writing. Remove generic prep pages when the
+project hub already tracks links and outstanding sequence; merge ceremony/timeline/photo/roles,
+guest/logistics/comms/RSVP, and budget/vendors/sourcing when their update rhythm is shared.
+See `references/wedding-planning-simplified-hub.md` for the wedding cleanup pattern.
+
+**Vendor/package form pattern:**
+`references/life-event-planning-simplification-and-source-model.md`.
+
+**Vendor/package form pattern:** when a life-event has a venue/vendor package
+and a long form, create one distilled `notes/<event>-<vendor>-package-and-form`
+satellite for package baseline, selected form facts, open decisions, add-on
+costs, and external sourcing candidates. Do not explode cake/flowers/music/favor
+form sections into separate notes unless they become independently complex. See
+`references/venue-package-form-distillation.md`.
+
+**Private evidence/media tracker pattern:** when a life-event has a private
+photo/video/evidence pool, keep raw media outside Brain under `/Users/jarvis/data/...`
+and file the working inventory/curation tracker as a `notes/` satellite, not
+`sources/`, unless the page is actually a raw-ish source artifact/import. See
+`references/life-event-evidence-media-tracker-routing.md`.
 
 If the active pack doesn't have a type for what you're trying to file,
 DON'T pick the closest-fitting one. Instead, signal to EIIRP that a new

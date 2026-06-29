@@ -21,6 +21,9 @@ writes_pages: true
 writes_to:
   - people/
   - companies/
+
+x-session-reference-notes:
+  - references/scoped-gbrain-health-log-sync-extract-2026-06-26.md
   - deals/
   - concepts/
   - meetings/
@@ -122,6 +125,18 @@ ingest event.
 
 No separate output. Brain-ops is an always-on behavior layer, not a report generator.
 The output is updated brain pages and enriched responses.
+
+## Active planning notes source model
+
+For live personal/project planning pages built directly from the user's current
+chat/input, do not litter every checklist bullet with `[Source: User / Telegram]`.
+Use a compact `## Source / evidence model` on the project hub naming the active
+inputs (operator updates, vendor page, extracted form, etc.) and treat the hub +
+linked notes as the current working source of truth. Create or link `sources/`
+pages only for durable raw artifacts such as invoices, completed form exports,
+signed agreements, vendor PDFs, booking confirmations, or raw guest/contact
+exports. This keeps planning notes legible while preserving provenance at the
+right layer.
 
 ## Cross-source citation format (v0.18.0+)
 

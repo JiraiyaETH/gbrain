@@ -21,3 +21,4 @@ storage:
 archive-crawler:
   scan_paths:
     - /Users/jarvis/data/telegram
+    - /Users/jarvis/data/twitter-archive
