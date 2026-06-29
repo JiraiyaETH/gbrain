@@ -41,6 +41,14 @@ beforeEach(truncateAll);
 const personPage = (title: string, body = ''): PageInput => ({ type: 'person', title, compiled_truth: body, timeline: '' });
 const companyPage = (title: string, body = ''): PageInput => ({ type: 'company', title, compiled_truth: body, timeline: '' });
 
+async function seedSourcePathPage(slug: string, sourcePath: string, body: string, timeline = ''): Promise<void> {
+  await engine.executeRaw(
+    `INSERT INTO pages (source_id, slug, source_path, type, title, compiled_truth, timeline, frontmatter)
+     VALUES ('default', $1, $2, 'log', $1, $3, $4, '{}'::jsonb)`,
+    [slug, sourcePath, body, timeline],
+  );
+}
+
 async function stampOf(slug: string, sourceId = 'default'): Promise<string | null> {
   const rows = await engine.executeRaw<{ links_extracted_at: string | null }>(
     `SELECT links_extracted_at FROM pages WHERE slug = $1 AND source_id = $2`, [slug, sourceId],
@@ -95,6 +103,20 @@ describe('engine: stale-page extraction methods', () => {
     expect(batch2[0].id).toBeGreaterThan(batch1[0].id);
   });
 
+  test('metafile source_paths are not stale-extraction candidates', async () => {
+    await seedSourcePathPage(
+      'food/README',
+      'food/README.md',
+      'Template page, not a typed brain event.',
+      '- **2026-06-26** | 08:15 +07 — User reported breakfast: "<exact phrasing if useful>".',
+    );
+    await engine.putPage('people/alice', personPage('Alice'));
+
+    expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(1);
+    const rows = await engine.listStalePagesForExtraction({ batchSize: 10, versionTs: LINK_EXTRACTOR_VERSION_TS });
+    expect(rows.map(r => r.slug)).toEqual(['people/alice']);
+  });
+
   test('markPagesExtractedBatch: empty input is a no-op', async () => {
     await engine.markPagesExtractedBatch([], new Date().toISOString());
     expect(true).toBe(true); // no throw
@@ -146,6 +168,23 @@ describe('gbrain extract --stale', () => {
     expect(await stampOf('companies/acme')).toBeNull();
     // Still stale after dry-run.
     expect(await engine.countStalePagesForExtraction()).toBe(2);
+  });
+
+  test('does not materialize timeline entries from stale metafile pages', async () => {
+    await seedSourcePathPage(
+      'workout/README',
+      'workout/README.md',
+      'Template page, not a typed brain event.',
+      '- **2026-06-26** | 07:12 +07 — User reported: "<exact phrasing for important subjective notes>".',
+    );
+    await engine.putPage('people/alice', personPage('Alice'));
+
+    await runExtract(engine, ['--stale']);
+
+    const timeline = await engine.getTimeline('workout/README');
+    expect(timeline).toHaveLength(0);
+    expect(await stampOf('workout/README')).toBeNull();
+    expect(await stampOf('people/alice')).not.toBeNull();
   });
 
   test('CRITICAL (CDX-1): page edited after stamp is re-extracted', async () => {
