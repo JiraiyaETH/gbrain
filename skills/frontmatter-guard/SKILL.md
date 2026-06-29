@@ -168,6 +168,25 @@ JSON envelope (when `--json` is passed):
 
 `gbrain frontmatter validate <path> --json` returns a similar envelope keyed on per-file results instead of per-source.
 
+## Semantic frontmatter hygiene
+
+`frontmatter-guard` validates YAML structure; it does not decide whether a key is useful. When the user asks for "good" or "useful" frontmatter, pair this skill with Brain lookup of the active schema / ingest model before editing.
+
+Durable rule from the Twitter archive ingest: gbrain retrieval mostly sees page body, not arbitrary frontmatter. Prefer lean, deterministic keys:
+
+```yaml
+type: concept | writing | note | company | source
+title: Human Readable Title
+id: stable-external-id       # only when it helps dedupe/idempotency
+published: 'YYYY-MM-DD'     # only when source date is semantically useful
+aliases: [query phrase, variant name]
+tags: [small, stable, filterable]
+```
+
+Move rich provenance and retrieval guidance into the body where search/query can see it: inline citations, `**Retrieval note:** ...`, links, and timeline entries. Avoid inert custom keys like `retrieval_role`, `retrieval_weight`, `source_url`, `tweet_id`, `source_manifest`, run IDs, or per-run status stamps unless a downstream system is known to consume them.
+
+Pitfall: `gbrain put` write-through may add operational fields such as `ingested_via`, `ingested_at`, and `source_kind` to local files. If the goal is clean/lean frontmatter, run a targeted tidy pass after `put`, then run `gbrain frontmatter validate <paths> --json`, `gbrain sync --no-pull --no-embed`, and commit only the intended files.
+
 ## Prevention — Writing Valid Frontmatter
 
 **This is the most important section.** Fixing broken frontmatter is good. Not writing broken frontmatter in the first place is better.
