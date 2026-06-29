@@ -58,7 +58,8 @@ the meeting page. An unlinked mention is a broken brain.
 
 **House style (edges + citations) — load-bearing:**
 - **Bare wikilinks** `[[people/<slug>]]`, not piped `[[people/<slug>|Display]]` (identical edge; bare is the convention).
-- **No self-citations in the meeting body** — the meeting page IS the source; provenance is the `id:` frontmatter + the transcript below the line. (ENTITY pages DO cite their source meeting per fact.)
+- **No self-citations in the meeting body** — the meeting page IS the source; provenance is the `id:` frontmatter + the transcript below the line.
+- **Entity-page source model:** edges/back-links provide traversal and source-set traceability; inline citations provide claim-level provenance. On people/company/project pages enriched from a meeting, cite/link the meeting in the dated `## Timeline` entry and avoid a top-of-page source note or repeated per-bullet `[Source: Meeting ...]` wallpaper. Use inline citations only for claims where source ambiguity, authority, conflict, sensitivity, dates, numbers, contact fields, or cross-source synthesis require claim-level proof.
 - **Never write a slug PATH (`people/x`, `companies/x`, `contracts/x`) in body PROSE** — only inside the attendee `[[people/x]]` links. FS-path extraction turns a bare path in prose into a real (false) edge; in prose use display NAMES.
 - **Wikilink ONLY actual attendees** in the body; people merely mentioned go in a `**Mentioned**` line, by name.
 - **DEDUP by date, not title**: a different DATE = a different meeting even with an identical title (recurring "Monday Meeting" / "tailored-sync" / weekly syncs). Only collapse a SAME-DATE + SAME-PARTICIPANT dup-pair (two recorder ids of one call); note the sibling id in body provenance, never `delete` a distinct meeting.
