@@ -63,8 +63,23 @@ import {
   EmbeddingColumnNotRegisteredError,
 } from './search/embedding-column.ts';
 import { hasCJK, escapeLikePattern } from './cjk.ts';
+import { SYNC_SKIP_FILES } from './sync.ts';
 
 type PGLiteDB = PGlite;
+
+function appendMetafileExtractionSkip(conds: string[], params: unknown[]): void {
+  const parts: string[] = [];
+  for (const file of SYNC_SKIP_FILES) {
+    params.push(file);
+    parts.push(`source_path = $${params.length}`);
+    params.push(`%/${file}`);
+    parts.push(`source_path LIKE $${params.length}`);
+  }
+  // Sync classifies these basenames as metafiles/non-pages, but legacy/direct
+  // rows can still exist. Exclude them from stale extraction so templates/logs
+  // cannot materialize fake graph or timeline truth.
+  conds.push(`(source_path IS NULL OR NOT (${parts.join(' OR ')}))`);
+}
 
 // Tier 3 snapshot fast-restore. Reads a tar dump produced by
 // `bun run scripts/build-pglite-snapshot.ts`. Snapshot is matched against
@@ -2435,6 +2450,7 @@ export class PGLiteEngine implements BrainEngine {
   private buildStalePagesWhere(opts?: { sourceId?: string; versionTs?: string }): { where: string; params: unknown[] } {
     const conds: string[] = ['deleted_at IS NULL'];
     const params: unknown[] = [];
+    appendMetafileExtractionSkip(conds, params);
     if (opts?.versionTs) {
       params.push(opts.versionTs);
       conds.push(`(links_extracted_at IS NULL OR links_extracted_at < $${params.length}::timestamptz OR updated_at > links_extracted_at)`);
