@@ -28,6 +28,12 @@
       "description": "A meeting transcript or minutes. Propagate entities to companies/ and people/ pages."
     },
     {
+      "kind": "contract",
+      "directory": "contracts/",
+      "examples": ["signed agreements", "KOL agreements", "service retainers", "referral agreements"],
+      "description": "A typed contract page whose primary subject is an agreement; link parties out to people/ and companies/."
+    },
+    {
       "kind": "concept",
       "directory": "concepts/",
       "examples": ["mental models", "theses", "frameworks"],
