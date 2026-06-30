@@ -84,6 +84,29 @@ function makeCtx(overrides: Partial<OperationContext> = {}): OperationContext {
 
 const putPage = operations.find((o) => o.name === 'put_page')!;
 
+describe('put_page source policy', () => {
+  test('blocks direct put_page writes to code-strategy sources', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, local_path, config)
+         VALUES ($1, $2, $3, $4::text::jsonb)`,
+      ['code-src', 'code-src', brainDir, JSON.stringify({ strategy: 'code' })],
+    );
+    const ctx = makeCtx({ sourceId: 'code-src' });
+
+    await expect(putPage.handler(ctx, {
+      slug: 'notes/should-not-land',
+      content: '---\ntitle: Blocked\n---\n\nbody',
+    })).rejects.toThrow(/code source 'code-src'/);
+
+    const rows = await engine.executeRaw<{ count: number }>(
+      `SELECT count(*)::int AS count FROM pages WHERE source_id = $1 AND slug = $2`,
+      ['code-src', 'notes/should-not-land'],
+    );
+    expect(Number(rows[0]?.count ?? 0)).toBe(0);
+    expect(fs.existsSync(path.join(brainDir, 'notes/should-not-land.md'))).toBe(false);
+  });
+});
+
 describe('put_page write-through — happy path', () => {
   test('writes the markdown file to disk at brainDir/<slug>.md', async () => {
     const ctx = makeCtx();
