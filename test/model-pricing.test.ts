@@ -43,11 +43,9 @@ describe('CANONICAL_PRICING — table integrity', () => {
     expect(CANONICAL_PRICING['anthropic:claude-opus-4-7']).toEqual({ input: 5.0, output: 25.0 });
   });
 
-  test('Gemini 2.0 Flash reconciled to $0.10/$0.40; legacy alias agrees', () => {
-    expect(CANONICAL_PRICING['google:gemini-2.0-flash']).toEqual({ input: 0.1, output: 0.4 });
-    expect(CANONICAL_PRICING['google:gemini-2-flash']).toEqual(
-      CANONICAL_PRICING['google:gemini-2.0-flash'],
-    );
+  test('current Gemini 2.5 models are priced for cross-modal estimates', () => {
+    expect(CANONICAL_PRICING['google:gemini-2.5-pro']).toEqual({ input: 1.25, output: 10.0 });
+    expect(CANONICAL_PRICING['google:gemini-2.5-flash']).toEqual({ input: 0.3, output: 2.5 });
   });
 });
 
@@ -108,12 +106,12 @@ describe('DRIFT GUARD — derived views stay equal to canonical (re-hardcode tri
     // The runner now calls canonicalLookup(slot.model) directly, so presence
     // here = the runner prices these. Mirrors the panel it used to inline.
     for (const id of [
-      'openai:gpt-4o',
+      'openai:gpt-5.2',
       'openai:gpt-4o-mini',
       'anthropic:claude-opus-4-7',
       'anthropic:claude-sonnet-4-6',
-      'google:gemini-1.5-pro',
-      'google:gemini-2.0-flash',
+      'google:gemini-2.5-pro',
+      'google:gemini-2.5-flash',
       'together:meta-llama/Llama-3.3-70B-Instruct-Turbo',
       'deepseek:deepseek-chat',
     ]) {
