@@ -103,6 +103,7 @@ describe('chat touchpoint — model resolver + aliases (Codex F-OV-5)', () => {
   });
 
   test('assertTouchpoint accepts chat for chat-capable native + openai-compat providers', () => {
+    expect(() => assertTouchpoint(getRecipe('anthropic')!, 'chat', 'claude-opus-4-8')).not.toThrow();
     expect(() => assertTouchpoint(getRecipe('anthropic')!, 'chat', 'claude-opus-4-7')).not.toThrow();
     expect(() => assertTouchpoint(getRecipe('openai')!, 'chat', 'gpt-5.2')).not.toThrow();
     expect(() => assertTouchpoint(getRecipe('google')!, 'chat', 'gemini-2.5-flash')).not.toThrow();
