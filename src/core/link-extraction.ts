@@ -399,6 +399,133 @@ function maskRanges(content: string, ranges: Array<[number, number]>): string {
   return chars.join('');
 }
 
+// ─── Contract-structured link extraction (structured-first mode) ────
+//
+// Phase 2 of the structured-first link model. Phase 1 demoted prose page-role
+// priors to `mentions` in `structured-first` mode (killing false typed edges
+// off page-global keywords). That also demoted some REAL relationships —
+// notably the ones that contracts encode structurally. A `type: contract` page
+// emits ONLY `mentions` in legacy mode, which is why `creator_for`/`signed`
+// edges had to be batch-added by hand.
+//
+// This recovers that recall from the structure that actually carries it: the
+// LABELED party fields in a contract body.
+//
+//   **Agreement:** [[companies/tailored]] ⇄ Jordi (creator) ...   ← contracting entity (first wikilink)
+//   **Creator:** [[people/jordi]]   ·   **Client:** [[companies/theo-network]]
+//
+// From those we emit (gated behind the SAME `structuredFirst` flag as Phase 1):
+//   1. PRIMARY: Creator + Client  → people/X --creator_for--> companies/Y
+//      (orientation matches the production batch `creator-for-contract-batch-*`:
+//       the creator is the FROM side, the CLIENT company the TO side.)
+//   2. Creator present            → people/X --signed--> <this contract page>
+//      (orientation matches the production batch `typed-edge-signed-contract-*`:
+//       `signed` points the signer at the CONTRACT PAGE itself — link_type
+//       `signed`/inverse `signed_by` = "the contract is signed_by the person".
+//       NOT person→company; the contract page is the thing one signs.)
+//   3. company⇄company agreement (no **Creator:** line)
+//                                  → companies/A --service_provider_for--> companies/B
+//      (provider = first party / the Tailored-side entity, matching the
+//       production `companies/tailored --service_provider_for--> companies/*`.)
+//
+// Every other wikilink on the page stays `mentions`. Typed edges carry
+// link-source `contract-structured`. Flag OFF ⇒ this path never runs and the
+// page emits `mentions` exactly as today.
+
+/** Provenance stamped on typed edges sourced from a contract's labeled party fields. */
+export const CONTRACT_STRUCTURED_LINK_SOURCE = 'contract-structured';
+
+/** A single labeled party field, e.g. `**Creator:** [[people/jordi]] ...`. */
+const CONTRACT_FIELD_WIKILINKS_RE = (label: string) =>
+  new RegExp(`\\*\\*\\s*${label}\\s*:\\*\\*([^\\n]*)`, 'i');
+
+/** Pull every `[[dir/slug]]` (display alias stripped) out of one labeled line's tail. */
+function partyWikilinks(content: string, label: string): string[] {
+  const m = CONTRACT_FIELD_WIKILINKS_RE(label).exec(content);
+  if (!m) return [];
+  const tail = m[1];
+  const out: string[] = [];
+  const re = new RegExp(WIKILINK_RE.source, WIKILINK_RE.flags);
+  let wl: RegExpExecArray | null;
+  while ((wl = re.exec(tail)) !== null) {
+    let s = wl[1].trim();
+    if (!s || s.includes('://')) continue;
+    if (s.endsWith('.md')) s = s.slice(0, -3);
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Result of contract-structured extraction. `candidates` are the typed party
+ * edges; `consumed` is the set of target slugs that became a typed edge, so the
+ * generic markdown pass can drop the duplicate plain `mentions` for them.
+ */
+interface ContractStructuredResult {
+  candidates: LinkCandidate[];
+  consumed: Set<string>;
+}
+
+/**
+ * Parse a contract page's labeled party fields into typed graph edges. Pure and
+ * total: any missing/malformed field is skipped (never throws), so a contract
+ * that lacks the labels — or has only an `**Agreement:**` company⇄company line —
+ * still degrades cleanly to "no typed edges, everything is mentions".
+ *
+ * Caller gates this on `structuredFirst && (pageType==='contract' || slug
+ * startsWith 'contracts/')`; this function does not re-check the flag.
+ */
+function extractContractStructuredLinks(slug: string, content: string): ContractStructuredResult {
+  const candidates: LinkCandidate[] = [];
+  const consumed = new Set<string>();
+
+  const creator = partyWikilinks(content, 'Creator').find(s => s.startsWith('people/'));
+  const client = partyWikilinks(content, 'Client').find(s => s.startsWith('companies/'));
+  // Contracting entity = first wikilink on the **Agreement:** line (Tailored-side).
+  const agreementParties = partyWikilinks(content, 'Agreement');
+
+  if (creator) {
+    // 1. PRIMARY: creator --creator_for--> client (person → CLIENT company).
+    if (client) {
+      candidates.push({
+        fromSlug: creator,
+        targetSlug: client,
+        linkType: 'creator_for',
+        context: `contract creator/client: ${creator} → ${client}`,
+        linkSource: CONTRACT_STRUCTURED_LINK_SOURCE,
+      });
+      consumed.add(client);
+    }
+    // 2. creator --signed--> this contract page (person → CONTRACT PAGE).
+    candidates.push({
+      fromSlug: creator,
+      targetSlug: slug,
+      linkType: 'signed',
+      context: `contract signer: ${creator}`,
+      linkSource: CONTRACT_STRUCTURED_LINK_SOURCE,
+    });
+    consumed.add(creator);
+  } else if (agreementParties.length >= 2) {
+    // 3. company⇄company agreement (no **Creator:** line): first party is the
+    //    service provider (Tailored-side), second is the client.
+    const [provider, ...rest] = agreementParties;
+    const clientCo = rest.find(s => s !== provider);
+    if (provider.startsWith('companies/') && clientCo && clientCo.startsWith('companies/')) {
+      candidates.push({
+        fromSlug: provider,
+        targetSlug: clientCo,
+        linkType: 'service_provider_for',
+        context: `contract agreement: ${provider} ⇄ ${clientCo}`,
+        linkSource: CONTRACT_STRUCTURED_LINK_SOURCE,
+      });
+      consumed.add(provider);
+      consumed.add(clientCo);
+    }
+  }
+
+  return { candidates, consumed };
+}
+
 // ─── Link candidates (richer than EntityRef) ────────────────────
 
 export interface LinkCandidate {
@@ -468,9 +595,13 @@ export async function extractPageLinks(
   frontmatter: Record<string, unknown>,
   pageType: PageType,
   resolver: SlugResolver,
-  opts: { globalBasename?: boolean; skipFrontmatter?: boolean } = {},
+  opts: { globalBasename?: boolean; skipFrontmatter?: boolean; structuredFirst?: boolean } = {},
 ): Promise<PageLinksResult> {
   const candidates: LinkCandidate[] = [];
+  // Link-type inference mode (config `link_inference_mode`). Read once by the
+  // caller and threaded in; when true, inferLinkType skips the layer-2 page-
+  // global role-keyword prior. Default false = legacy behavior.
+  const structuredFirst = opts.structuredFirst ?? false;
 
   // Page subject's display name, for the inferLinkType subject-scope guard: a
   // role keyword attributed to a DIFFERENT named person on this page must not be
@@ -479,6 +610,27 @@ export async function extractPageLinks(
   const selfName = (typeof rawTitle === 'string' && rawTitle.trim())
     ? rawTitle.trim()
     : (slug.split('/').pop()?.replace(/[-_]+/g, ' ').trim() || undefined);
+
+  // Phase 2: contract-structured typed edges. Gated behind the SAME
+  // `structuredFirst` flag as Phase 1's role-prior demotion. When a contract
+  // page is processed in structured-first mode, its LABELED party fields
+  // (**Creator:** / **Client:** / **Agreement:**) become typed edges
+  // (`creator_for` / `signed` / `service_provider_for`); EVERY other wikilink
+  // on the page — and the party wikilinks too, since the typed edge replaces
+  // them — is forced to `mentions` (`contractMentionsOnly`). Flag OFF, or a
+  // non-contract page, leaves both flags false and the legacy markdown +
+  // page-role inference below runs unchanged.
+  const isContractPage = pageType === 'contract' || slug.startsWith('contracts/');
+  const contractStructured = structuredFirst && isContractPage;
+  let contractConsumed: Set<string> = new Set();
+  if (contractStructured) {
+    const cs = extractContractStructuredLinks(slug, content);
+    candidates.push(...cs.candidates);
+    contractConsumed = cs.consumed;
+  }
+  // In contract-structured mode the only typed edges are the party edges above;
+  // all remaining markdown/bare-slug refs are demoted to `mentions`.
+  const contractMentionsOnly = contractStructured;
 
   // 1. Markdown entity refs.
   for (const ref of extractEntityRefs(content)) {
@@ -514,6 +666,9 @@ export async function extractPageLinks(
       }
       continue;
     }
+    // Contract-structured mode: a party wikilink that already became a typed
+    // edge (creator/client/agreement) is not re-emitted as a plain `mentions`.
+    if (contractConsumed.has(ref.slug)) continue;
     const idx = content.indexOf(ref.name);
     // Wider context window (240 chars vs original 80) catches verbs that
     // appear at sentence-or-paragraph distance from the slug — common in
@@ -522,7 +677,12 @@ export async function extractPageLinks(
     const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
     candidates.push({
       targetSlug: ref.slug,
-      linkType: inferLinkType(pageType, context, content, ref.slug, selfName),
+      // Contract pages: every non-party wikilink is a `mentions` (the contract
+      // body's prose — "advisory services", "KOL collaboration" — must never
+      // stamp advises/works_at on a referenced entity).
+      linkType: contractMentionsOnly
+        ? 'mentions'
+        : inferLinkType(pageType, context, content, ref.slug, selfName, structuredFirst),
       context,
       linkSource: 'markdown',
     });
@@ -541,10 +701,15 @@ export async function extractPageLinks(
     // Skip matches that are part of a markdown link (already handled above).
     const charBefore = m.index > 0 ? strippedContent[m.index - 1] : '';
     if (charBefore === '/' || charBefore === '(') continue;
+    // Contract-structured mode: a bare slug already typed as a party edge is
+    // not re-emitted as a plain `mentions`.
+    if (contractConsumed.has(m[1])) continue;
     const context = excerpt(strippedContent, m.index, 240);
     candidates.push({
       targetSlug: m[1],
-      linkType: inferLinkType(pageType, context, content, m[1], selfName),
+      linkType: contractMentionsOnly
+        ? 'mentions'
+        : inferLinkType(pageType, context, content, m[1], selfName, structuredFirst),
       context,
       linkSource: 'markdown',
     });
@@ -779,8 +944,13 @@ function isReservedSlug(slug: string): boolean {
  * @param selfName  Display name of the page subject; gates the page-role prior
  *   (layer 2) so a third party's role mentioned on the page isn't attributed to
  *   the subject. Optional — legacy callers that omit it keep pre-guard behavior.
+ * @param structuredFirst  When true (config `link_inference_mode:
+ *   'structured-first'`), SKIP the layer-2 page-global role-keyword prior
+ *   entirely — links with no local per-edge verb fall through to 'mentions'.
+ *   Default false reproduces legacy behavior (layer 1 + layer 2). Layer 1 is
+ *   unaffected by this flag in both modes.
  */
-export function inferLinkType(pageType: PageType, context: string, globalContext?: string, targetSlug?: string, selfName?: string): string {
+export function inferLinkType(pageType: PageType, context: string, globalContext?: string, targetSlug?: string, selfName?: string, structuredFirst: boolean = false): string {
   if (pageType === 'media') {
     return 'mentions';
   }
@@ -804,7 +974,12 @@ export function inferLinkType(pageType: PageType, context: string, globalContext
   // also sit on boards ("board seat at portfolio company") which a naive
   // employee/advisor match would mis-classify; keep investor first so those
   // phrasings resolve correctly.
-  if (pageType === 'person' && globalContext && targetSlug?.startsWith('companies/')) {
+  // Layer 2 (page-role prior) is gated by `structuredFirst`: in
+  // 'structured-first' mode this whole block is skipped so a page-global role
+  // keyword (e.g. "partner"/"portfolio" anywhere on a non-investor's page)
+  // can't stamp invested_in on every company they link to — those fall
+  // through to 'mentions'. Layer 1 (per-edge verbs above) still applies.
+  if (!structuredFirst && pageType === 'person' && globalContext && targetSlug?.startsWith('companies/')) {
     // Subject-scope guard: apply a page-role prior only when the role is
     // attributed to the page SUBJECT, not a third party named on the page.
     // Scans ALL matches so an earlier third-party role can't suppress the
@@ -1319,4 +1494,33 @@ export async function isGlobalBasenameEnabled(engine: BrainEngine): Promise<bool
   if (val == null) return false;
   const normalized = val.trim().toLowerCase();
   return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
+/**
+ * Read the `link_inference_mode` config flag and return whether the
+ * 'structured-first' inference mode is active. Defaults to FALSE ('legacy';
+ * opt-in only) so existing brains keep the layer-2 page-global role-keyword
+ * prior in `inferLinkType`.
+ *
+ * When TRUE: `inferLinkType` skips the layer-2 prior, so a person's outbound
+ * company links with no LOCAL per-edge verb fall through to 'mentions' instead
+ * of being stamped invested_in/advises/works_at off a page-global keyword.
+ * Layer 1 (per-edge verbs) is unaffected.
+ *
+ * Resolution order (highest → lowest):
+ *   1. Env var `GBRAIN_LINK_INFERENCE_MODE` (operator override)
+ *   2. DB plane via `engine.getConfig('link_inference_mode')`
+ *   3. Default false ('legacy')
+ *
+ * Both sources are compared against the literal 'structured-first'; any other
+ * value (including 'legacy') keeps legacy behavior.
+ */
+export async function isStructuredFirstInferenceEnabled(engine: BrainEngine): Promise<boolean> {
+  const envVal = process.env.GBRAIN_LINK_INFERENCE_MODE;
+  if (envVal != null) {
+    return envVal.trim().toLowerCase() === 'structured-first';
+  }
+  const val = await engine.getConfig('link_inference_mode');
+  if (val == null) return false;
+  return val.trim().toLowerCase() === 'structured-first';
 }
