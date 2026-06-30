@@ -2,6 +2,11 @@
 
 Cross-cutting quality rules for all brain-writing skills.
 
+> **Graph-safety:** Also read `conventions/graph-safe-writing.md` before any
+> Brain write that can create links. Back-linking is mandatory, but wikilinks are
+> graph evidence, not decoration; strong typed edges must be sparse, intentional,
+> and verified after write.
+
 ## Citations (MANDATORY)
 
 Every fact written to a brain page must carry an inline `[Source: ...]` citation.

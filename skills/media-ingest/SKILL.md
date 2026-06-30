@@ -52,6 +52,9 @@ This skill guarantees:
 **Private personal media exception:** when the source is a private personal photo/video collection, relationship evidence set, family archive, wedding evidence pool, guest list material, passport/ID-adjacent collection, or anything with sensitive personal context, do **not** default to raw-uploading originals into Brain. Keep raw media outside Brain in a private local data folder or secure vault; write only distilled indexes, timelines, proof summaries, and pointers into Brain. See `references/personal-photo-evidence-source-pools.md`. For relationship/legal evidence curation specifically, including screenshot/call-history guidance and MAS-style shortlist workflow, see `references/private-relationship-evidence-curation.md`.
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
+> See `skills/conventions/graph-safe-writing.md` before writing entity links;
+> source/media pages often mention many entities, but wikilinks should be an
+> intentional edge budget, not a complete named-entity dump.
 
 Every mention of a person or company with a brain page MUST create a back-link.
 
@@ -98,6 +101,11 @@ File by primary subject (not format). Use this template:
 {List with links to brain pages}
 ```
 
+For long transcripts, books, screenshots, and repos, keep `People Mentioned` /
+`Companies Mentioned` curated. Link high-signal entities that should be
+traversable; leave incidental names as prose. Do not place every source slug,
+file path, or low-signal named entity into wikilinks.
+
 ### Phase 4: Entity extraction and propagation
 
 For every person and company mentioned:
@@ -105,6 +113,10 @@ For every person and company mentioned:
 2. Create/enrich if needed (delegate to enrich skill)
 3. Add back-link from entity page to this media page
 4. Add timeline entry on entity page
+
+After write, inspect `auto_links` and run focused graph readbacks for high-value
+pages. Strong typed edges from media pages are suspicious unless explicitly
+evidenced; otherwise they should be `mentions` / `relates_to`.
 
 A media item is NOT fully ingested until entity propagation is complete.
 

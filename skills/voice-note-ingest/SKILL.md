@@ -25,6 +25,9 @@ writes_to:
 
 > **Convention:** see [conventions/quality.md](../conventions/quality.md) for
 > citation rules, back-link enforcement, and exact-phrasing requirements.
+> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
+> before adding links. Voice-note pages preserve messy exact phrasing, but the
+> agent-authored analysis/links must still be graph-safe.
 >
 > **Convention:** see [_brain-filing-rules.md](../_brain-filing-rules.md) for
 > the filing decision protocol.
@@ -59,9 +62,10 @@ Whisper by default; OpenAI fallback for audio > 25MB segmented via ffmpeg).
 4. WRITE       → Create / update the destination brain page; preserve the
                  verbatim transcript in a block-quoted "User's Words"
                  section.
-5. CROSS-LINK  → For every entity mentioned (person, company), add a
-                 timeline back-link from THEIR brain page to THIS one
-                 (Iron Law per conventions/quality.md).
+5. CROSS-LINK  → For notable entities, add intentional timeline/back-link
+                 references from THEIR brain page to THIS one (Iron Law per
+                 conventions/quality.md). Do not wikilink every name in the raw
+                 transcript; the transcript is source material, not graph schema.
 ```
 
 ## Decision tree (where the content goes)

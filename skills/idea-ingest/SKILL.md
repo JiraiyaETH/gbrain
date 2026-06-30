@@ -42,6 +42,8 @@ This skill guarantees:
 - Filing follows primary subject rules (not format-based)
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
+> Also read `skills/conventions/graph-safe-writing.md`: wikilinks and slug paths
+> are graph evidence, not decoration.
 
 Every mention of a person or company with a brain page MUST create a back-link.
 Format: `- **YYYY-MM-DD** | Referenced in [page title](path) — brief context`
@@ -64,13 +66,23 @@ Format: `- **YYYY-MM-DD** | Referenced in [page title](path) — brief context`
    - A reusable framework → `concepts/`
    - Raw data dump → `sources/`
 
+   Keep links sparse and intentional. Link the author, primary source, and a
+   small set of high-signal related pages. Do not wikilink every mentioned entity
+   or every provenance slug in the body; source-only references can stay as
+   citation text. Strong typed edges (`advises`, `works_at`, `invested_in`, etc.)
+   require clear local evidence, otherwise default to `mentions`.
+
 5. **Analyze for the user.** Reply with analysis that connects the content to what the brain knows. Think about:
    - Active projects — is this relevant?
    - Contradictions — does this challenge existing brain knowledge?
    - Connections — does this involve known people/companies?
    - Don't just summarize. Tell the user things they wouldn't have noticed.
 
-6. **Sync.** `gbrain sync` to update the index.
+6. **Graph receipt.** Inspect `auto_links` from `put_page` and run a focused
+   graph readback for the ingested page if it created strong typed edges. Resolve
+   or log unresolved links.
+
+7. **Sync.** `gbrain sync` to update the index.
 
 ## Output Format
 

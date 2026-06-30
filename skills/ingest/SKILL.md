@@ -56,6 +56,11 @@ Every fact written to a brain page must carry an inline `[Source: ...]` citation
 ## Phases
 
 > **Router note:** This skill is a router. For specialized ingestion, see: idea-ingest, media-ingest, meeting-ingestion.
+>
+> **Graph-safety:** Read `skills/conventions/graph-safe-writing.md` before any
+> specialized ingest writes pages. Wikilinks and slug paths are graph evidence,
+> not decoration. Strong typed edges require explicit relationship evidence;
+> otherwise use `mentions` / `relates_to` or plain prose.
 
 1. **Parse the source.** Extract people, companies, dates, and events from the input.
 2. **For each entity mentioned:**
@@ -63,9 +68,14 @@ Every fact written to a brain page must carry an inline `[Source: ...]` citation
    - If exists: update compiled_truth (rewrite State section with new info, don't append)
    - If new: check notability gate, then store the page in gbrain with the appropriate type and slug
 3. **Append to timeline.** Add a timeline entry in gbrain for each event, with date, summary, and source citation.
-4. **Create cross-reference links.** Link entities in gbrain for every entity pair mentioned together, using the appropriate relationship type.
+4. **Create cross-reference links.** Link only intended graph relationships. Do
+   not create typed edges for every entity pair mentioned together; co-mentions
+   are `mentions` / `relates_to` unless a clear relationship verb is evidenced.
 5. **Back-link all entities.** Update EVERY mentioned entity's page with a back-link to this page (Iron Law).
 6. **Timeline merge.** The same event appears on ALL mentioned entities' timelines. If Alice met Bob at Acme Corp, the event goes on Alice's page, Bob's page, and Acme Corp's page.
+7. **Verify graph output.** Inspect the `auto_links` receipt from writes and run
+   focused `gbrain graph-query` readbacks for high-value pages. Repair suspicious
+   edge shapes before reporting done.
 
 ## Entity Detection on Every Message
 

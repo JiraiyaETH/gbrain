@@ -1,6 +1,6 @@
 ---
 name: meeting-ingestion
-version: 1.6.0
+version: 1.6.1
 description: |
   Ingest meeting transcripts into brain pages with attendee enrichment, entity
   propagation, and timeline merge. A meeting is NOT fully ingested until the
@@ -42,6 +42,8 @@ This skill guarantees:
 - **Verified**: a meeting is NOT "done" until the Phase 7 QA gate AND a cache-busted before/after `/query` back-test both pass (structure, edges, traversal). "Looks fine" is not a gate.
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
+> **Convention:** See `skills/conventions/graph-safe-writing.md` for the
+> cross-skill rule that wikilinks/slug paths are graph evidence, not decoration.
 
 Every attendee and company mentioned MUST get a back-link from their page to
 the meeting page. An unlinked mention is a broken brain.
@@ -175,6 +177,18 @@ creates an edge to a page that EXISTS at extraction time. So create each attende
 page (Phases 3–4) and THEN re-write the meeting page once more (`put`) so its
 `[[people/<slug>]]` resolve and the `attended` edges form. Afterward verify every attendee
 in the `**Attendees:**` line has an `attended` edge (no missing, no extra).
+
+### Downstream upgrade note — unresolved attendee/frontmatter check
+
+After every `gbrain put` of the meeting page, inspect `auto_links.unresolved`.
+For meeting ingestion, unresolved entries usually mean an attendee page does not
+exist yet or a reference cannot resolve.
+
+If unresolved entries exist:
+- create/enrich missing people pages when they are real attendees;
+- rewrite the meeting page after those pages exist so `attended` edges form;
+- rerun the meeting QA gate;
+- only accept unresolved entries when explicitly deferred and logged as a gap.
 
 ### Phase 3: Attendee enrichment (MANDATORY)
 
