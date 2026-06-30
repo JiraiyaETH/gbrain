@@ -409,24 +409,44 @@ function maskRanges(content: string, ranges: Array<[number, number]>): string {
 // edges had to be batch-added by hand.
 //
 // This recovers that recall from the structure that actually carries it: the
-// LABELED party fields in a contract body.
+// LABELED party fields in a contract body — but the labels and the edge a
+// contract should emit depend on its frontmatter `subtype`, so this is
+// SUBTYPE-AWARE. An audit found a single label-shape rule mis-fired on the
+// non-KOL subtypes (TAP referrals have no external client; dispute docs share
+// the company⇄company `**Agreement:**` shape with real service retainers).
 //
-//   **Agreement:** [[companies/tailored]] ⇄ Jordi (creator) ...   ← contracting entity (first wikilink)
-//   **Creator:** [[people/jordi]]   ·   **Client:** [[companies/theo-network]]
+// Dispatch by `subtype` (frontmatter), threaded in from the caller:
 //
-// From those we emit (gated behind the SAME `structuredFirst` flag as Phase 1):
-//   1. PRIMARY: Creator + Client  → people/X --creator_for--> companies/Y
-//      (orientation matches the production batch `creator-for-contract-batch-*`:
-//       the creator is the FROM side, the CLIENT company the TO side.)
-//   2. Creator present            → people/X --signed--> <this contract page>
-//      (orientation matches the production batch `typed-edge-signed-contract-*`:
-//       `signed` points the signer at the CONTRACT PAGE itself — link_type
-//       `signed`/inverse `signed_by` = "the contract is signed_by the person".
-//       NOT person→company; the contract page is the thing one signs.)
-//   3. company⇄company agreement (no **Creator:** line)
-//                                  → companies/A --service_provider_for--> companies/B
-//      (provider = first party / the Tailored-side entity, matching the
-//       production `companies/tailored --service_provider_for--> companies/*`.)
+//   • kol-agreement / curation (creator|curator → client shaped):
+//       **Creator:** / **Curator:** [[people/X]]  +  **Client:** [[companies/Y]]
+//         → people/X --creator_for--> companies/Y        (PRIMARY; FROM=creator)
+//         → people/X --signed--> <this contract page>    (signer → the PAGE)
+//
+//   • tap-referral (Tailored ⇄ associate; NO external client):
+//       **Counterparty:** [[people/X]]
+//         → people/X --signed--> <this contract page>
+//       The `**Agreement:**` line names the associate in PLAIN TEXT (one company
+//       wikilink only), so NEVER invent a person→company edge. The traversable
+//       edge is person→signed→tap-contract (the contract lives under
+//       contracts/tap/ — "which creators also signed TAP agreements").
+//
+//   • company (company⇄company service engagement):
+//       **Agreement:** [[companies/A]] ⇄ [[companies/B]]
+//         → companies/A --service_provider_for--> companies/B   (FROM=provider)
+//       GUARD: settlements / handover receipts / non-waiver acknowledgements
+//       share this exact shape but are DISPUTE docs, not service relationships.
+//       If the `**Agreement:**` line OR the title contains (case-insensitive)
+//       settlement / handover / non-waiver / acknowledgement → emit NO
+//       service_provider_for (that edge belongs to the retainer, not the
+//       dispute doc); everything degrades to mentions.
+//
+//   • employment (internal hire):
+//       **Employee:** [[people/X]]  +  **Employer:** [[companies/Y]]
+//         → people/X --works_at--> companies/Y
+//         → people/X --signed--> <this contract page>
+//
+//   • unknown subtype, or the expected fields are missing → no typed edges
+//     (everything degrades to mentions). NEVER emit a wrong typed edge.
 //
 // Every other wikilink on the page stays `mentions`. Typed edges carry
 // link-source `contract-structured`. Flag OFF ⇒ this path never runs and the
@@ -435,15 +455,30 @@ function maskRanges(content: string, ranges: Array<[number, number]>): string {
 /** Provenance stamped on typed edges sourced from a contract's labeled party fields. */
 export const CONTRACT_STRUCTURED_LINK_SOURCE = 'contract-structured';
 
+/**
+ * Dispute-document marker. A `subtype: company` page whose `**Agreement:**`
+ * line or title contains one of these is a settlement / handover / non-waiver /
+ * acknowledgement — a winding-down or dispute doc that shares the company⇄company
+ * `**Agreement:**` shape with a genuine service retainer but is NOT a service
+ * relationship. The `service_provider_for` edge belongs to the retainer, so we
+ * suppress it for these and let everything degrade to `mentions`.
+ */
+const CONTRACT_DISPUTE_DOC_RE = /\b(?:settlement|handover|non-?waiver|acknowledge?ments?)\b/i;
+
 /** A single labeled party field, e.g. `**Creator:** [[people/jordi]] ...`. */
 const CONTRACT_FIELD_WIKILINKS_RE = (label: string) =>
   new RegExp(`\\*\\*\\s*${label}\\s*:\\*\\*([^\\n]*)`, 'i');
 
+/** The raw tail text of one labeled line (e.g. the whole `**Agreement:**` line), or '' if absent. */
+function partyLineText(content: string, label: string): string {
+  const m = CONTRACT_FIELD_WIKILINKS_RE(label).exec(content);
+  return m ? m[1] : '';
+}
+
 /** Pull every `[[dir/slug]]` (display alias stripped) out of one labeled line's tail. */
 function partyWikilinks(content: string, label: string): string[] {
-  const m = CONTRACT_FIELD_WIKILINKS_RE(label).exec(content);
-  if (!m) return [];
-  const tail = m[1];
+  const tail = partyLineText(content, label);
+  if (!tail) return [];
   const out: string[] = [];
   const re = new RegExp(WIKILINK_RE.source, WIKILINK_RE.flags);
   let wl: RegExpExecArray | null;
@@ -456,6 +491,24 @@ function partyWikilinks(content: string, label: string): string[] {
   return out;
 }
 
+/** First `people/` wikilink found under any of the given labels (in order). */
+function firstPersonUnder(content: string, ...labels: string[]): string | undefined {
+  for (const label of labels) {
+    const hit = partyWikilinks(content, label).find(s => s.startsWith('people/'));
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/** First `companies/` wikilink found under any of the given labels (in order). */
+function firstCompanyUnder(content: string, ...labels: string[]): string | undefined {
+  for (const label of labels) {
+    const hit = partyWikilinks(content, label).find(s => s.startsWith('companies/'));
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 /**
  * Result of contract-structured extraction. `candidates` are the typed party
  * edges; `consumed` is the set of target slugs that became a typed edge, so the
@@ -466,64 +519,125 @@ interface ContractStructuredResult {
   consumed: Set<string>;
 }
 
+/** Push a `signed` edge: the signer (person) → the contract PAGE itself. */
+function pushSigned(
+  out: ContractStructuredResult, signer: string, slug: string,
+): void {
+  out.candidates.push({
+    fromSlug: signer,
+    targetSlug: slug,
+    linkType: 'signed',
+    context: `contract signer: ${signer}`,
+    linkSource: CONTRACT_STRUCTURED_LINK_SOURCE,
+  });
+  out.consumed.add(signer);
+}
+
 /**
- * Parse a contract page's labeled party fields into typed graph edges. Pure and
- * total: any missing/malformed field is skipped (never throws), so a contract
- * that lacks the labels — or has only an `**Agreement:**` company⇄company line —
- * still degrades cleanly to "no typed edges, everything is mentions".
+ * Parse a contract page's labeled party fields into typed graph edges,
+ * dispatched by frontmatter `subtype`. Pure and total: any unknown subtype or
+ * missing/malformed field is skipped (never throws), so a contract that lacks
+ * its expected labels still degrades cleanly to "no typed edges, everything is
+ * mentions" — we NEVER emit a wrong typed edge.
  *
  * Caller gates this on `structuredFirst && (pageType==='contract' || slug
  * startsWith 'contracts/')`; this function does not re-check the flag.
+ *
+ * @param subtype  frontmatter `subtype` (kol-agreement | curation | tap-referral
+ *   | company | employment | …). Undefined / unrecognized → mentions-only.
+ * @param title    page title (frontmatter `title`), used with the `**Agreement:**`
+ *   line for the company-subtype dispute-doc guard.
  */
-function extractContractStructuredLinks(slug: string, content: string): ContractStructuredResult {
-  const candidates: LinkCandidate[] = [];
-  const consumed = new Set<string>();
+function extractContractStructuredLinks(
+  slug: string, content: string, subtype?: string, title?: string,
+): ContractStructuredResult {
+  const result: ContractStructuredResult = { candidates: [], consumed: new Set() };
+  const st = (subtype ?? '').trim().toLowerCase();
 
-  const creator = partyWikilinks(content, 'Creator').find(s => s.startsWith('people/'));
-  const client = partyWikilinks(content, 'Client').find(s => s.startsWith('companies/'));
-  // Contracting entity = first wikilink on the **Agreement:** line (Tailored-side).
-  const agreementParties = partyWikilinks(content, 'Agreement');
+  switch (st) {
+    case 'kol-agreement':
+    case 'curation': {
+      // creator|curator (person) → client (company), + signer → contract page.
+      const creator = firstPersonUnder(content, 'Creator', 'Curator');
+      if (!creator) break; // expected field missing → mentions-only.
+      const client = firstCompanyUnder(content, 'Client');
+      if (client) {
+        result.candidates.push({
+          fromSlug: creator,
+          targetSlug: client,
+          linkType: 'creator_for',
+          context: `contract creator/client: ${creator} → ${client}`,
+          linkSource: CONTRACT_STRUCTURED_LINK_SOURCE,
+        });
+        result.consumed.add(client);
+      }
+      pushSigned(result, creator, slug);
+      break;
+    }
 
-  if (creator) {
-    // 1. PRIMARY: creator --creator_for--> client (person → CLIENT company).
-    if (client) {
-      candidates.push({
-        fromSlug: creator,
-        targetSlug: client,
-        linkType: 'creator_for',
-        context: `contract creator/client: ${creator} → ${client}`,
-        linkSource: CONTRACT_STRUCTURED_LINK_SOURCE,
-      });
-      consumed.add(client);
+    case 'tap-referral': {
+      // Tailored ⇄ associate, NO external client. The ONLY traversable edge is
+      // person→signed→this-TAP-contract; the associate is plain text on the
+      // `**Agreement:**` line, so never invent a person→company edge.
+      const counterparty = firstPersonUnder(content, 'Counterparty');
+      if (!counterparty) break; // expected field missing → mentions-only.
+      pushSigned(result, counterparty, slug);
+      break;
     }
-    // 2. creator --signed--> this contract page (person → CONTRACT PAGE).
-    candidates.push({
-      fromSlug: creator,
-      targetSlug: slug,
-      linkType: 'signed',
-      context: `contract signer: ${creator}`,
-      linkSource: CONTRACT_STRUCTURED_LINK_SOURCE,
-    });
-    consumed.add(creator);
-  } else if (agreementParties.length >= 2) {
-    // 3. company⇄company agreement (no **Creator:** line): first party is the
-    //    service provider (Tailored-side), second is the client.
-    const [provider, ...rest] = agreementParties;
-    const clientCo = rest.find(s => s !== provider);
-    if (provider.startsWith('companies/') && clientCo && clientCo.startsWith('companies/')) {
-      candidates.push({
-        fromSlug: provider,
-        targetSlug: clientCo,
-        linkType: 'service_provider_for',
-        context: `contract agreement: ${provider} ⇄ ${clientCo}`,
-        linkSource: CONTRACT_STRUCTURED_LINK_SOURCE,
-      });
-      consumed.add(provider);
-      consumed.add(clientCo);
+
+    case 'company': {
+      // company⇄company service engagement: first **Agreement:** party is the
+      // service provider (Tailored-side), the other is the client. GUARD: a
+      // settlement / handover / non-waiver / acknowledgement shares this shape
+      // but is a DISPUTE doc, not a service relationship → emit no edge.
+      const agreementLine = partyLineText(content, 'Agreement');
+      if (CONTRACT_DISPUTE_DOC_RE.test(agreementLine) || CONTRACT_DISPUTE_DOC_RE.test(title ?? '')) {
+        break; // dispute doc → mentions-only.
+      }
+      const agreementParties = partyWikilinks(content, 'Agreement');
+      if (agreementParties.length < 2) break;
+      const [provider, ...rest] = agreementParties;
+      const clientCo = rest.find(s => s !== provider);
+      if (provider.startsWith('companies/') && clientCo && clientCo.startsWith('companies/')) {
+        result.candidates.push({
+          fromSlug: provider,
+          targetSlug: clientCo,
+          linkType: 'service_provider_for',
+          context: `contract agreement: ${provider} ⇄ ${clientCo}`,
+          linkSource: CONTRACT_STRUCTURED_LINK_SOURCE,
+        });
+        result.consumed.add(provider);
+        result.consumed.add(clientCo);
+      }
+      break;
     }
+
+    case 'employment': {
+      // Internal hire: employee (person) --works_at--> employer (company),
+      // + signer → contract page.
+      const employee = firstPersonUnder(content, 'Employee');
+      const employer = firstCompanyUnder(content, 'Employer');
+      if (!employee) break; // expected field missing → mentions-only.
+      if (employer) {
+        result.candidates.push({
+          fromSlug: employee,
+          targetSlug: employer,
+          linkType: 'works_at',
+          context: `contract employment: ${employee} → ${employer}`,
+          linkSource: CONTRACT_STRUCTURED_LINK_SOURCE,
+        });
+        result.consumed.add(employer);
+      }
+      pushSigned(result, employee, slug);
+      break;
+    }
+
+    default:
+      // Unknown / missing subtype → no typed edges; everything is mentions.
+      break;
   }
 
-  return { candidates, consumed };
+  return result;
 }
 
 // ─── Link candidates (richer than EntityRef) ────────────────────
@@ -613,18 +727,25 @@ export async function extractPageLinks(
 
   // Phase 2: contract-structured typed edges. Gated behind the SAME
   // `structuredFirst` flag as Phase 1's role-prior demotion. When a contract
-  // page is processed in structured-first mode, its LABELED party fields
-  // (**Creator:** / **Client:** / **Agreement:**) become typed edges
-  // (`creator_for` / `signed` / `service_provider_for`); EVERY other wikilink
-  // on the page — and the party wikilinks too, since the typed edge replaces
-  // them — is forced to `mentions` (`contractMentionsOnly`). Flag OFF, or a
-  // non-contract page, leaves both flags false and the legacy markdown +
+  // page is processed in structured-first mode, its LABELED party fields become
+  // typed edges — but WHICH labels and WHICH edge depend on the frontmatter
+  // `subtype` (extractContractStructuredLinks is subtype-aware): kol-agreement /
+  // curation → creator_for + signed; tap-referral → signed (Counterparty, no
+  // company edge); company → service_provider_for (with a dispute-doc guard);
+  // employment → works_at + signed; unknown/missing → mentions only. EVERY other
+  // wikilink on the page — and the party wikilinks too, since the typed edge
+  // replaces them — is forced to `mentions` (`contractMentionsOnly`). Flag OFF,
+  // or a non-contract page, leaves both flags false and the legacy markdown +
   // page-role inference below runs unchanged.
   const isContractPage = pageType === 'contract' || slug.startsWith('contracts/');
   const contractStructured = structuredFirst && isContractPage;
   let contractConsumed: Set<string> = new Set();
   if (contractStructured) {
-    const cs = extractContractStructuredLinks(slug, content);
+    // `subtype` selects the dispatch arm; `selfName` (title-or-slug) feeds the
+    // company-subtype dispute-doc guard alongside the `**Agreement:**` line.
+    const rawSubtype = frontmatter?.subtype;
+    const subtype = typeof rawSubtype === 'string' ? rawSubtype : undefined;
+    const cs = extractContractStructuredLinks(slug, content, subtype, selfName);
     candidates.push(...cs.candidates);
     contractConsumed = cs.consumed;
   }
