@@ -1,6 +1,6 @@
 ---
 name: contract-ingestion
-version: 1.0.3
+version: 1.0.4
 description: |
   Ingest / reshape a signed contract (a local PDF, an old-brain
   sources/contracts/ page, or a SignNow document) into the jiraiya-brain
@@ -16,6 +16,9 @@ triggers:
   - "file this signed agreement"
   - "add this KOL agreement to the brain"
   - "add this service retainer to the brain"
+  - "audit SignNow for contracts we haven't ingested"
+  - "reconcile SignNow with the brain"
+  - "which signed contracts are missing from the brain"
 tools:
   - read
   - write
@@ -168,6 +171,44 @@ Then run the retrieval smoke/entity gate: the contract should appear for
 contract-specific or campaign-specific queries, but canonical party/client pages
 should still rank first for "who is X" and "what do we know about Y" queries.
 
+## Reconciliation / audit mode (find what's NOT ingested yet)
+
+A different entry from single-contract ingest: sweep the WHOLE SignNow account
+against the brain to find un-ingested contracts. Read-only — never sends/mutates.
+(Proven 2026-06-30: 381 docs audited → 31 missing contracts ingested; see memory
+`signnow-brain-reconciliation-20260630`.)
+
+1. **Crawl SignNow (read-only)** through the profile's secret-safe SignNow wrapper
+   (`signnow_run.py preflight` then `signnow_run.py run -- python3
+   scripts/signnow-audit.py docs.json`). Live docs are `folder=='Documents'`; drop
+   `Trash Bin` + `Templates`. `sig=2` = fully executed; `sig<2` = draft/partial
+   (track, don't ingest as final).
+2. **Match each SignNow doc against the brain on TWO keys, not one** (one key alone
+   both misses ingested docs → false "new", AND risks dup pages):
+   - **doc-id prefix vs filename suffix** (`contracts/.../{cp}-{8hex}.md`) — works
+     only where the suffix IS the SignNow id; brain footers often cite
+     `local-pdf-sha8-*` (a LOCAL file hash, NOT a SignNow id) → those never id-match.
+   - **client + counterparty** — the reliable fallback. Parse the SignNow name
+     (`Collaboration Agreement_{Client}_{Creator}`, `… Between Tailored and {Client}`,
+     `TAP Agreement {Assoc}`, `Curation Contract`). Ingested only if EITHER key hits.
+3. **The name lies — read the body to identify the real party:**
+   - Generic names (`Collaboration_Agreement_INFINIT`, no creator) hide the creator in
+     the PDF body — download + `pdftotext`; the creator is "Dear X".
+   - A curation/contract **"Client" field is sometimes a signatory name, not a company**
+     ("Caesar" = StableJack's signer; "Anzen Gro" = Anzen Finance). Resolve the real
+     company from body / brain / operator before filing — don't stub the signatory.
+4. **Before ingesting a same-(client,creator) match, prove it's a NEW contract, not a
+   dup** — read the existing page's terms. Different signing-date OR value = a distinct
+   ROUND (ingest as a new page; the existing person stub just gets a timeline append).
+   Same date AND value = already ingested (skip). A whole missing *cohort* (a period
+   with no prior same-period page) is the strongest "genuinely new" signal.
+5. **After ingest, run the dedup sweep** (`scripts/dup-scan.py`; 0 pairs = clean,
+   score-3 = near-certain dup, non-zero exit on a score-3) to catch slug-variant /
+   cross-source dups that id-match can't see. NAME-ANCHORED on purpose: KOL bodies are
+   templated (~0.97 similar for every pair), so the real signal is **creator +
+   signing-date + value**. Collapse a true dup onto the richer record (prefer the
+   SignNow-sourced page: real doc-id + signer email), re-point every backlink, re-sync.
+
 ## Output Format
 Per contract: 1 contract page + N party stubs (deduped) + the raw PDF copied
 alongside + updated `tailored.md` reciprocals. Report exactly:
@@ -190,6 +231,10 @@ alongside + updated `tailored.md` reciprocals. Report exactly:
 - ❌ Forking a duplicate page on a slug variant (smartape vs smart-ape) — dedup to canonical.
 - ❌ Citing a temporary PDF/download path in provenance — copy to durable contract storage first.
 - ❌ Inventing missing terms — recover from PDF/SignNow or flag `needs_review`.
+- ❌ Matching SignNow↔brain on doc-id alone — brain footers cite `local-pdf-sha8`, not SignNow ids; match on client+counterparty too.
+- ❌ Trusting the SignNow doc NAME for the party — the creator hides in the body ("Dear X"); a curation "Client" field can be a signatory (Caesar→StableJack), not a company.
+- ❌ Calling a same-creator second contract a dup without reading terms — different date/value = a distinct round, ingest it.
+- ❌ Dedup-scanning on body-text similarity — KOL bodies are templated (~0.97 for every pair); anchor on creator+date+value (`scripts/dup-scan.py`).
 
 ## Gold-standard exemplars (already in the brain)
 `contracts/solv/hercules-b902d24e` (kol) · `contracts/dabba/dabba-b841c405` (company retainer)
