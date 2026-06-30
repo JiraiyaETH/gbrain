@@ -1,7 +1,7 @@
 ---
 name: voice-note-ingest
 version: 0.1.0
-description: Ingest a voice note with exact-phrasing preservation (never paraphrased). Routes content to originals/, concepts/, people/, companies/, ideas/, personal/, or voice-notes/ based on a decision tree. The user's exact words are the signal.
+description: Ingest a voice note with exact-phrasing preservation (never paraphrased). Routes raw transcripts to sources/ and distilled content to writing/, concepts/, people/, companies/, ideas/, notes/, or personal/ based on a decision tree. The user's exact words are the signal.
 triggers:
   - "voice note"
   - "ingest this voice memo"
@@ -12,12 +12,13 @@ triggers:
 mutating: true
 writes_pages: true
 writes_to:
-  - voice-notes/
-  - originals/
+  - sources/
+  - writing/
   - concepts/
   - people/
   - companies/
   - ideas/
+  - notes/
   - personal/
 ---
 
@@ -28,6 +29,8 @@ writes_to:
 > **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
 > before adding links. Voice-note pages preserve messy exact phrasing, but the
 > agent-authored analysis/links must still be graph-safe.
+> **Convention:** see [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
+> after write/sync when the note creates or updates durable pages.
 >
 > **Convention:** see [_brain-filing-rules.md](../_brain-filing-rules.md) for
 > the filing decision protocol.
@@ -66,6 +69,10 @@ Whisper by default; OpenAI fallback for audio > 25MB segmented via ffmpeg).
                  references from THEIR brain page to THIS one (Iron Law per
                  conventions/quality.md). Do not wikilink every name in the raw
                  transcript; the transcript is source material, not graph schema.
+6. RETRIEVE    → Run the smoke/entity gate. Exact voice-note wording should be
+                 findable for the idea, but raw catch-all voice-note pages
+                 should not outrank canonical people/company/project pages for
+                 broad queries.
 ```
 
 ## Decision tree (where the content goes)

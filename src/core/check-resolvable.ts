@@ -54,6 +54,9 @@ export interface ResolvableIssue {
     // Check 6 (W3): brain-filing audit findings.
     | 'filing_missing_writes_to'
     | 'filing_unknown_directory'
+    | 'filing_rules_schema_missing'
+    | 'filing_rules_schema_stale'
+    | 'filing_rules_schema_unavailable'
     // D-CX-9: scaffolded skill still carries SKILLIFY_STUB sentinel.
     | 'skillify_stub_unreplaced';
   severity: 'error' | 'warning';
