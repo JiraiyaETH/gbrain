@@ -69,4 +69,26 @@ describe('buildRelationalArm', () => {
       eng.relationalFanout = original;
     }
   });
+
+  test('intersection fans each endpoint to its full neighbor set before intersecting (regression)', async () => {
+    // company-alpha has MORE creator_for neighbors than the caller's result
+    // `limit`, and the ONLY creator it shares with company-beta sorts
+    // alphabetically LAST. Pre-fix, each endpoint fanout was truncated to
+    // `limit` BEFORE intersecting, so the shared creator fell outside
+    // company-alpha's truncated head and the intersection came back empty.
+    await eng.putPage('companies/acme-alpha', { type: 'company', title: 'Acme Alpha', compiled_truth: 'Alpha co.', timeline: '' });
+    await eng.putPage('companies/beta-corp', { type: 'company', title: 'Beta Corp', compiled_truth: 'Beta co.', timeline: '' });
+    const creators = ['c-anna', 'c-brad', 'c-cory', 'c-dana', 'c-evan', 'c-zoe-shared'];
+    for (const slug of creators) {
+      await eng.putPage(`people/${slug}`, { type: 'person', title: slug, compiled_truth: `${slug} is a creator.`, timeline: '' });
+      await eng.addLink(`people/${slug}`, 'companies/acme-alpha', '', 'creator_for', 'manual');
+    }
+    // Only the alphabetically-last creator also worked with Beta Corp.
+    await eng.addLink('people/c-zoe-shared', 'companies/beta-corp', '', 'creator_for', 'manual');
+
+    // Small result limit: pre-fix this truncated company-alpha's fanout to 3
+    // (dropping c-zoe-shared) BEFORE the intersection ran → empty result.
+    const list = await buildRelationalArm(eng, 'what connects Acme Alpha and Beta Corp?', { limit: 3 });
+    expect(list.map(r => r.slug)).toContain('people/c-zoe-shared');
+  });
 });

@@ -147,6 +147,17 @@ async function hydrate(
 }
 
 /**
+ * Endpoint fanouts for a two-seed "connects" intersection must see each seed's
+ * FULL neighbor set, NOT the caller's result `limit`: a midpoint only qualifies
+ * if it's reachable from BOTH seeds, so truncating either side to `limit` before
+ * intersecting silently drops valid midpoints when a seed has more neighbors
+ * than `limit` (e.g. a company with 60+ `creator_for` creators). We fan each
+ * endpoint to the engine's hard ceiling (relationalFanout clamps `limit` to 200)
+ * and apply the caller's `limit` to the final intersected list instead.
+ */
+const INTERSECTION_ENDPOINT_FANOUT_LIMIT = 200;
+
+/**
  * Build the relational recall arm. Returns an empty list (pure no-op) when the
  * query isn't relational or no seed resolves. Never throws.
  */
@@ -193,8 +204,12 @@ export async function buildRelationalArm(
       });
       const a = perSource(resA);
       const b = perSource(resB);
-      const fanA = await engine.relationalFanout(a.slugs, { ...fanoutOpts, sourceId: a.sourceId, sourceIds: a.sourceIds });
-      const fanB = await engine.relationalFanout(b.slugs, { ...fanoutOpts, sourceId: b.sourceId, sourceIds: b.sourceIds });
+      // Fan each endpoint out WIDE — its full neighbor set (engine-capped at
+      // 200), not the caller's result `limit` — so the intersection below is
+      // computed over complete lists. See INTERSECTION_ENDPOINT_FANOUT_LIMIT.
+      const wideFanoutOpts = { ...fanoutOpts, limit: INTERSECTION_ENDPOINT_FANOUT_LIMIT };
+      const fanA = await engine.relationalFanout(a.slugs, { ...wideFanoutOpts, sourceId: a.sourceId, sourceIds: a.sourceIds });
+      const fanB = await engine.relationalFanout(b.slugs, { ...wideFanoutOpts, sourceId: b.sourceId, sourceIds: b.sourceIds });
       // Shared midpoints: nodes reachable from BOTH endpoints (exclude the
       // endpoints themselves). Ordered by combined hop.
       const bByKey = new Map(fanB.map(r => [`${r.source_id}:${r.slug}`, r] as const));
@@ -204,7 +219,10 @@ export async function buildRelationalArm(
         .map(r => ({ row: r, combined: r.hop + bByKey.get(`${r.source_id}:${r.slug}`)!.hop }))
         .sort((x, y) => x.combined - y.combined || x.row.slug.localeCompare(y.row.slug))
         .map(x => x.row);
-      const list = await hydrate(engine, shared, parsed.seeds.join(' ↔ '));
+      // Apply the caller's result `limit` to the FINAL intersected list (the
+      // per-endpoint fanouts above were intentionally widened past it).
+      const limited = typeof opts.limit === 'number' ? shared.slice(0, opts.limit) : shared;
+      const list = await hydrate(engine, limited, parsed.seeds.join(' ↔ '));
       meta.fired = list.length > 0;
       return finish(list);
     }
