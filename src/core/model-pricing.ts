@@ -74,10 +74,19 @@ export const CANONICAL_PRICING: Record<string, ModelPricing> = {
   // ── OpenAI ─────────────────────────────────────────────────────────────
   'openai:gpt-4o':                        { input:  2.50, output: 10.00 },
   'openai:gpt-4o-mini':                   { input:  0.15, output:  0.60 },
+  'openai:gpt-5.2':                       { input:  1.25, output: 10.00 },
   'openai:gpt-5':                         { input:  5.00, output: 20.00 },
   'openai:gpt-5.5':                       { input:  4.00, output: 16.00 },
 
   // ── Google ─────────────────────────────────────────────────────────────
+  // Gemini 2.5 Pro: standard-context published pricing; long-context tiers are
+  // not modeled in this simple per-call estimator.
+  'google:gemini-2.5-pro':                { input:  1.25, output: 10.00 },
+  'google:gemini-pro-latest':             { input:  1.25, output: 10.00 },
+  'google:gemini-2.5-flash':              { input:  0.30, output:  2.50 },
+  'google:gemini-flash-latest':           { input:  0.30, output:  2.50 },
+  'google:gemini-2.5-flash-lite':         { input:  0.10, output:  0.40 },
+  'google:gemini-flash-lite-latest':      { input:  0.10, output:  0.40 },
   'google:gemini-1.5-pro':                { input:  1.25, output:  5.00 },
   // Gemini 2.0 Flash: $0.10 in / $0.40 out (verified 2026-06-03). Reconciled
   // from a stale $0.30/$1.20 entry that had drifted in takes-quality-eval.

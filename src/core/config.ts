@@ -31,6 +31,8 @@ export interface GBrainConfig {
   database_path?: string;
   openai_api_key?: string;
   anthropic_api_key?: string;
+  /** Google Gemini API key. File-plane key maps to GOOGLE_GENERATIVE_AI_API_KEY for the AI SDK. */
+  google_generative_ai_api_key?: string;
   /**
    * ZeroEntropy API key. v0.37 fix wave (CDX2-5+6): ZE became the default
    * embedding + reranker provider in v0.36 but lacked a file-plane config
@@ -536,6 +538,7 @@ export function loadConfig(): GBrainConfig | null {
     ...(dbUrl ? { database_path: undefined } : {}),
     ...(process.env.OPENAI_API_KEY ? { openai_api_key: process.env.OPENAI_API_KEY } : {}),
     ...(process.env.ANTHROPIC_API_KEY ? { anthropic_api_key: process.env.ANTHROPIC_API_KEY } : {}),
+    ...(process.env.GOOGLE_GENERATIVE_AI_API_KEY ? { google_generative_ai_api_key: process.env.GOOGLE_GENERATIVE_AI_API_KEY } : {}),
     ...(process.env.ZEROENTROPY_API_KEY ? { zeroentropy_api_key: process.env.ZEROENTROPY_API_KEY } : {}),
     ...(process.env.OPENROUTER_API_KEY ? { openrouter_api_key: process.env.OPENROUTER_API_KEY } : {}),
     ...(process.env.GBRAIN_EMBEDDING_MODEL ? { embedding_model: process.env.GBRAIN_EMBEDDING_MODEL } : {}),
