@@ -65,6 +65,22 @@ describe('buildGatewayConfig env-baseURL passthrough', () => {
     });
   });
 
+  test('file-plane DeepSeek key maps to DEEPSEEK_API_KEY and env still wins', async () => {
+    await withEnv({ DEEPSEEK_API_KEY: undefined }, async () => {
+      const cfg = buildGatewayConfig({
+        deepseek_api_key: 'config-deepseek-key',
+      } as unknown as GBrainConfig);
+      expect(cfg.env.DEEPSEEK_API_KEY).toBe('config-deepseek-key');
+    });
+
+    await withEnv({ DEEPSEEK_API_KEY: 'env-deepseek-key' }, async () => {
+      const cfg = buildGatewayConfig({
+        deepseek_api_key: 'config-deepseek-key',
+      } as unknown as GBrainConfig);
+      expect(cfg.env.DEEPSEEK_API_KEY).toBe('env-deepseek-key');
+    });
+  });
+
   for (const passthrough of PASSTHROUGHS) {
     test(`${passthrough.envVar} flows through to base_urls.${passthrough.recipeId}`, async () => {
       await withEnv(envFor(passthrough), async () => {
