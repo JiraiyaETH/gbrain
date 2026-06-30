@@ -1521,7 +1521,7 @@ const query: Operation = {
     embedding_column: {
       type: 'string',
       description:
-        "v0.36: route vector search through a non-default embedding column. Defaults to 'embedding' (OpenAI 1536d) unless `search_embedding_column` config sets a different default. Per-call override for A/B benchmarking across providers (e.g. 'embedding_voyage', 'embedding_zeroentropy'). Column MUST be declared in the `embedding_columns` config registry — unknown names throw with a paste-ready hint listing valid columns.",
+        "v0.36: route vector search through a non-default embedding column. Defaults by precedence: per-call `embedding_column` → single-source `sources.config.embedding_column` → global `search_embedding_column` → 'embedding'. Per-call override is for A/B benchmarking across providers (e.g. 'embedding_voyage', 'embedding_zeroentropy'). Column MUST be declared in the `embedding_columns` config registry — unknown names throw with a paste-ready hint listing valid columns.",
     },
     adaptive_return: {
       type: 'boolean',

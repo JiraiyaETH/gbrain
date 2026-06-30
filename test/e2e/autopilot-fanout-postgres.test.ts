@@ -50,13 +50,13 @@ beforeEach(async () => {
 
 async function seedSource(id: string, opts: { local_path?: string } = {}): Promise<void> {
   const localPath = opts.local_path ?? mkdtempSync(join(tmpdir(), `gbrain-fanout-${id}-`));
-  // Direct literal `'{}'::jsonb` is fine (no parameter binding). Test
-  // explicitly resets config to {} so each test starts clean.
+  // Direct literal is fine (no parameter binding). Test sources are
+  // eligible for autopilot fan-out only when explicitly federated.
   await engine.executeRaw(
     `INSERT INTO sources (id, name, local_path, config, archived, created_at)
-     VALUES ($1, $2, $3, '{}'::jsonb, false, NOW())
+     VALUES ($1, $2, $3, '{"federated":true}'::jsonb, false, NOW())
      ON CONFLICT (id) DO UPDATE
-       SET local_path = EXCLUDED.local_path, config = '{}'::jsonb`,
+       SET local_path = EXCLUDED.local_path, config = '{"federated":true}'::jsonb`,
     [id, id, localPath],
   );
 }

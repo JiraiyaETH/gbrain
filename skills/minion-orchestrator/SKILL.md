@@ -1,6 +1,6 @@
 ---
 name: minion-orchestrator
-version: 1.0.0
+version: 1.0.1
 description: |
   Unified Minions skill for both deterministic shell jobs and LLM subagent
   orchestration. Replaces the older `gbrain-jobs` routing intent. Use when:
@@ -111,6 +111,36 @@ tasks where no LLM reasoning loop is needed.
 
 Shell jobs take their command via `--params` as a JSON object with `cmd` (string)
 or `argv` (array), plus `cwd` and optional `env`.
+
+### Downstream upgrade note — secret inheritance for shell jobs
+
+When a shell job needs secrets/config for child `gbrain` CLI calls, prefer
+`inherit` over putting values in `env`.
+
+```json
+{
+  "cmd": "gbrain sync --skip-failed && gbrain embed --stale",
+  "cwd": "/data/gbrain",
+  "inherit": ["database_url", "anthropic_api_key", "voyage_api_key"]
+}
+```
+
+`inherit` stores only config-key names in the job row. The worker resolves values
+from its config/environment at spawn time and injects derived env names such as
+`GBRAIN_DATABASE_URL` or `ANTHROPIC_API_KEY`.
+
+Use `env` only for non-secret values or values you are explicitly willing to
+persist in the job row.
+
+Common validation failures:
+- `shell: inherit must be an array of config-key names` → pass
+  `"inherit": ["database_url"]`
+- `shell: inherit entries must be non-empty strings` → remove empty/null values
+- `shell: inherit name "<X>" must match [a-z][a-z0-9_]*` → use snake_case
+  config keys, not env var names
+- `shell: inherit requested "<X>" but worker has no <X> configured` → configure
+  it on the worker host with `gbrain config set <key> <value>` or worker
+  environment
 
 Command string form:
 ```

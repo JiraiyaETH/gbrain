@@ -27,6 +27,7 @@ function src(id: string, last_full_cycle_at?: string | null, extra: Record<strin
     local_path: `/tmp/${id}`,
     last_sync_at: null,
     config: {
+      federated: true,
       ...(last_full_cycle_at !== undefined ? { last_full_cycle_at } : {}),
       ...extra,
     },
@@ -253,6 +254,20 @@ describe('dispatchPerSource — integration with stubbed engine + queue', () => 
     expect(added.length).toBe(1);
     expect((added[0].data as Record<string, unknown>).source_id).toBe('notes');
     const event = events.find(e => e.includes('fanout_code_source_skipped'));
+    expect(event).toBeDefined();
+    expect(JSON.parse(event!).sources).toEqual(['gbrain-code']);
+  });
+
+  test('non-federated sources are skipped by fanout', async () => {
+    const isolated = src('gbrain-code', undefined, { federated: false });
+    const notesSource = src('notes');
+    const { engine, queue, added, events, fanoutOpts } = makeStubs([isolated, notesSource]);
+    const result = await dispatchPerSource(engine, queue, fanoutOpts);
+    expect(result.dispatched).toEqual(['notes']);
+    expect(result.skipped_isolated_source).toEqual(['gbrain-code']);
+    expect(added.length).toBe(1);
+    expect((added[0].data as Record<string, unknown>).source_id).toBe('notes');
+    const event = events.find(e => e.includes('fanout_isolated_source_skipped'));
     expect(event).toBeDefined();
     expect(JSON.parse(event!).sources).toEqual(['gbrain-code']);
   });

@@ -16,6 +16,8 @@
  *   gbrain sources detach        — remove .gbrain-source from CWD
  *   gbrain sources federate <id>   — sources.config.federated = true
  *   gbrain sources unfederate <id> — sources.config.federated = false
+ *   gbrain sources set-embedding-column <id> <column|unset>
+ *                                      — sources.config.embedding_column override
  *
  * NOT in scope for Step 6 (deferred per plan):
  *   - import-from-github (needs SSRF + clone integration)
@@ -27,6 +29,11 @@ import { writeFileSync, unlinkSync, existsSync } from 'fs';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import type { BrainEngine } from '../core/engine.ts';
+import { loadConfig, loadConfigWithEngine } from '../core/config.ts';
+import {
+  getEmbeddingColumnRegistry,
+  quoteIdentifier,
+} from '../core/search/embedding-column.ts';
 import {
   assessDestructiveImpact,
   checkDestructiveConfirmation,
@@ -478,6 +485,86 @@ async function runSetCrMode(engine: BrainEngine, args: string[]): Promise<void> 
     console.log(`Cleared contextual_retrieval_mode for source "${id}" (NULL falls through to global mode).`);
   } else {
     console.log(`Set source "${id}" contextual_retrieval_mode = ${mode}.`);
+  }
+}
+
+// ── Subcommand: set-embedding-column ────────────────────────
+//
+// `gbrain sources set-embedding-column <id> <column|unset>` writes
+// sources.config.embedding_column. Query routing consumes it only when the
+// query is scoped to exactly one source; explicit per-call embedding_column
+// still wins.
+
+async function runSetEmbeddingColumn(engine: BrainEngine, args: string[]): Promise<void> {
+  const id = args[0];
+  const column = args[1];
+  const coverageOverride = args.includes('--coverage-override') || args.includes('--yes');
+
+  if (!id || !column) {
+    console.error('Usage: gbrain sources set-embedding-column <id> <column|unset> [--coverage-override]');
+    console.error('  Pass "unset", "default", or "clear" to remove the source-level override.');
+    process.exit(2);
+  }
+
+  const source = await fetchSource(engine, id);
+  if (!source) {
+    console.error(`Error: source "${id}" not found.`);
+    console.error(`  Run 'gbrain sources list' to see registered sources.`);
+    process.exit(4);
+  }
+
+  const clearing = column === 'unset' || column === 'default' || column === 'clear';
+  if (!clearing) {
+    const mergedCfg = await loadConfigWithEngine(engine, loadConfig()).catch(() => null);
+    const registry = getEmbeddingColumnRegistry(mergedCfg ?? { engine: engine.kind });
+    if (!Object.hasOwn(registry, column)) {
+      const known = Object.keys(registry).sort().join(', ') || '(none)';
+      console.error(
+        `Error: unknown embedding column "${column}". Declared columns: ${known}.`,
+      );
+      console.error(`  Add it via: gbrain config set embedding_columns '<JSON>'`);
+      process.exit(2);
+    }
+
+    try {
+      const rows = await engine.executeRaw<{ pct: number | null; total: number }>(
+        `SELECT (
+           COUNT(*) FILTER (WHERE cc.${quoteIdentifier(column)} IS NOT NULL)::float
+           / NULLIF(COUNT(*), 0) * 100
+         )::float AS pct,
+         COUNT(*)::int AS total
+         FROM content_chunks cc
+         JOIN pages p ON p.id = cc.page_id
+         WHERE p.deleted_at IS NULL AND p.source_id = $1`,
+        [id],
+      );
+      const total = Number(rows[0]?.total ?? 0);
+      const pct = Number(rows[0]?.pct ?? (total === 0 ? 100 : 0));
+      if (total > 0 && pct < 90 && !coverageOverride) {
+        console.error(
+          `Error: column "${column}" is ${pct.toFixed(1)}% populated for source "${id}" (${total} chunks).`,
+        );
+        console.error(`  Re-run with --coverage-override after confirming this is intentional.`);
+        process.exit(2);
+      }
+    } catch (err) {
+      console.error(`[sources] WARN: coverage probe failed (${(err as Error).message}); proceeding.`);
+    }
+  }
+
+  const cfg = parseConfig(source.config);
+  if (clearing) delete cfg.embedding_column;
+  else cfg.embedding_column = column;
+
+  await engine.executeRaw(
+    `UPDATE sources SET config = $1::text::jsonb WHERE id = $2`,
+    [JSON.stringify(cfg), id],
+  );
+
+  if (clearing) {
+    console.log(`Cleared source "${id}" embedding_column override.`);
+  } else {
+    console.log(`Set source "${id}" embedding_column = ${column}.`);
   }
 }
 
@@ -1333,6 +1420,7 @@ export async function runSources(engine: BrainEngine, args: string[]): Promise<v
     case 'tracked-branch': return runTrackedBranch(engine, rest);
     // v0.40.3.0 contextual retrieval (from master)
     case 'set-cr-mode': return runSetCrMode(engine, rest);
+    case 'set-embedding-column': return runSetEmbeddingColumn(engine, rest);
     case 'audit':      return runAudit(engine, rest);
     // v0.42.44 brain-repo git durability
     case 'harden':     { const { runHarden } = await import('./sources-harden.ts'); return runHarden(engine, rest); }
@@ -1389,6 +1477,10 @@ Subcommands:
                                     override (v0.40.3.0). Pass "unset" or
                                     "default" to clear (NULL falls through
                                     to the global search.mode bundle).
+  set-embedding-column <id> <column|unset> [--coverage-override]
+                                    Per-source query embedding column override.
+                                    Used only for single-source queries;
+                                    explicit per-call embedding_column wins.
   harden <id|--all> [--pat-file <p>] [--branch <b>] [--no-cron] [--no-verify] [--dry-run] [--json]
                                     v0.42.44 — make a brain repo durable: local
                                     auto-push hook, committed commit-push helper,

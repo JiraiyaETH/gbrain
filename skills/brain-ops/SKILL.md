@@ -1,6 +1,6 @@
 ---
 name: brain-ops
-version: 1.0.0
+version: 1.0.1
 description: |
   Brain knowledge base operations. The core read/write cycle: brain-first lookup,
   read-enrich-write loop, source attribution, ambient enrichment, back-linking.
@@ -36,6 +36,8 @@ flows through in both directions.
 
 > **Convention:** See `skills/conventions/brain-first.md` for the 5-step lookup protocol.
 > **Convention:** See `skills/conventions/quality.md` for citation and back-link rules.
+> See `skills/conventions/graph-safe-writing.md` before any Brain write that can
+> create links or typed edges.
 
 ## Contract
 
@@ -52,6 +54,13 @@ This skill guarantees:
 Every mention of a person or company with a brain page MUST create a back-link
 FROM that entity's page TO the page mentioning them. An unlinked mention is a
 broken brain. See `skills/conventions/quality.md` for format.
+
+> **Downstream upgrade note — auto-link Iron Law qualification**
+> Auto-link satisfies the Iron Law for ordinary entity-reference links on every
+> `put_page`: the agent's job is to include resolvable page references in
+> markdown/frontmatter and verify the `auto_links` response. Manual `gbrain link`
+> / `add_link` calls are reserved for relationships that cannot be expressed in
+> page content, or for explicit repair/backfill work.
 
 ## Phases
 
@@ -87,11 +96,21 @@ to the graph (`links` table) with inferred relationship types. Stale links
 (refs no longer in the page text) are removed in the same call. This is
 "auto-link" reconciliation.
 
+**Graph-safe writing gate:** auto-link is useful only when page text is clean
+graph evidence. Before writing, decide the intended edge budget. Use wikilinks,
+markdown entity links, slug paths, and relationship-shaped frontmatter only when
+the resulting edge should exist. If the relationship is contextual or uncertain,
+prefer `mentions` / `relates_to`; if it is provenance-only, keep it as citation
+text unless traversal to that exact page is intended.
+
 - No manual `add_link` calls needed for ordinary page writes.
 - Inferred link types: `attended` (meeting -> person), `works_at`, `invested_in`,
   `founded`, `advises`, `source` (frontmatter), `mentions` (default).
 - The `put_page` MCP response includes `auto_links: { created, removed, errors }`
   so the agent can verify outcomes.
+- Inspect `auto_links` after every link-producing write. Resolve or log
+  `unresolved`; graph-query high-value pages; repair suspicious edge shapes before
+  reporting the write done. See `skills/conventions/graph-safe-writing.md`.
 - To disable: `gbrain config set auto_link false`. Default is on.
 - Timeline entries with specific dates still need explicit `gbrain timeline-add`
   (or batch via `gbrain extract timeline --source db`).

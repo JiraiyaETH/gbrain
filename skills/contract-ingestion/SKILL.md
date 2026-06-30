@@ -33,6 +33,10 @@ live in other skills. Before writing anything, read and OBEY:
 - **`conventions/quality.md`** — the back-link iron law ("an unlinked mention is
   a broken brain"), citation format, the **timeline format `- **YYYY-MM-DD** | …`**,
   and **reverse-chronological order** (newest entry on top).
+- **`conventions/graph-safe-writing.md`** — wikilinks and slug paths are graph
+  evidence, not decoration. Contract pages should link true parties,
+  counterparties, clients, sources, and timeline targets, not every incidental
+  name or provenance slug.
 - **`brain-ops`** — the read → reconcile → write cycle; brain-first lookup.
 - **`schema.md`** (in the brain repo, e.g. `~/brain/schema.md`) — the two-layer
   page model, the minimal-frontmatter rule, and the person/company templates
@@ -124,6 +128,12 @@ Write files (NOT bulk `put_page` — stay collision-safe with concurrent
 sessions/autopilot). Then: `git commit` → `gbrain sync --no-pull` →
 `gbrain extract links --source db` → `gbrain extract timeline --source db` →
 graph-query readback to prove the edges + dated entries formed.
+
+Graph readback must confirm the contract edge model stayed sane: Tailored ⇄
+counterparty, client as client/for-context, TAP associate as associate, curation
+platform as venue/context. If the extractor creates creator⇄client, company
+`attended`, or other suspicious strong typed edges, repair or downgrade before
+reporting done.
 
 ## Output Format
 Per contract: 1 contract page + N party stubs (deduped) + the raw PDF copied
