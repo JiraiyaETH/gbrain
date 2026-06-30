@@ -557,7 +557,7 @@ describe('extractPageLinks — contract-structured edges', () => {
 
   test('PRIMARY: Creator + Client → person --creator_for--> client (flag ON)', async () => {
     const { candidates } = await extractPageLinks(
-      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract' }, 'contract',
+      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract', subtype: 'kol-agreement' }, 'contract',
       allowAllResolver, { structuredFirst: true },
     );
     const cf = candidates.find(c => c.linkType === 'creator_for');
@@ -569,7 +569,7 @@ describe('extractPageLinks — contract-structured edges', () => {
 
   test('Creator present → person --signed--> THIS contract page (flag ON)', async () => {
     const { candidates } = await extractPageLinks(
-      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract' }, 'contract',
+      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract', subtype: 'kol-agreement' }, 'contract',
       allowAllResolver, { structuredFirst: true },
     );
     const signed = candidates.find(c => c.linkType === 'signed');
@@ -582,7 +582,7 @@ describe('extractPageLinks — contract-structured edges', () => {
 
   test('the contracting entity (Agreement first wikilink) stays a mention, not signed (flag ON)', async () => {
     const { candidates } = await extractPageLinks(
-      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract' }, 'contract',
+      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract', subtype: 'kol-agreement' }, 'contract',
       allowAllResolver, { structuredFirst: true },
     );
     const tailored = candidates.find(c => c.targetSlug === 'companies/tailored');
@@ -594,7 +594,7 @@ describe('extractPageLinks — contract-structured edges', () => {
 
   test('party wikilinks are NOT also emitted as plain mentions (flag ON)', async () => {
     const { candidates } = await extractPageLinks(
-      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract' }, 'contract',
+      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract', subtype: 'kol-agreement' }, 'contract',
       allowAllResolver, { structuredFirst: true },
     );
     // jordi + theo-network became typed edges → no duplicate `mentions` rows.
@@ -607,7 +607,7 @@ describe('extractPageLinks — contract-structured edges', () => {
     // would stamp `advises`. Structured-first forces every non-party ref to
     // `mentions`, and the party refs are the typed creator_for/signed edges.
     const { candidates } = await extractPageLinks(
-      'contracts/theo/jordi-6df2021e', KOL_BODY_VERBY, { type: 'contract' }, 'contract',
+      'contracts/theo/jordi-6df2021e', KOL_BODY_VERBY, { type: 'contract', subtype: 'kol-agreement' }, 'contract',
       allowAllResolver, { structuredFirst: true },
     );
     expect(candidates.some(c => c.linkType === 'advises')).toBe(false);
@@ -619,7 +619,7 @@ describe('extractPageLinks — contract-structured edges', () => {
 
   test('slug-prefix detection: contracts/ slug works even when pageType is not "contract" (flag ON)', async () => {
     const { candidates } = await extractPageLinks(
-      'contracts/theo/jordi-6df2021e', KOL_BODY, {}, 'concept' as never,
+      'contracts/theo/jordi-6df2021e', KOL_BODY, { subtype: 'kol-agreement' }, 'concept' as never,
       allowAllResolver, { structuredFirst: true },
     );
     expect(candidates.some(c => c.linkType === 'creator_for' && c.targetSlug === 'companies/theo-network')).toBe(true);
@@ -635,7 +635,7 @@ describe('extractPageLinks — contract-structured edges', () => {
       'Service Provider provides marketing and KOL management services.',
     ].join('\n');
     const { candidates } = await extractPageLinks(
-      'contracts/theo/theo-1dc1b2aa', COMPANY_BODY, { type: 'contract' }, 'contract',
+      'contracts/theo/theo-1dc1b2aa', COMPANY_BODY, { type: 'contract', subtype: 'company' }, 'contract',
       allowAllResolver, { structuredFirst: true },
     );
     const sp = candidates.find(c => c.linkType === 'service_provider_for');
@@ -649,7 +649,7 @@ describe('extractPageLinks — contract-structured edges', () => {
 
   test('flag OFF: KOL contract emits ONLY mentions (back-compat)', async () => {
     const { candidates } = await extractPageLinks(
-      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract' }, 'contract',
+      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract', subtype: 'kol-agreement' }, 'contract',
       allowAllResolver, /* opts omitted → structuredFirst false */
     );
     expect(candidates.length).toBeGreaterThan(0);
@@ -662,7 +662,7 @@ describe('extractPageLinks — contract-structured edges', () => {
   test('flag OFF: company⇄company agreement emits ONLY mentions (back-compat)', async () => {
     const COMPANY_BODY = '**Agreement:** [[companies/tailored]] ⇄ [[companies/theo-network]] (client).';
     const { candidates } = await extractPageLinks(
-      'contracts/theo/theo-1dc1b2aa', COMPANY_BODY, { type: 'contract' }, 'contract',
+      'contracts/theo/theo-1dc1b2aa', COMPANY_BODY, { type: 'contract', subtype: 'company' }, 'contract',
       allowAllResolver, /* structuredFirst false */
     );
     expect(candidates.length).toBeGreaterThan(0);
@@ -672,7 +672,7 @@ describe('extractPageLinks — contract-structured edges', () => {
   test('malformed contract (no labeled fields) → no typed edges, never throws (flag ON)', async () => {
     const BODY = 'A contract page with [[companies/acme]] and [[people/bob]] but no labeled party fields.';
     const { candidates } = await extractPageLinks(
-      'contracts/misc/orphan', BODY, { type: 'contract' }, 'contract',
+      'contracts/misc/orphan', BODY, { type: 'contract', subtype: 'kol-agreement' }, 'contract',
       allowAllResolver, { structuredFirst: true },
     );
     // No Creator/Client/Agreement labels → both wikilinks degrade to mentions.
@@ -684,7 +684,7 @@ describe('extractPageLinks — contract-structured edges', () => {
   test('Creator without Client → signed only, no creator_for (flag ON)', async () => {
     const BODY = '**Creator:** [[people/jordi]]   ·   no client line here.';
     const { candidates } = await extractPageLinks(
-      'contracts/x/y', BODY, { type: 'contract' }, 'contract',
+      'contracts/x/y', BODY, { type: 'contract', subtype: 'kol-agreement' }, 'contract',
       allowAllResolver, { structuredFirst: true },
     );
     expect(candidates.some(c => c.linkType === 'signed' && c.targetSlug === 'contracts/x/y')).toBe(true);
@@ -699,6 +699,183 @@ describe('extractPageLinks — contract-structured edges', () => {
       allowAllResolver, { structuredFirst: true },
     );
     expect(candidates.some(c => c.linkType === 'creator_for' || c.linkType === 'signed')).toBe(false);
+  });
+
+  // ── subtype: tap-referral ──────────────────────────────────────────────
+  // Tailored ⇄ associate; NO external client. The associate is plain text on
+  // the **Agreement:** line (one company wikilink only). The ONLY edge is
+  // person --signed--> the TAP contract page; never invent a person→company edge.
+  const TAP_BODY = [
+    '# Haris Ebrat — TAP Associate (Tailored)',
+    '',
+    '**Agreement:** [[companies/tailored]] ⇄ Haris Ebrat (associate) — TAP referral agreement.',
+    '',
+    '**Counterparty:** [[people/haris-ebrat]]',
+    '',
+    '**Track:** Referral associate. (No external client; the deal is Tailored ⇄ Haris only.)',
+  ].join('\n');
+
+  test('tap-referral: Counterparty → person --signed--> THIS contract page (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/tap/haris-ebrat-56595c18', TAP_BODY, { type: 'contract', subtype: 'tap-referral' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    const signed = candidates.find(c => c.linkType === 'signed');
+    expect(signed).toBeDefined();
+    expect(signed!.fromSlug).toBe('people/haris-ebrat');
+    expect(signed!.targetSlug).toBe('contracts/tap/haris-ebrat-56595c18');
+    expect(signed!.linkSource).toBe('contract-structured');
+  });
+
+  test('tap-referral: NO person→company edge (associate is plain text); Tailored stays a mention (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/tap/haris-ebrat-56595c18', TAP_BODY, { type: 'contract', subtype: 'tap-referral' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    // No creator_for / service_provider_for / works_at invented for the associate.
+    expect(candidates.some(c => ['creator_for', 'service_provider_for', 'works_at'].includes(c.linkType))).toBe(false);
+    // The one company wikilink (Tailored) degrades to a mention.
+    const tailored = candidates.find(c => c.targetSlug === 'companies/tailored');
+    expect(tailored).toBeDefined();
+    expect(tailored!.linkType).toBe('mentions');
+    // Only the signed edge is non-mentions.
+    expect(candidates.filter(c => c.linkType !== 'mentions').map(c => c.linkType)).toEqual(['signed']);
+  });
+
+  // ── subtype: curation (creator/curator → client shaped) ────────────────
+  // The person label is **Curator:** (not **Creator:**); the dispatch treats
+  // curation exactly like kol-agreement → creator_for + signed.
+  const CURATION_BODY = [
+    '# Digits Labs × Jiraiya — Fjord Foundry Curation',
+    '',
+    '**Agreement:** [[companies/tailored]] ⇄ [[companies/digits-labs]] (client) — curation engagement.',
+    '',
+    '**Curator:** [[people/jiraiya]]   ·   **Client:** [[companies/digits-labs]]   ·   **Platform:** [[companies/fjord-foundry]]',
+  ].join('\n');
+
+  test('curation: Curator + Client → person --creator_for--> client + signed (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/fjord/jiraiya-20260116', CURATION_BODY, { type: 'contract', subtype: 'curation' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    const cf = candidates.find(c => c.linkType === 'creator_for');
+    expect(cf).toBeDefined();
+    expect(cf!.fromSlug).toBe('people/jiraiya');
+    expect(cf!.targetSlug).toBe('companies/digits-labs');
+    const signed = candidates.find(c => c.linkType === 'signed');
+    expect(signed).toBeDefined();
+    expect(signed!.fromSlug).toBe('people/jiraiya');
+    expect(signed!.targetSlug).toBe('contracts/fjord/jiraiya-20260116');
+  });
+
+  // ── subtype: company — dispute-doc guard ───────────────────────────────
+  // Settlement / handover / non-waiver / acknowledgement share the
+  // company⇄company **Agreement:** shape with a real retainer but are DISPUTE
+  // docs → NO service_provider_for (the edge belongs to the retainer).
+  const SETTLEMENT_BODY = [
+    '# Theo / Tailored — Settlement Agreement (dispute resolved + paid)',
+    '',
+    '**Agreement:** [[companies/tailored]] ⇄ [[companies/theo-network]] — a Settlement Agreement that RESOLVES the Theo/Tailored payment dispute.',
+    '',
+    'Mutual release effective on receipt of the settlement amount.',
+  ].join('\n');
+
+  test('company-settlement: dispute doc → NO service_provider_for, everything is mentions (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/settlement-2026-06-05', SETTLEMENT_BODY, { type: 'contract', subtype: 'company' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    expect(candidates.some(c => c.linkType === 'service_provider_for')).toBe(false);
+    expect(candidates.every(c => c.linkType === 'mentions')).toBe(true);
+    // The two parties are still present, just as mentions.
+    expect(candidates.some(c => c.targetSlug === 'companies/tailored')).toBe(true);
+    expect(candidates.some(c => c.targetSlug === 'companies/theo-network')).toBe(true);
+  });
+
+  test('company-handover: title-only dispute keyword still suppresses service_provider_for (flag ON)', async () => {
+    // The **Agreement:** line itself has no dispute keyword; the GUARD must also
+    // fire off the page TITLE ("Handover Receipt & Non-Waiver Acknowledgement").
+    const HANDOVER_BODY = [
+      '**Agreement:** [[companies/tailored]] ⇄ [[companies/theo-network]] — winding down the Theo KOL campaign.',
+      '',
+      'Reservation of rights; no settlement, release, or admission of liability.',
+    ].join('\n');
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/handover-receipt-2785b932', HANDOVER_BODY,
+      { type: 'contract', subtype: 'company', title: 'Theo Network — Handover Receipt & Non-Waiver Acknowledgement' },
+      'contract', allowAllResolver, { structuredFirst: true },
+    );
+    expect(candidates.some(c => c.linkType === 'service_provider_for')).toBe(false);
+    expect(candidates.every(c => c.linkType === 'mentions')).toBe(true);
+  });
+
+  test('company-retainer: a genuine service engagement DOES get service_provider_for (flag ON)', async () => {
+    // Counterpart to the dispute-doc guard: a real retainer (no dispute keyword
+    // in line or title) still emits the provider→client edge.
+    const RETAINER_BODY = [
+      '**Agreement:** [[companies/tailored]] ⇄ [[companies/theo-network]] (client) — Tailored\'s service engagement.',
+      '',
+      'The Service Provider agrees to provide marketing, distribution, and KOL management services.',
+    ].join('\n');
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/theo-1dc1b2aa', RETAINER_BODY,
+      { type: 'contract', subtype: 'company', title: 'Theo Network × Tailored — Service Retainer' },
+      'contract', allowAllResolver, { structuredFirst: true },
+    );
+    const sp = candidates.find(c => c.linkType === 'service_provider_for');
+    expect(sp).toBeDefined();
+    expect(sp!.fromSlug).toBe('companies/tailored');
+    expect(sp!.targetSlug).toBe('companies/theo-network');
+    expect(sp!.linkSource).toBe('contract-structured');
+  });
+
+  // ── subtype: employment ────────────────────────────────────────────────
+  // employee (person) --works_at--> employer (company), + signer → contract page.
+  const EMPLOYMENT_BODY = [
+    '# Shaurya Singh — Tailored Employment Agreement (Content Writer)',
+    '',
+    '**Agreement:** [[companies/tailored]] ⇄ Shaurya Singh (employee) — an INTERNAL Employment Agreement.',
+    '',
+    '**Employee:** [[people/shaurya-singh]]   ·   **Employer:** [[companies/tailored]]',
+  ].join('\n');
+
+  test('employment: Employee + Employer → person --works_at--> company + signed (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/tailored/shaurya-singh-db36d26f', EMPLOYMENT_BODY,
+      { type: 'contract', subtype: 'employment' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    const wa = candidates.find(c => c.linkType === 'works_at');
+    expect(wa).toBeDefined();
+    expect(wa!.fromSlug).toBe('people/shaurya-singh');
+    expect(wa!.targetSlug).toBe('companies/tailored');
+    expect(wa!.linkSource).toBe('contract-structured');
+    const signed = candidates.find(c => c.linkType === 'signed');
+    expect(signed).toBeDefined();
+    expect(signed!.fromSlug).toBe('people/shaurya-singh');
+    expect(signed!.targetSlug).toBe('contracts/tailored/shaurya-singh-db36d26f');
+    // Never a creator_for on an employment contract.
+    expect(candidates.some(c => c.linkType === 'creator_for')).toBe(false);
+  });
+
+  // ── unknown subtype → mentions only (never a wrong typed edge) ──────────
+  test('unknown subtype: creator/client labels present but subtype unrecognized → mentions only (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/misc/weird', KOL_BODY, { type: 'contract', subtype: 'mystery-subtype' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.every(c => c.linkType === 'mentions')).toBe(true);
+    expect(candidates.some(c => c.targetSlug === 'people/jordi')).toBe(true);
+    expect(candidates.some(c => c.targetSlug === 'companies/theo-network')).toBe(true);
+  });
+
+  test('missing subtype: labels present but no subtype frontmatter → mentions only (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/misc/no-subtype', KOL_BODY, { type: 'contract' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    expect(candidates.every(c => c.linkType === 'mentions')).toBe(true);
   });
 });
 
