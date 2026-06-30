@@ -250,3 +250,42 @@ describe('sources federate / unfederate', () => {
     expect(parsed.federated).toBe(false);
   });
 });
+
+describe('sources set-embedding-column', () => {
+  test('sets a validated source-level embedding column and preserves config', async () => {
+    const { engine, calls } = makeStub({
+      'SELECT id, name, local_path, last_commit, last_sync_at, config, created_at': [
+        { id: 'gstack', name: 'gstack', local_path: null, last_commit: null, last_sync_at: null, config: '{"federated":false}', created_at: new Date() },
+      ],
+      'FROM content_chunks cc': [{ pct: 100, total: 10 }],
+    });
+    await runSources(engine, ['set-embedding-column', 'gstack', 'embedding']);
+    const upd = calls.find(c => c.sql.includes('UPDATE sources SET config'));
+    expect(upd).toBeDefined();
+    expect(JSON.parse(upd!.params[0] as string)).toEqual({
+      federated: false,
+      embedding_column: 'embedding',
+    });
+  });
+
+  test('clears source-level embedding column override', async () => {
+    const { engine, calls } = makeStub({
+      'SELECT id, name, local_path, last_commit, last_sync_at, config, created_at': [
+        { id: 'gstack', name: 'gstack', local_path: null, last_commit: null, last_sync_at: null, config: '{"federated":false,"embedding_column":"embedding"}', created_at: new Date() },
+      ],
+    });
+    await runSources(engine, ['set-embedding-column', 'gstack', 'unset']);
+    const upd = calls.find(c => c.sql.includes('UPDATE sources SET config'));
+    expect(JSON.parse(upd!.params[0] as string)).toEqual({ federated: false });
+  });
+
+  test('rejects unknown embedding column', async () => {
+    const { engine } = makeStub({
+      'SELECT id, name, local_path, last_commit, last_sync_at, config, created_at': [
+        { id: 'gstack', name: 'gstack', local_path: null, last_commit: null, last_sync_at: null, config: '{}', created_at: new Date() },
+      ],
+    });
+    const code = await withExitCapture(() => runSources(engine, ['set-embedding-column', 'gstack', 'embedding_code']));
+    expect(code).toBe(2);
+  });
+});

@@ -25,6 +25,7 @@ import { execFileSync } from 'child_process';
 import type { BrainEngine } from './engine.ts';
 import { parseSourceConfig, type SourceRow } from './sources-load.ts';
 import { isSourceUnchangedSinceSync } from './git-head.ts';
+import { COLUMN_NAME_REGEX, quoteIdentifier } from './search/embedding-column.ts';
 
 export interface SourceMetrics {
   source_id: string;
@@ -213,7 +214,7 @@ export async function computeAllSourceMetrics(
   if (sources.length === 0) return [];
 
   const pageCounts = await pageCountsBySource(engine);
-  const chunkCounts = await chunkCountsBySource(engine);
+  const chunkCounts = await chunkCountsBySource(engine, sources);
   const jobCounts = await jobCountsBySource(engine);
   const now = Date.now();
   // v0.41.32.0: LOCAL callers (gbrain sources status/audit) opt into a live
@@ -288,18 +289,35 @@ async function pageCountsBySource(engine: BrainEngine): Promise<Map<string, numb
   return m;
 }
 
-async function chunkCountsBySource(engine: BrainEngine): Promise<Map<string, { total: number; embedded: number }>> {
-  const rows = await engine.executeRaw<{ source_id: string; total: number; embedded: number }>(
-    `SELECT p.source_id,
-            COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE c.embedding IS NOT NULL)::int AS embedded
-       FROM content_chunks c
-       JOIN pages p ON p.id = c.page_id
-      WHERE p.deleted_at IS NULL
-      GROUP BY p.source_id`,
-  );
+async function chunkCountsBySource(
+  engine: BrainEngine,
+  sources: SourceRow[],
+): Promise<Map<string, { total: number; embedded: number }>> {
   const m = new Map<string, { total: number; embedded: number }>();
-  for (const r of rows) m.set(r.source_id, { total: Number(r.total), embedded: Number(r.embedded) });
+  const byColumn = new Map<string, string[]>();
+  for (const src of sources) {
+    const cfg = parseSourceConfig(src.config);
+    const rawColumn = typeof cfg.embedding_column === 'string' ? cfg.embedding_column : 'embedding';
+    const column = COLUMN_NAME_REGEX.test(rawColumn) ? rawColumn : 'embedding';
+    const ids = byColumn.get(column) ?? [];
+    ids.push(src.id);
+    byColumn.set(column, ids);
+  }
+
+  for (const [column, sourceIds] of byColumn) {
+    const rows = await engine.executeRaw<{ source_id: string; total: number; embedded: number }>(
+      `SELECT p.source_id,
+              COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE c.${quoteIdentifier(column)} IS NOT NULL)::int AS embedded
+         FROM content_chunks c
+         JOIN pages p ON p.id = c.page_id
+        WHERE p.deleted_at IS NULL
+          AND p.source_id = ANY($1::text[])
+        GROUP BY p.source_id`,
+      [sourceIds],
+    );
+    for (const r of rows) m.set(r.source_id, { total: Number(r.total), embedded: Number(r.embedded) });
+  }
   return m;
 }
 

@@ -97,7 +97,10 @@ describe('dispatchGlobalMaintenance — single-flight gate', () => {
 
 describe('dispatchPerSource — per-source jobs carry NON_GLOBAL phases (no embed)', () => {
   test('each per-source job sets phases = NON_GLOBAL_PHASES', async () => {
-    const sources = [{ id: 'repo-a', name: 'a', config: {} }, { id: 'repo-b', name: 'b', config: {} }];
+    const sources = [
+      { id: 'repo-a', name: 'a', config: { federated: true } },
+      { id: 'repo-b', name: 'b', config: { federated: true } },
+    ];
     const added: any[] = [];
     const engine = {
       kind: 'postgres' as const,

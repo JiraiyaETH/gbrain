@@ -1,6 +1,6 @@
 ---
 name: enrich
-version: 1.0.0
+version: 1.0.1
 description: |
   Enrich brain pages with tiered enrichment protocol. Creates and updates
   person/company pages with compiled truth, timeline, and cross-links.
@@ -57,7 +57,41 @@ they building, what makes them tick, where are they headed.
 
 > **Convention:** see `skills/conventions/quality.md` for citation formats and source precedence.
 
+Every fact carries an inline `[Source: ...]` citation — but **cite leanly** (see density below).
 When sources conflict, note the contradiction with both citations.
+
+## Quality Calibration (MANDATORY — match the gold standard `people/tory-green`)
+
+These calibrate the rules above so pages read like dossiers, not citation dumps or single-source
+rehashes. Gold standard: `people/tory-green` (~1 citation per prose bullet, ~0.6 citations/line).
+
+- **Citation density — cite per CLAIM, not per clause.** ~ONE citation per bullet/sentence. Prefer
+  the synthesis form `[Source: compiled from {sources}]` when a claim draws on many items; use a
+  specific `[Source: ...]` only for a single dated/quoted fact. NEVER stack 2-3 citations on one
+  line; never repeat the same long source string clause-by-clause. **Granular dated citations live
+  in the Timeline, not the prose** — the Timeline is the per-event ledger; the prose is synthesis.
+- **Edge budget — wikilink ENTITIES, not provenance** (per `conventions/graph-safe-writing.md`).
+  Wikilinks are graph evidence, not decoration. Wikilink the real relationships (`people/*` and
+  `companies/*` in `## Network`, roster, party lines, and the entity itself) — each entity ONCE per
+  section. Keep PROVENANCE as plain text — `[Source: Meeting "X", YYYY-MM-DD]`, NOT
+  `[Source: [[meetings/x]]]`; a source slug is a citation, not an intended edge. Exception: the
+  Timeline keeps ONE `→ [[source]]` per dated entry. After writing, verify with
+  `gbrain graph-query <slug> --depth 1 --direction both` and de-link citation wallpaper.
+- **Cross-source synthesis — never one source.** Synthesize across ALL source types the brain holds
+  (meetings, conversations/DMs, contracts, social/posts), weighted to recent. Use the Step-4a brain
+  cross-reference (`gbrain query`/`search`) to discover them. The operating reality (meetings/DMs/
+  contracts) is usually the richer spine; public posts are the smallest, most-performed slice.
+- **Temporal discipline — current vs dated arc.** Frame CURRENT state/views (recent sources) in
+  present tense; frame older material as the DATED ARC in Trajectory ("his 2022-era thesis was…").
+  Never promote a years-old take to present-tense conviction unless current sources corroborate it.
+- **Re-compile, never stack.** On the UPDATE path, REWRITE the compiled-truth sections tighter
+  (higher density as more is known) — do NOT append to them. Only the Timeline appends. Each
+  re-enrichment makes the prose denser, not longer (per `maintain`: rewrite compiled_truth when it
+  falls behind the timeline).
+- **Owner / central-node handling.** If the entity is the brain owner or a hub the user is in
+  ~everywhere, do NOT dump every meeting into the Timeline (reach them via backlinks; Timeline =
+  non-meeting milestones). Frame "Assessment" as an **Operating Profile** (how they work), not an
+  external judgment.
 
 ## When To Enrich
 
@@ -274,12 +308,31 @@ Active items, pending decisions, things to track.
 - Update related project/deal pages if relevant context surfaced
 - Check index files if the brain uses them
 
+Apply `skills/conventions/graph-safe-writing.md`: decide the intended edge
+budget before writing. Enrichment pages can be dense; keep wikilinks to durable
+relationships, timeline targets, primary sources, and high-signal network nodes.
+Use prose/citation text for provenance-only slugs and incidental names.
+
 **Note (v0.10.1):** Links between brain pages are auto-created on every
 `put_page` call (auto-link post-hook). Step 7 focuses on content
 cross-references (updating related pages' compiled truth with new signal
 from this enrichment), not on creating links. Verify via the `auto_links`
 field in the put_page response (`{ created, removed, errors }`).
 Timeline entries still need explicit `gbrain timeline-add` calls.
+
+If `auto_links.created` includes unexpected strong typed edges, repair the page
+text or downgrade the edge before reporting the enrichment done.
+
+### Downstream upgrade note — drain unresolved frontmatter names
+
+When a `put_page` response includes `auto_links.unresolved`, treat those
+entries as enrichment candidates, not noise.
+
+For each unresolved `{field, name}`:
+1. decide whether the name is a person, company, source, project, or false positive;
+2. search the Brain first;
+3. create/enrich the missing page only when notable enough;
+4. re-put or backfill the original page so the intended edge forms.
 
 ## Bulk Enrichment Rules
 

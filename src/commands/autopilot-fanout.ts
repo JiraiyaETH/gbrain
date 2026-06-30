@@ -79,6 +79,8 @@ export interface FanoutResult {
   skipped_cooldown: string[];
   /** Source ids skipped because they're maintained by the code sync pipeline. */
   skipped_code_source: string[];
+  /** Source ids skipped because they're isolated from federated/default recall. */
+  skipped_isolated_source: string[];
   /** True when this tick fell back to the legacy single-job path
    *  (no sources rows / engine empty). */
   legacy_fallback: boolean;
@@ -407,16 +409,19 @@ export async function dispatchPerSource(
     } else {
       log(`[dispatch] job #${job.id} autopilot-cycle (legacy single-source)`);
     }
-    return { dispatched: [], skipped_fresh: [], skipped_cap: [], skipped_cooldown: [], skipped_code_source: [], legacy_fallback: true };
+    return { dispatched: [], skipped_fresh: [], skipped_cap: [], skipped_cooldown: [], skipped_code_source: [], skipped_isolated_source: [], legacy_fallback: true };
   }
 
-  const markdownSources: SourceRow[] = [];
+  const eligibleSources: SourceRow[] = [];
   const skippedCodeSource: SourceRow[] = [];
+  const skippedIsolatedSource: SourceRow[] = [];
   for (const src of sources) {
     if (src.config?.strategy === 'code') {
       skippedCodeSource.push(src);
+    } else if (src.config?.federated !== true) {
+      skippedIsolatedSource.push(src);
     } else {
-      markdownSources.push(src);
+      eligibleSources.push(src);
     }
   }
 
@@ -437,7 +442,7 @@ export async function dispatchPerSource(
   }
 
   const { dispatch, skippedFresh, skippedCap, skippedCooldown } =
-    selectSourcesForDispatch(markdownSources, opts.fanoutMax, Date.now(), FULL_CYCLE_FLOOR_MIN, recentFailures, cooldownOpts);
+    selectSourcesForDispatch(eligibleSources, opts.fanoutMax, Date.now(), FULL_CYCLE_FLOOR_MIN, recentFailures, cooldownOpts);
 
   const dispatched: string[] = [];
   for (const src of dispatch) {
@@ -521,12 +526,20 @@ export async function dispatchPerSource(
     }));
   }
 
+  if (skippedIsolatedSource.length > 0 && opts.jsonMode) {
+    emit(JSON.stringify({
+      event: 'fanout_isolated_source_skipped',
+      sources: skippedIsolatedSource.map(s => s.id),
+    }));
+  }
+
   return {
     dispatched,
     skipped_fresh: skippedFresh.map(s => s.id),
     skipped_cap: skippedCap.map(s => s.id),
     skipped_cooldown: skippedCooldown.map(s => s.id),
     skipped_code_source: skippedCodeSource.map(s => s.id),
+    skipped_isolated_source: skippedIsolatedSource.map(s => s.id),
     legacy_fallback: false,
   };
 }

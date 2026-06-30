@@ -256,6 +256,40 @@ describe('computeAllSourceMetrics', () => {
     expect(dflt.embed_coverage_pct).toBeCloseTo(33.3, 1);
   });
 
+  test('embedding coverage honors per-source embedding_column config', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, config)
+       VALUES ('code-src', 'code-src', '{"embedding_column":"embedding_image"}'::jsonb)
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config`,
+    );
+    await engine.putPage('src-foo-ts', {
+      type: 'code',
+      title: 'src/foo.ts',
+      compiled_truth: 'export const foo = 1;',
+    }, { sourceId: 'code-src' });
+    await engine.upsertChunks('src-foo-ts', [
+      { chunk_index: 0, chunk_text: 'export const foo = 1;', chunk_source: 'compiled_truth', token_count: 5, embedding: undefined },
+    ], { sourceId: 'code-src' });
+
+    const vector = `[${Array(1024).fill(0).join(',')}]`;
+    await engine.executeRaw(
+      `UPDATE content_chunks c
+          SET embedding_image = $1::vector
+         FROM pages p
+        WHERE p.id = c.page_id
+          AND p.source_id = 'code-src'
+          AND p.slug = 'src-foo-ts'`,
+      [vector],
+    );
+
+    const sources = await loadAllSources(engine);
+    const result = await computeAllSourceMetrics(engine, sources);
+    const code = result.find((m) => m.source_id === 'code-src')!;
+    expect(code.total_chunks).toBe(1);
+    expect(code.embedded_chunks).toBe(1);
+    expect(code.embed_coverage_pct).toBe(100);
+  });
+
   test('lag_seconds is null when last_sync_at is null', async () => {
     const sources = await loadAllSources(engine);
     const result = await computeAllSourceMetrics(engine, sources);
