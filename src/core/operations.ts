@@ -471,6 +471,36 @@ export function thinkSourceScopeOpts(ctx: OperationContext): {
       : {};
 }
 
+function sourceConfigStrategy(config: unknown): string | undefined {
+  if (typeof config === 'string') {
+    try {
+      const parsed = JSON.parse(config || '{}') as unknown;
+      return sourceConfigStrategy(parsed);
+    } catch {
+      return undefined;
+    }
+  }
+  if (config && typeof config === 'object') {
+    const strategy = (config as Record<string, unknown>).strategy;
+    return typeof strategy === 'string' ? strategy : undefined;
+  }
+  return undefined;
+}
+
+async function assertKnowledgeSourceWritable(ctx: OperationContext, op: string): Promise<void> {
+  const sourceId = ctx.sourceId || 'default';
+  const rows = await ctx.engine.executeRaw<{ config: unknown }>(
+    `SELECT config FROM sources WHERE id = $1 LIMIT 1`,
+    [sourceId],
+  );
+  if (sourceConfigStrategy(rows[0]?.config) === 'code') {
+    throw new OperationError(
+      'permission_denied',
+      `${op} is blocked on code source '${sourceId}'. Code sources are index-only; write to the brain source instead.`,
+    );
+  }
+}
+
 /**
  * #2200: source scope for the LINK read ops (get_links / get_backlinks). A link
  * row references three pages (from, to, origin); the engine's federated
@@ -822,6 +852,7 @@ const put_page: Operation = {
     enforceSubagentSlugFence(ctx, slug, 'put_page');
 
     if (ctx.dryRun) return { dry_run: true, action: 'put_page', slug: p.slug };
+    await assertKnowledgeSourceWritable(ctx, 'put_page');
     // Skip embedding when the AI gateway has no embedding provider configured.
     // Checks all auth env vars for the resolved provider, not just OPENAI_API_KEY,
     // so Gemini / Ollama / Voyage brains don't silently drop embeddings (Codex C2).
