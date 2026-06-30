@@ -45,7 +45,7 @@ export const DEFAULT_DIMENSIONS: string[] = [
  */
 export const DEFAULT_SLOTS: SlotConfig[] = [
   { id: 'A', model: 'openai:gpt-5.2' },
-  { id: 'B', model: 'anthropic:claude-opus-4-7' },
+  { id: 'B', model: 'deepseek:deepseek-v4-pro' },
   { id: 'C', model: 'google:gemini-2.5-pro' },
 ];
 
