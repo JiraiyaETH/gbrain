@@ -1,6 +1,6 @@
 ---
 name: contract-ingestion
-version: 1.0.2
+version: 1.0.3
 description: |
   Ingest / reshape a signed contract (a local PDF, an old-brain
   sources/contracts/ page, or a SignNow document) into the jiraiya-brain
@@ -94,9 +94,9 @@ report the conflict instead of guessing.
   SignNow doc-id exists → re-fetch from the SignNow API using the profile's
   approved secret helper. (`local-pdf-sha8-*` ids are NOT SignNow ids — those rely
   on the local PDF only.)
-- Never invent. Unrecoverable → leave the gap, set `status: needs_review` when
-  the whole page is blocked, or add an inline `<!-- needs_review: <field> -->`
-  marker next to a specific missing term.
+- Never invent. Unrecoverable → leave the gap and add an inline
+  `<!-- needs_review: <field> -->` marker next to the missing term. Do not add
+  non-schema status values.
 
 ### 3. Reshape the contract page
 Minimal frontmatter:
@@ -104,7 +104,7 @@ Minimal frontmatter:
 ---
 type: contract
 subtype: kol-agreement | company | tap-referral | curation
-status: draft | signed | active | expired | terminated | needs_review
+status: draft | signed | active | expired | terminated
 ---
 ```
 Body (compiled truth above `---`, verbatim Agreement text below):
