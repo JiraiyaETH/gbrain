@@ -178,6 +178,13 @@ describe('cross-modal-eval CLI helpers', () => {
     }
   });
 
+  test('eval command configures gateway through buildGatewayConfig (config-file API keys)', () => {
+    const source = readFileSync(join(process.cwd(), 'src/commands/eval-cross-modal.ts'), 'utf-8');
+    expect(source).toContain("import { buildGatewayConfig } from '../core/ai/build-gateway-config.ts';");
+    expect(source).toContain('configureGateway(buildGatewayConfig(config));');
+    expect(source).not.toContain('env: { ...process.env },\n  });\n  return true;');
+  });
+
   test('GBRAIN_HOME isolates receipts under <home>/.gbrain/eval-receipts', async () => {
     const dir = makeTempDir();
     try {
