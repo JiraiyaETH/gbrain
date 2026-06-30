@@ -519,6 +519,189 @@ describe('extractPageLinks', () => {
   });
 });
 
+// ─── contract-structured typed edges (Phase 2, structured-first) ──────────
+//
+// A `type: contract` page emits ONLY `mentions` in legacy mode. In
+// structured-first mode its LABELED party fields become typed edges:
+//   **Creator:** [[people/X]] + **Client:** [[companies/Y]]
+//                                  → people/X --creator_for--> companies/Y  (PRIMARY)
+//   **Creator:** [[people/X]]     → people/X --signed--> <this contract page>
+//   **Agreement:** [[companies/A]] ⇄ [[companies/B]] (no **Creator:**)
+//                                  → companies/A --service_provider_for--> companies/B
+// Orientation matches the production batch edges (creator_for: person→client;
+// signed: person→contract-page; service_provider_for: provider→client). Every
+// other wikilink stays `mentions`. Flag OFF ⇒ all `mentions`.
+describe('extractPageLinks — contract-structured edges', () => {
+  // A KOL agreement: Tailored is the contracting entity (first **Agreement:**
+  // wikilink), Jordi the creator, Theo Network the client.
+  const KOL_BODY = [
+    '# Jordi — Theo Network KOL campaign',
+    '',
+    '**Agreement:** [[companies/tailored]] ⇄ Jordi (creator) — a Tailored-run KOL collaboration for client **Theo Network**.',
+    '',
+    '**Creator:** [[people/jordi]]   ·   **Client:** [[companies/theo-network]]',
+    '',
+    '**Value:** $6,000 token allocation. **Deliverables:** 3-4 posts/month on X.',
+  ].join('\n');
+
+  // A body whose prose carries verb keywords (advisory/works) the legacy
+  // per-edge regexes WOULD fire on — used to prove the structured-first
+  // contract path forces `mentions` regardless of body prose.
+  const KOL_BODY_VERBY = [
+    '**Agreement:** [[companies/tailored]] ⇄ Jordi (creator).',
+    '',
+    '**Creator:** [[people/jordi]]   ·   **Client:** [[companies/theo-network]]',
+    '',
+    'The Service Provider will provide expert advisory services and advises on strategy.',
+  ].join('\n');
+
+  test('PRIMARY: Creator + Client → person --creator_for--> client (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    const cf = candidates.find(c => c.linkType === 'creator_for');
+    expect(cf).toBeDefined();
+    expect(cf!.fromSlug).toBe('people/jordi');
+    expect(cf!.targetSlug).toBe('companies/theo-network');
+    expect(cf!.linkSource).toBe('contract-structured');
+  });
+
+  test('Creator present → person --signed--> THIS contract page (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    const signed = candidates.find(c => c.linkType === 'signed');
+    expect(signed).toBeDefined();
+    // Orientation matches production: signer → the contract PAGE, not a company.
+    expect(signed!.fromSlug).toBe('people/jordi');
+    expect(signed!.targetSlug).toBe('contracts/theo/jordi-6df2021e');
+    expect(signed!.linkSource).toBe('contract-structured');
+  });
+
+  test('the contracting entity (Agreement first wikilink) stays a mention, not signed (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    const tailored = candidates.find(c => c.targetSlug === 'companies/tailored');
+    expect(tailored).toBeDefined();
+    expect(tailored!.linkType).toBe('mentions');
+    // No person→company `signed` edge exists in production; never invent one.
+    expect(candidates.some(c => c.linkType === 'signed' && c.targetSlug.startsWith('companies/'))).toBe(false);
+  });
+
+  test('party wikilinks are NOT also emitted as plain mentions (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    // jordi + theo-network became typed edges → no duplicate `mentions` rows.
+    expect(candidates.some(c => c.targetSlug === 'people/jordi' && c.linkType === 'mentions')).toBe(false);
+    expect(candidates.some(c => c.targetSlug === 'companies/theo-network' && c.linkType === 'mentions')).toBe(false);
+  });
+
+  test('verb-laden contract prose does NOT leak advises/works_at onto refs (flag ON)', async () => {
+    // The body says "advisory services" / "advises" — legacy per-edge regexes
+    // would stamp `advises`. Structured-first forces every non-party ref to
+    // `mentions`, and the party refs are the typed creator_for/signed edges.
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/jordi-6df2021e', KOL_BODY_VERBY, { type: 'contract' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    expect(candidates.some(c => c.linkType === 'advises')).toBe(false);
+    expect(candidates.some(c => c.linkType === 'works_at')).toBe(false);
+    // Only the two typed party edges are non-mentions.
+    const typed = candidates.filter(c => c.linkType !== 'mentions');
+    expect(typed.map(c => c.linkType).sort()).toEqual(['creator_for', 'signed']);
+  });
+
+  test('slug-prefix detection: contracts/ slug works even when pageType is not "contract" (flag ON)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/jordi-6df2021e', KOL_BODY, {}, 'concept' as never,
+      allowAllResolver, { structuredFirst: true },
+    );
+    expect(candidates.some(c => c.linkType === 'creator_for' && c.targetSlug === 'companies/theo-network')).toBe(true);
+    expect(candidates.some(c => c.linkType === 'signed' && c.targetSlug === 'contracts/theo/jordi-6df2021e')).toBe(true);
+  });
+
+  test('company⇄company agreement (no Creator) → first party --service_provider_for--> client (flag ON)', async () => {
+    const COMPANY_BODY = [
+      '# Theo Network × Tailored — Service Retainer',
+      '',
+      '**Agreement:** [[companies/tailored]] ⇄ [[companies/theo-network]] (client) — Tailored\'s service engagement.',
+      '',
+      'Service Provider provides marketing and KOL management services.',
+    ].join('\n');
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/theo-1dc1b2aa', COMPANY_BODY, { type: 'contract' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    const sp = candidates.find(c => c.linkType === 'service_provider_for');
+    expect(sp).toBeDefined();
+    expect(sp!.fromSlug).toBe('companies/tailored');
+    expect(sp!.targetSlug).toBe('companies/theo-network');
+    expect(sp!.linkSource).toBe('contract-structured');
+    // No creator_for / signed on a company⇄company agreement.
+    expect(candidates.some(c => c.linkType === 'creator_for' || c.linkType === 'signed')).toBe(false);
+  });
+
+  test('flag OFF: KOL contract emits ONLY mentions (back-compat)', async () => {
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/jordi-6df2021e', KOL_BODY, { type: 'contract' }, 'contract',
+      allowAllResolver, /* opts omitted → structuredFirst false */
+    );
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.every(c => c.linkType === 'mentions')).toBe(true);
+    expect(candidates.some(c => c.targetSlug === 'people/jordi')).toBe(true);
+    expect(candidates.some(c => c.targetSlug === 'companies/theo-network')).toBe(true);
+    expect(candidates.some(c => c.targetSlug === 'companies/tailored')).toBe(true);
+  });
+
+  test('flag OFF: company⇄company agreement emits ONLY mentions (back-compat)', async () => {
+    const COMPANY_BODY = '**Agreement:** [[companies/tailored]] ⇄ [[companies/theo-network]] (client).';
+    const { candidates } = await extractPageLinks(
+      'contracts/theo/theo-1dc1b2aa', COMPANY_BODY, { type: 'contract' }, 'contract',
+      allowAllResolver, /* structuredFirst false */
+    );
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.every(c => c.linkType === 'mentions')).toBe(true);
+  });
+
+  test('malformed contract (no labeled fields) → no typed edges, never throws (flag ON)', async () => {
+    const BODY = 'A contract page with [[companies/acme]] and [[people/bob]] but no labeled party fields.';
+    const { candidates } = await extractPageLinks(
+      'contracts/misc/orphan', BODY, { type: 'contract' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    // No Creator/Client/Agreement labels → both wikilinks degrade to mentions.
+    expect(candidates.every(c => c.linkType === 'mentions')).toBe(true);
+    expect(candidates.some(c => c.targetSlug === 'companies/acme')).toBe(true);
+    expect(candidates.some(c => c.targetSlug === 'people/bob')).toBe(true);
+  });
+
+  test('Creator without Client → signed only, no creator_for (flag ON)', async () => {
+    const BODY = '**Creator:** [[people/jordi]]   ·   no client line here.';
+    const { candidates } = await extractPageLinks(
+      'contracts/x/y', BODY, { type: 'contract' }, 'contract',
+      allowAllResolver, { structuredFirst: true },
+    );
+    expect(candidates.some(c => c.linkType === 'signed' && c.targetSlug === 'contracts/x/y')).toBe(true);
+    expect(candidates.some(c => c.linkType === 'creator_for')).toBe(false);
+  });
+
+  test('non-contract page in structured-first mode is unaffected by the contract path', async () => {
+    // A person page with the same labels must NOT trigger contract extraction.
+    const BODY = '**Creator:** [[people/jordi]]   ·   **Client:** [[companies/theo-network]]';
+    const { candidates } = await extractPageLinks(
+      'people/someone', BODY, { type: 'person' }, 'person',
+      allowAllResolver, { structuredFirst: true },
+    );
+    expect(candidates.some(c => c.linkType === 'creator_for' || c.linkType === 'signed')).toBe(false);
+  });
+});
+
 // ─── inferLinkType ─────────────────────────────────────────────
 
 describe('inferLinkType', () => {
@@ -1404,7 +1587,6 @@ describe("v0.18.0 migration v22 — links_resolution_type", () => {
   });
 });
 
-
 describe('parseTimelineEntries — Format 3: inline [Source: ..., YYYY-MM-DD] citations', () => {
   test('extracts an entry from a dated citation', () => {
     const entries = parseTimelineEntries('Closed the seed round. [Source: board notes, 2025-04-02]');
@@ -1428,5 +1610,89 @@ describe('parseTimelineEntries — Format 3: inline [Source: ..., YYYY-MM-DD] ci
   test('skips invalid calendar dates and bare citations', () => {
     expect(parseTimelineEntries('Claim. [Source: memo, 2026-13-45]')).toHaveLength(0);
     expect(parseTimelineEntries('[Source: import batch, 2025-07-01]')).toHaveLength(0);
+  });
+});
+
+// ─── link_inference_mode: 'structured-first' (config-flagged) ──────────────
+//
+// The `structuredFirst` param (config `link_inference_mode: 'structured-first'`)
+// SKIPS the layer-2 page-global role-keyword prior in inferLinkType: a role
+// keyword anywhere on the page ("partner of …", "portfolio") no longer stamps
+// invested_in/advises/works_at on every company a person links to. Layer 1
+// (local per-edge verbs) is untouched in BOTH modes.
+//
+// Default OFF (structuredFirst omitted/false) MUST be byte-for-byte the legacy
+// behavior — the OFF tests below pin that.
+describe('inferLinkType — link_inference_mode structured-first', () => {
+  // Global page context that trips the layer-2 PARTNER_ROLE_RE prior ("partner
+  // of", "portfolio") but contains NO local per-edge investment verb — modeled
+  // on an Alina-style personal page that links a company (spicenet) without any
+  // founder/investor verb local to the link.
+  const ALINA_SELF = 'Alina';
+  const SPICENET = 'companies/spicenet';
+  const PARTNER_PORTFOLIO_CTX =
+    'Alina is a close personal partner of Jiraiya and they talk most mornings about ' +
+    'the account portfolio and what the week looks like across the various holdings.';
+  // Local window around the spicenet link — deliberately verb-free so layer 1
+  // finds nothing and the result is decided purely by the layer-2 prior gate.
+  const SPICENET_LOCAL = 'She mentioned spicenet again over coffee.';
+
+  test('flag ON: page-role prior suppressed → person→company resolves to mentions', () => {
+    // partner/portfolio appear page-globally; no local verb. Legacy would stamp
+    // invested_in via the partner prior; structured-first falls through.
+    expect(
+      inferLinkType('person', SPICENET_LOCAL, PARTNER_PORTFOLIO_CTX, SPICENET, ALINA_SELF, true),
+    ).toBe('mentions');
+  });
+
+  test('flag ON: layer 1 (local founded verb) still fires', () => {
+    expect(inferLinkType('person', 'She founded [[acme]] last year.', undefined, undefined, undefined, true))
+      .toBe('founded');
+  });
+
+  test('flag ON: layer 1 (local invested verb) still fires', () => {
+    expect(inferLinkType('person', 'She invested in [[acme]] at seed.', undefined, undefined, undefined, true))
+      .toBe('invested_in');
+  });
+
+  test('flag OFF (default): SAME partner/portfolio case still returns invested_in', () => {
+    // Proves the default is unchanged — the layer-2 partner prior still fires
+    // when structuredFirst is omitted (legacy behavior).
+    expect(
+      inferLinkType('person', SPICENET_LOCAL, PARTNER_PORTFOLIO_CTX, SPICENET, ALINA_SELF),
+    ).toBe('invested_in');
+    // Explicit false is identical to omitted.
+    expect(
+      inferLinkType('person', SPICENET_LOCAL, PARTNER_PORTFOLIO_CTX, SPICENET, ALINA_SELF, false),
+    ).toBe('invested_in');
+  });
+
+  // End-to-end through extractPageLinks: the flag threads from opts.structuredFirst
+  // down to the per-link inferLinkType call. Mirrors the selfName guard tests
+  // above but exercises the new opts path. FILLER pushes the role clause out of
+  // the per-edge excerpt window so only the layer-2 prior is under test.
+  const FILLER_SF =
+    'and the two of them kept trading notes through the quarter while the markets churned and the holdings drifted around in value steadily over the weeks. '
+      .padEnd(160, '.');
+
+  test('extractPageLinks flag ON: partner/portfolio page → company edge is mentions', async () => {
+    const content = `${ALINA_SELF} is a close personal partner of Jiraiya and watches the account portfolio.${FILLER_SF}See ${SPICENET} for context.`;
+    const { candidates } = await extractPageLinks(
+      'people/alina', content, { title: ALINA_SELF }, 'person', allowAllResolver,
+      { structuredFirst: true },
+    );
+    const spicenet = candidates.find(c => c.targetSlug === SPICENET);
+    expect(spicenet).toBeDefined();
+    expect(spicenet!.linkType).toBe('mentions');
+  });
+
+  test('extractPageLinks flag OFF (default): SAME page → company edge is invested_in', async () => {
+    const content = `${ALINA_SELF} is a close personal partner of Jiraiya and watches the account portfolio.${FILLER_SF}See ${SPICENET} for context.`;
+    const { candidates } = await extractPageLinks(
+      'people/alina', content, { title: ALINA_SELF }, 'person', allowAllResolver,
+    );
+    const spicenet = candidates.find(c => c.targetSlug === SPICENET);
+    expect(spicenet).toBeDefined();
+    expect(spicenet!.linkType).toBe('invested_in');
   });
 });

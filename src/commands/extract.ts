@@ -36,7 +36,7 @@ import type { PageType } from '../core/types.ts';
 import { parseMarkdown } from '../core/markdown.ts';
 import {
   extractPageLinks, parseTimelineEntries, inferLinkType, makeResolver,
-  isGlobalBasenameEnabled, LINK_EXTRACTOR_VERSION_TS,
+  isGlobalBasenameEnabled, isStructuredFirstInferenceEnabled, LINK_EXTRACTOR_VERSION_TS,
   WIKILINK_BASENAME_LINK_TYPE,
   buildBasenameIndex, queryBasenameIndex, stripCodeBlocks,
   type UnresolvedFrontmatterRef, type LinkCandidate,
@@ -351,7 +351,7 @@ function excerptForInference(s: string, idx: number, width: number): string {
  */
 export async function extractLinksFromFile(
   content: string, relPath: string, allSlugs: Set<string>,
-  opts?: { includeFrontmatter?: boolean; globalBasename?: boolean },
+  opts?: { includeFrontmatter?: boolean; globalBasename?: boolean; structuredFirst?: boolean },
 ): Promise<ExtractedLink[]> {
   const links: ExtractedLink[] = [];
   const slug = pathToSlug(relPath);
@@ -363,6 +363,9 @@ export async function extractLinksFromFile(
   // basename lookup against allSlugs when the ancestor walk fails. Off
   // by default for back-compat with the v0.10.1 ancestor-only behavior.
   const globalBasename = opts?.globalBasename ?? false;
+  // link_inference_mode: opt-in 'structured-first' suppresses the layer-2
+  // page-global role-keyword prior in inferLinkType. Off by default.
+  const structuredFirst = opts?.structuredFirst ?? false;
   const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
   const fsResolver = {
     async resolve(name: string, dirHint?: string | string[]): Promise<string | null> {
@@ -395,7 +398,7 @@ export async function extractLinksFromFile(
 
   const extracted = await extractPageLinks(
     slug, bodyContent, frontmatterForLinks, parsed.type, fsResolver,
-    { skipFrontmatter: !opts?.includeFrontmatter, globalBasename },
+    { skipFrontmatter: !opts?.includeFrontmatter, globalBasename, structuredFirst },
   );
   for (const c of extracted.candidates) {
     pushLink({
@@ -433,7 +436,7 @@ export async function extractLinksFromFile(
         to_slug: target,
         link_type: isBasename
           ? WIKILINK_BASENAME_LINK_TYPE
-          : inferLinkType(parsed.type, context, bodyContent, target, parsed.title),
+          : inferLinkType(parsed.type, context, bodyContent, target, parsed.title, structuredFirst),
         context,
         // Issue #972: tag basename edges so the FS path matches DB/put_page
         // provenance and migration v112's widened CHECK is exercised here too.
@@ -1006,6 +1009,8 @@ async function extractForSlugs(
 
   // Issue #972: read the basename flag once per extract run.
   const globalBasename = await isGlobalBasenameEnabled(engine);
+  // link_inference_mode: read once per run, threaded into each extract call.
+  const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
 
   const linkBatch: LinkBatchInput[] = [];
   const timelineBatch: TimelineBatchInput[] = [];
@@ -1063,7 +1068,7 @@ async function extractForSlugs(
         const content = readFileSync(fullPath, 'utf-8');
 
         if (doLinks) {
-          const links = await extractLinksFromFile(content, relPath, allSlugs, { globalBasename });
+          const links = await extractLinksFromFile(content, relPath, allSlugs, { globalBasename, structuredFirst });
           for (const link of links) {
             if (dryRun) {
               if (!jsonMode) console.log(`  ${link.from_slug} → ${link.to_slug} (${link.link_type})`);
@@ -1124,6 +1129,8 @@ async function extractLinksFromDir(
   // re-query the DB. globalBasename = true emits one edge per basename
   // match for bare wikilinks like `[[struktura]]`.
   const globalBasename = await isGlobalBasenameEnabled(engine);
+  // link_inference_mode: read once before the walk, threaded per file.
+  const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
 
   // Progress stream on stderr (separate from the action-events --json writes
   // to stdout, which tests grep for). Rate-gated; respects global --quiet /
@@ -1163,7 +1170,7 @@ async function extractLinksFromDir(
       if (isAborted(signal)) return;
       try {
         const content = readFileSync(file.path, 'utf-8');
-        const links = await extractLinksFromFile(content, file.relPath, allSlugs, { globalBasename });
+        const links = await extractLinksFromFile(content, file.relPath, allSlugs, { globalBasename, structuredFirst });
         for (const link of links) {
           if (dryRunSeen) {
             const key = `${link.from_slug}::${link.to_slug}::${link.link_type}`;
@@ -1283,13 +1290,15 @@ export async function extractLinksForSlugs(
     : undefined;
   // Issue #972: same flag as the standalone extract path.
   const globalBasename = await isGlobalBasenameEnabled(engine);
+  // link_inference_mode: same opt-in flag as the standalone extract path.
+  const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
   let created = 0;
   for (const slug of slugs) {
     const filePath = join(repoPath, slug + '.md');
     if (!existsSync(filePath)) continue;
     try {
       const content = readFileSync(filePath, 'utf-8');
-      for (const link of await extractLinksFromFile(content, slug + '.md', allSlugs, { globalBasename })) {
+      for (const link of await extractLinksFromFile(content, slug + '.md', allSlugs, { globalBasename, structuredFirst })) {
         try { await engine.addLink(link.from_slug, link.to_slug, link.context, link.link_type, link.link_source, undefined, undefined, linkOpts); created++; } catch { /* skip */ } // gbrain-allow-direct-insert: gbrain extract single-row fallback when batch path declines a row
       }
     } catch { /* skip */ }
@@ -1359,6 +1368,9 @@ async function extractLinksFromDB(
   // Issue #972: opt-in global-basename wikilink resolution. Read once
   // per extract run; threaded into each extractPageLinks call.
   const globalBasename = await isGlobalBasenameEnabled(engine);
+  // link_inference_mode: opt-in 'structured-first' inference. Read once per
+  // extract run; threaded into each extractPageLinks call.
+  const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
   // v0.32.8: listAllPageRefs enumerates (slug, source_id) so we can thread
   // sourceId to getPage AND build a cross-source resolution map for link
   // disambiguation. Pre-fix used getAllSlugs() which collapsed
@@ -1439,7 +1451,7 @@ async function extractLinksFromDB(
     // basename lookup; off by default for back-compat.
     const extracted = await extractPageLinks(
       slug, fullContent, page.frontmatter, page.type, resolver,
-      { skipFrontmatter: !includeFrontmatter, globalBasename },
+      { skipFrontmatter: !includeFrontmatter, globalBasename, structuredFirst },
     );
     unresolved.push(...extracted.unresolved);
 
@@ -1665,6 +1677,9 @@ async function extractStaleFromDB(
   const resolver = makeResolver(engine, { mode: 'batch' });
   const nullResolver = { resolve: async () => null as string | null };
   const activeResolver = includeFrontmatter ? resolver : nullResolver;
+  // link_inference_mode: read once before the stale loop, threaded into each
+  // extractPageLinks call. Off by default (legacy layer-2 prior intact).
+  const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
   const allRefs = await engine.listAllPageRefs();
   const allSlugs = new Set<string>();
   const slugToSources = new Map<string, string[]>();
@@ -1697,6 +1712,7 @@ async function extractStaleFromDB(
       const fullContent = page.compiled_truth + '\n' + page.timeline;
       const extracted = await extractPageLinks(
         page.slug, fullContent, page.frontmatter, page.type, activeResolver,
+        { structuredFirst },
       );
       for (const c of extracted.candidates) {
         const r = resolveCandidateSources(c, page.slug, page.source_id, allSlugs, slugToSources);
