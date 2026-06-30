@@ -13,18 +13,24 @@ triggers:
 mutating: true
 writes_pages: true
 writes_to:
-  - media/articles/
+  - sources/
 ---
 
 # article-enrichment — From Raw Dumps to Useful Brain Pages
 
 > **Convention:** see [conventions/quality.md](../conventions/quality.md) for
 > citation rules, verbatim-quote requirements, and back-link enforcement.
+> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
+> before adding links. Article pages can mention many entities; link only the
+> author, primary subject, and high-signal related pages worth traversing.
+> **Convention:** see [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
+> after enrichment. The article should become better supporting evidence, not
+> wrongly outrank canonical person/company/project pages.
 >
 > **Convention:** see [_brain-filing-rules.md](../_brain-filing-rules.md) for
-> filing rules. Article pages live under `media/articles/` for raw ingest;
-> personalized one-of-one synthesis output uses the sanctioned
-> `media/articles/<slug>-personalized.md` exception.
+> filing rules. Article pages normally remain under `sources/` as raw-source
+> artifacts; durable distilled ideas/entities should be propagated to their
+> active subject shelves instead of using stale `media/articles/` paths.
 
 ## What this does
 
@@ -60,8 +66,12 @@ original is never lost.
 4. ENRICH    → Sonnet (default) or Opus (for high-value content) restructures.
 5. WRITE     → Replace ## Content with the structured sections; preserve raw
                source in <details>; clear needs_enrichment in frontmatter.
-6. CROSS-LINK→ Add back-links from referenced people/companies pages
-               (Iron Law per conventions/quality.md).
+6. CROSS-LINK→ Add back-links from material people/companies pages
+               (Iron Law per conventions/quality.md). Keep incidental names
+               as prose/citation text.
+7. RETRIEVE  → Run the smoke gate: the enriched article should surface for its
+               specific ideas, while canonical pages still win broad identity,
+               company, or project queries.
 ```
 
 ## Invocation
@@ -84,7 +94,7 @@ gbrain get media/articles/<slug>
 #    Use the put_page operation with the new structured markdown body.
 
 # 5. Cross-link entities
-#    For every person/company mentioned, add a timeline back-link.
+#    For every material person/company relationship, add a timeline back-link.
 ```
 
 ## Quality bar
@@ -95,8 +105,9 @@ An enriched page passes if it has:
 - ✅ `## Quotable Lines` with ≥3 verbatim quotes (literal quotes, not paraphrase)
 - ✅ `## Key Insights` with ≥3 bullets (insights, not topic labels)
 - ✅ `## Why It Matters` connecting to specific brain context (not generic)
-- ✅ `## See Also` with standard markdown links (NOT `[[wiki-links]]`)
+- ✅ `## See Also` with intentional links to high-signal related pages
 - ✅ `<details>` block preserving the raw source content
+- ✅ Post-run retrieval gate passed for specific-topic and canonical-page probes
 
 ## Model selection
 
@@ -111,8 +122,9 @@ Opus for that batch.
 
 ## Link convention
 
-All cross-references use standard markdown links: `[Title](relative/path.md)`.
-NEVER use `[[wiki-links]]` — they don't render on GitHub.
+Prefer standard markdown links for article pages: `[Title](relative/path.md)`.
+Use wikilinks only when the active brain convention requires them for an
+intended graph edge. Never link every name just because a page exists.
 
 ## Anti-Patterns
 

@@ -15,7 +15,8 @@
  * via the `deferred` field in --json output.
  */
 
-import { resolve as resolvePath, isAbsolute } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { join, resolve as resolvePath, isAbsolute } from 'path';
 import {
   checkResolvable,
   autoFixDryViolations,
@@ -24,6 +25,8 @@ import {
   type AutoFixReport,
 } from '../core/check-resolvable.ts';
 import { autoDetectSkillsDirReadOnly, AUTO_DETECT_HINT_READ_ONLY, type SkillsDirSource } from '../core/repo-root.ts';
+import { loadConfig } from '../core/config.ts';
+import { loadActivePack } from '../core/schema-pack/load-active.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -302,6 +305,11 @@ export async function runCheckResolvable(args: string[]): Promise<void> {
   }
 
   const report = checkResolvable(skillsDir);
+  const schemaAlignmentWarnings = await auditFilingRulesAgainstActiveSchema(skillsDir);
+  if (schemaAlignmentWarnings.length > 0) {
+    report.warnings.push(...schemaAlignmentWarnings);
+    report.issues.push(...schemaAlignmentWarnings);
+  }
 
   // Exit semantics (D-CX-3):
   //   default mode: fail iff any errors
@@ -330,4 +338,82 @@ export async function runCheckResolvable(args: string[]): Promise<void> {
   }
 
   process.exit(env.ok ? 0 : 1);
+}
+
+function normalizeFilingDir(dir: string): string {
+  const trimmed = dir.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+  return trimmed.length > 0 ? `${trimmed}/` : '';
+}
+
+async function auditFilingRulesAgainstActiveSchema(skillsDir: string): Promise<ResolvableIssue[]> {
+  const rulesPath = join(skillsDir, '_brain-filing-rules.json');
+  if (!existsSync(rulesPath)) return [];
+
+  let rules: {
+    rules?: Array<{ kind?: string; directory?: string }>;
+    sources_dir?: { directory?: string };
+  };
+  try {
+    rules = JSON.parse(readFileSync(rulesPath, 'utf-8'));
+  } catch (err) {
+    return [{
+      type: 'filing_rules_schema_unavailable',
+      severity: 'warning',
+      skill: '_brain-filing-rules',
+      message: `Could not parse _brain-filing-rules.json for schema alignment: ${(err as Error).message}`,
+      action: 'Fix skills/_brain-filing-rules.json so it is valid JSON, then rerun gbrain check-resolvable.',
+    }];
+  }
+
+  let active;
+  try {
+    active = await loadActivePack({ cfg: loadConfig(), remote: false });
+  } catch (err) {
+    return [{
+      type: 'filing_rules_schema_unavailable',
+      severity: 'warning',
+      skill: '_brain-filing-rules',
+      message: `Could not load active schema pack for filing-rule alignment: ${(err as Error).message}`,
+      action: 'Fix active schema pack loading (`gbrain schema active`, `gbrain schema lint`), then rerun gbrain check-resolvable.',
+    }];
+  }
+
+  const schemaDirs = new Set<string>();
+  for (const pageType of active.manifest.page_types) {
+    for (const prefix of pageType.path_prefixes ?? []) {
+      const normalized = normalizeFilingDir(prefix);
+      if (normalized) schemaDirs.add(normalized);
+    }
+  }
+
+  const ruleDirs = new Set<string>();
+  for (const rule of rules.rules ?? []) {
+    if (rule.directory) ruleDirs.add(normalizeFilingDir(rule.directory));
+  }
+  if (rules.sources_dir?.directory) ruleDirs.add(normalizeFilingDir(rules.sources_dir.directory));
+
+  const issues: ResolvableIssue[] = [];
+  for (const dir of [...schemaDirs].sort()) {
+    if (!ruleDirs.has(dir)) {
+      issues.push({
+        type: 'filing_rules_schema_missing',
+        severity: 'warning',
+        skill: '_brain-filing-rules',
+        message: `_brain-filing-rules.json is missing active schema directory '${dir}'`,
+        action: `Add '${dir}' to skills/_brain-filing-rules.json or remove it from the active schema pack if it is no longer valid.`,
+      });
+    }
+  }
+  for (const dir of [...ruleDirs].sort()) {
+    if (!schemaDirs.has(dir)) {
+      issues.push({
+        type: 'filing_rules_schema_stale',
+        severity: 'warning',
+        skill: '_brain-filing-rules',
+        message: `_brain-filing-rules.json lists '${dir}' but the active schema pack has no matching path_prefix`,
+        action: `Remove '${dir}' from skills/_brain-filing-rules.json or add it to the active schema pack via schema-author.`,
+      });
+    }
+  }
+  return issues;
 }

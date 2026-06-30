@@ -1,7 +1,7 @@
 ---
 name: book-mirror
 version: 0.1.0
-description: Take any book (EPUB/PDF), produce a personalized chapter-by-chapter analysis with two-column tables. Left column preserves the chapter content; right column maps every idea to the reader's actual life using brain context. Output is a single brain page at media/books/<slug>-personalized.md plus an optional PDF via brain-pdf.
+description: Take any book (EPUB/PDF), produce a personalized chapter-by-chapter analysis with two-column tables. Left column preserves the chapter content; right column maps every idea to the reader's actual life using brain context. Output is a single brain note plus an optional PDF via brain-pdf.
 triggers:
   - "personalized version of this book"
   - "mirror this book"
@@ -11,13 +11,15 @@ triggers:
 mutating: true
 writes_pages: true
 writes_to:
-  - media/books/
+  - notes/
 ---
 
 # book-mirror — Personalized Chapter-by-Chapter Book Analysis
 
 > **Convention:** see [_brain-filing-rules.md](../_brain-filing-rules.md) for the
-> sanctioned `media/<format>/<slug>` exception this skill files under.
+> active schema shelves. This pack no longer uses the old `media/books/` path;
+> file personalized book mirrors under `notes/` unless the taxonomist picks a
+> more specific active shelf.
 >
 > **Convention:** see [conventions/quality.md](../conventions/quality.md) for
 > citation rules, back-link enforcement, and output quality bars.
@@ -25,13 +27,18 @@ writes_to:
 > **Convention:** see [conventions/brain-first.md](../conventions/brain-first.md)
 > for the lookup chain (brain → search → external) the context-gathering
 > phase follows.
+>
+> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
+> and [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
+> before/after writing the assembled personalized book page.
 
 ## What this does
 
 Given a book (EPUB or PDF), produce a brain page where every chapter is
 summarized in detail on the left and mirrored back to the reader's actual life
 on the right, using their own words, situations, people, and patterns from
-the brain. Output is a brain page at `media/books/<slug>-personalized.md`.
+the brain. Output is a brain page under `notes/` unless the active taxonomist
+routes a more specific shelf.
 
 This is NOT a generic book summary. The right column is the value: it makes
 the book read like a therapist who knows the reader is leaving notes in the

@@ -1,5 +1,48 @@
 # Brain Filing Rules -- MANDATORY for all skills that write to the brain
 
+## Source of Truth
+
+The **active schema pack** is canonical for file-backed Brain shelves. Use:
+
+```bash
+gbrain schema show --json
+gbrain schema active
+```
+
+`_brain-filing-rules.json` is the machine-readable sidecar used by
+`gbrain check-resolvable` to audit skill frontmatter (`writes_pages: true` +
+`writes_to:`). It must mirror the active schema pack's file-backed
+`page_types[].path_prefixes`, with `sources_dir` kept as the explicit raw-source
+exception.
+
+Do not add stale or generic shelves here just because they existed in another
+pack. If the active pack changes, update the schema pack first via
+`schema-author`, then sync this JSON/MD sidecar and run the gates.
+
+## Current active file-backed shelves
+
+For `jiraiya-brain v0.3.3`, the file-backed shelves are:
+
+| Type | Directory |
+|---|---|
+| person | `people/` |
+| company | `companies/` |
+| meeting | `meetings/` |
+| contract | `contracts/` |
+| research | `research/` |
+| report | `reports/`, `dream-cycle-summaries/` |
+| log | `workout/`, `food/` |
+| concept | `concepts/` |
+| idea | `ideas/` |
+| project | `projects/` |
+| note | `notes/` |
+| writing | `writing/` |
+| source | `sources/` |
+| personal | `personal/` |
+| conversation | `conversations/` |
+
+`atom` is DB-only in this schema and has no file-backed directory.
+
 ## The Rule
 
 The PRIMARY SUBJECT of the content determines where it goes. Not the format,
@@ -7,31 +50,56 @@ not the source, not the skill that's running.
 
 ## Decision Protocol
 
-1. Identify the primary subject (a person? company? concept? policy issue?)
-2. File in the directory that matches the subject
-3. Cross-link from related directories
+1. Identify the primary subject and whether it maps to an active schema type.
+2. File in the directory that matches that active schema type.
+3. Cross-link from related directories.
 4. When in doubt: what would you search for to find this page again?
+5. If no active schema type fits, do not invent a shelf. Route to
+   `schema-author` / EIIRP schema-check for a proposed pack evolution.
 
-**Authoritative shelf/type source:** the ACTIVE schema pack. Consult
-`skills/brain-taxonomist/SKILL.md` or `gbrain schema show --json` (or the
-brain-root `RESOLVER.md`) for the live shelf list — people/, companies/,
-meetings/, contracts/, projects/, concepts/, ideas/, notes/, sources/, … This
-file carries the conventions; the pack carries the shelves.
+## Common Misfiling Patterns -- DO NOT DO THESE
 
-## Cron Brain-Report Contract (MANDATORY for scheduled jobs that write Brain pages)
+| Wrong | Right | Why |
+|-------|-------|-----|
+| Analysis of a topic -> `sources/` | -> appropriate subject directory | `sources/` is for raw/source artifacts only |
+| Cron/job backend output -> notification body only | -> `reports/{category}/...` when it is a durable report; otherwise deliver only | Reports and operator messages are different documents |
+| Article about a person -> `sources/` | -> `people/` if the primary subject is the person | Primary subject wins |
+| Meeting-derived company info -> `meetings/` only | -> ALSO update `companies/` | Entity propagation is mandatory |
+| Research about a company -> `sources/` | -> `companies/` or `research/` depending on primary subject | Raw source and synthesized research are different |
+| Reusable framework/thesis -> `sources/` | -> `concepts/` | It is a mental model |
+| User-authored prose -> `concepts/` or stale `originals/` | -> `writing/` | Authorship is the primary frame |
+| Random working tracker -> `projects/` | -> `notes/` unless owner/outcome/active work exists | Projects are active workstreams, not scratch |
 
-Any scheduled job that writes a page into the brain must guarantee the page is
-well-formed before reporting success. This applies to cron jobs, managed
-scheduler jobs, native schedule APIs, and agentless/no-agent scripts. A page
-with missing frontmatter or invalid YAML can break ingestion, commit hooks, and
-fact extraction.
+## What `sources/` Is Actually For
 
-1. **Write path:** prefer `gbrain report <category> --dir <brain-dir>` or
-   `put_page` so frontmatter and DB import stay coupled. Do not hand-append raw
-   markdown into report directories without an opening frontmatter block.
+`sources/` is ONLY for:
 
-2. **Required frontmatter:** every report page opens with `---` on line 1 and
-   closes the block before the first heading:
+- Bulk data imports: API dumps, CSV exports, snapshots.
+- Raw data that feeds multiple brain pages, such as guest/contact exports.
+- Periodic captures or raw external content where the source artifact itself is
+  the primary evidence layer.
+
+If the content has a clear primary subject, it does NOT go in `sources/`.
+
+## Removed / stale shelves
+
+Do not file new pages into these unless the active schema pack explicitly brings
+them back:
+
+- `originals/` -> use `writing/`, `concepts/`, `ideas/`, or `notes/`.
+- `voice-notes/` -> use `sources/` for raw transcripts or subject shelves for distilled content.
+- `media/books/`, `media/articles/`, broad `media/` -> not active in this local schema.
+- `deals/`, `analysis/`, `civic/`, `guides/`, `tech/`, `finance/`, `daily/`, `openclaw/` -> old/generic-pack leftovers, not active `jiraiya-brain` shelves.
+- `wiki/*` dream-cycle paths -> stale for this pack; use the active shelves in `_brain-filing-rules.json`.
+
+## Cron Brain-Report Contract
+
+Any scheduled job that writes a Brain report must guarantee the page is
+well-formed before reporting success.
+
+1. Prefer `gbrain report <category> --dir <brain-dir>` or a native GBrain write
+   path so frontmatter and DB import stay coupled.
+2. Required minimal report frontmatter:
 
    ```yaml
    ---
@@ -43,212 +111,110 @@ fact extraction.
    ---
    ```
 
-   Quote YAML values that contain special characters such as `:`, `#`, `[`, `]`,
-   `{`, or `}`. Do not include a `slug` field unless it exactly matches the path.
+3. Before claiming success, run:
 
-3. **Self-verify at the source:** before claiming success, run
-   `gbrain frontmatter validate <written-file> --json`. Exit 0 means clean.
-   Exit 1 means fix and re-validate; never report a dirty page as done. For
-   agentless/no-agent scripts, bake this validation into the script after the
-   write and treat failure as a hard failure.
+   ```bash
+   gbrain frontmatter validate <written-file> --json
+   ```
 
-4. **Folder-level repair:** when one generated report has a frontmatter defect,
-   validate the containing folder and fix confirmed sibling files from the same
-   generator in the same pass. Minimal report frontmatter repair is acceptable
-   for clearly generated report output after operator approval; never silently
-   wrap an unfinished human-authored draft in `---`.
-
-5. **Routing:** cron prompts that write brain pages must follow
-   `skills/reports/SKILL.md` and `skills/frontmatter-guard/SKILL.md`. Keep the
-   full report artifact in the brain and any short operator notification as a
-   separate delivery surface.
-
-## Common Misfiling Patterns -- DO NOT DO THESE
-
-| Wrong | Right | Why |
-|-------|-------|-----|
-| Analysis of a topic -> `sources/` | -> appropriate subject directory | sources/ is for raw data only |
-| Cron/job backend output -> notification body only | -> full artifact in `reports/{category}/YYYY-MM-DD-HHMM.md`; short digest stays separate | Reports and operator messages are different documents |
-| Article about a person -> `sources/` | -> `people/` | Primary subject is a person |
-| Meeting-derived company info -> `meetings/` only | -> ALSO update `companies/` | Entity propagation is mandatory |
-| Research about a company -> `sources/` | -> `companies/` | Primary subject is a company |
-| Reusable framework/thesis -> `sources/` | -> `concepts/` | It's a mental model |
-| Tweet thread about policy -> `media/` | -> `civic/` or `concepts/` | media/ is for content ops |
-
-## Sanctioned exception: synthesis output is sui generis
-
-The "file by primary subject" rule is for raw ingest. Synthesized output that
-is one-of-one to a single source AND a specific reader (a personalized book
-mirror, a strategic-reading playbook tied to one problem) does not fit any
-subject directory cleanly: filing by topic loses the "this is the book"
-dimension; filing by author muddles authorship pages with synthesis pages.
-
-Format-prefixed paths under `media/<format>/<slug>` are the sanctioned
-exception:
-
-- `media/books/<slug>-personalized.md` (book-mirror output)
-- `media/articles/<slug>-personalized.md` (long-form article personalization)
-
-If you find yourself wanting `media/<format>/` for raw ingest, that is still
-the anti-pattern in the table above. The exception is narrow: synthesized,
-one-of-one, sui generis to a single source.
-
-## What `sources/` Is Actually For
-
-`sources/` is ONLY for:
-- Bulk data imports (API dumps, CSV exports, snapshots)
-- Raw data that feeds multiple brain pages (e.g., a guest export, contact sync)
-- Periodic captures (quarterly snapshots, sync exports)
-
-If the content has a clear primary subject (a person, company, concept, policy
-issue), it does NOT go in sources/. Period.
+4. One-shot jobs should normally deliver the result rather than write a Brain
+   report unless the report itself is the durable artifact.
 
 ## Notability Gate
 
-Not everything deserves a brain page. Before creating a new entity page:
+Not everything deserves a Brain page. Before creating a new entity page:
+
 - **People:** Will you interact with them again? Are they relevant to your work?
 - **Companies:** Are they relevant to your work or interests?
 - **Concepts:** Is this a reusable mental model worth referencing later?
-- **When in doubt, DON'T create.** A missing page can be created later.
-  A junk page wastes attention and degrades search quality.
+- **Projects:** Is there an owner/outcome/active workstream, not just an idea?
 
-## Iron Law: Back-Linking (MANDATORY)
+When in doubt, don't create. A missing page can be created later. A junk page
+wastes attention and degrades search quality.
 
-Every mention of a person or company with a brain page MUST create a back-link
-FROM that entity's page TO the page mentioning them. This is bidirectional:
-the new page links to the entity, AND the entity's page links back.
+## Iron Law: Back-Linking
 
-Format for back-links (append to Timeline or See Also):
-```
+Every material relationship to a person or company with a Brain page MUST create
+a traversable back-link FROM that entity's page TO the page that establishes the
+relationship.
+
+Format for back-links:
+
+```markdown
 - **YYYY-MM-DD** | Referenced in [page title](path/to/page.md) -- brief context
 ```
 
-An unlinked mention is a broken brain. The graph is the intelligence.
+An unlinked material relationship is a broken brain. Dense links for incidental
+mentions are also a broken graph: they hide the relationships the graph exists
+to retrieve.
 
-## Source Traceability Requirements (MANDATORY)
+## Source Traceability Requirements
 
-Every durable fact written to a brain page must be traceable to evidence. Inline
-`[Source: ...]` citations are one traceability mechanism, not the only one: a
-dated timeline/back-link to the source page, an explicit source edge, or a raw
-source artifact link can carry provenance when the source set is obvious.
+Every durable fact written to a Brain page must be traceable to evidence. Inline
+`[Source: ...]` citations are one mechanism; dated timeline/back-links, explicit
+source edges, and raw source artifact links can also carry provenance.
 
 Use inline `[Source: ...]` when the claim needs claim-level provenance: direct
 user statements, contact fields, dates, numbers, commitments, sensitive or
 conflicting facts, facts copied from external/API sources, and synthesis across
-multiple sources. Do not repeat the same inline citation as wallpaper across a
-run of adjacent bullets when a timeline/back-link or source edge already makes
-the source relationship clear.
+multiple sources.
 
-Common inline formats:
-- **Direct attribution:** `[Source: User, {context}, YYYY-MM-DD]`
-- **API/external:** `[Source: {provider}, YYYY-MM-DD]` or `[Source: {publication}, {URL}]`
-- **Synthesis:** `[Source: compiled from {list of sources}]`
+Source precedence:
 
-Source precedence (highest to lowest):
-1. User's direct statements (highest authority)
-2. Compiled truth (pre-existing brain synthesis)
-3. Timeline entries (raw evidence)
-4. External sources (API enrichment, web search -- lowest)
+1. User's direct statements.
+2. Compiled truth from existing Brain synthesis.
+3. Timeline entries / raw evidence.
+4. External sources.
 
-When sources conflict, note the contradiction with both citations. Don't
+When sources conflict, note the contradiction with both citations. Do not
 silently pick one.
 
 ## Raw Source Preservation
 
-Every ingested item should have its raw source preserved for provenance.
+Every ingested item should preserve its raw source when the source artifact is
+needed for provenance.
 
-**Size routing (automatic via `gbrain files upload-raw`):**
-- **< 100 MB text/PDF**: stays in the brain repo (git-tracked) in a `.raw/`
-  sidecar directory alongside the brain page
-- **>= 100 MB OR media files** (video, audio, images): uploaded to cloud
-  storage (Supabase Storage, S3, etc.) with a `.redirect.yaml` pointer left
-  in the brain repo. Files >= 100 MB use TUS resumable upload (6 MB chunks
-  with retry) for reliability.
+Use native raw-file tooling when available:
 
-**Upload command:**
 ```bash
 gbrain files upload-raw <file> --page <page-slug> --type <type>
 ```
-Returns JSON: `{storage: "git"}` for small files, `{storage: "supabase", storagePath, reference}` for cloud.
 
-**The `.redirect.yaml` pointer format:**
-```yaml
-target: supabase://brain-files/page-slug/filename.mp4
-bucket: brain-files
-storage_path: page-slug/filename.mp4
-size: 524288000
-size_human: 500 MB
-hash: sha256:abc123...
-mime: video/mp4
-uploaded: 2026-04-11T...
-type: transcript
-```
+Small text/PDF files may stay in the repo as raw sidecars; large media belongs
+in configured external storage with a pointer left in the Brain. Do not bloat the
+Brain repo with private/bulk media when a distilled index plus external storage
+is safer.
 
-**Accessing stored files:**
-```bash
-gbrain files signed-url <storage-path>    # Generate 1-hour signed URL
-gbrain files restore <dir>                # Download back to local
-```
+## Dream-cycle synthesize / patterns directories
 
-This ensures any derived brain page can be traced back to its original source,
-and large files don't bloat the git repo.
+The dream-cycle trusted workspace allow-list lives in
+`_brain-filing-rules.json` under `dream_synthesize_paths.globs`. Keep it aligned
+with active schema shelves. It should not point at stale `wiki/*` or
+`originals/*` paths unless the active schema pack explicitly restores those
+shelves.
 
-## Dream-cycle synthesize / patterns directories (v0.23)
-
-The `synthesize` and `patterns` phases of `gbrain dream` write to a
-**fixed allow-list** of paths sourced from `_brain-filing-rules.json`'s
-`dream_synthesize_paths.globs` array. Editing that JSON is the ONLY way
-to add a new directory the synthesis subagent may write to:
-
-| Output type | Slug pattern | What goes here |
-|-------------|--------------|----------------|
-| Reflection | `wiki/personal/reflections/YYYY-MM-DD-<topic>-<hash[:6]>` | Self-knowledge, emotional processing, pattern recognition. Verbatim quotes from the user, with analysis. |
-| Original idea | `wiki/originals/ideas/YYYY-MM-DD-<idea>-<hash[:6]>` | New frames, theses, mental models, "conceptive ideologist" outputs. Capture the user's exact phrasing — that's the artifact. |
-| People enrichment | `wiki/people/<existing-slug>` | Timeline entries appended to existing people pages from session mentions. Stub pages for new substantive people. |
-| Pattern | `wiki/personal/patterns/<theme>` | Cross-session theme detected across ≥3 reflections. Highest-leverage output: a pattern can span 25 years if reflections reference dated content. |
-| Cycle summary | `dream-cycle-summaries/YYYY-MM-DD` | Index of every page produced by one dream cycle. Auto-written deterministically by the orchestrator. |
-
-**Iron Law for synthesize output:**
-1. Quote the user verbatim. Do not paraphrase memorable phrasings.
-2. Cross-reference compulsively: every new page MUST link to existing brain content.
-3. Slug discipline: lowercase alphanumeric and hyphens only, slash-separated. NO underscores, NO file extensions.
-4. Edited transcripts produce NEW slugs (content-hash suffix changes) — never silently overwrite a prior reflection.
-
-## Takes attribution (v0.32+)
+## Takes attribution
 
 When writing a `<!--- gbrain:takes:begin -->` fence, the **holder** column says
-WHO BELIEVES the claim, not who it's ABOUT. Cross-modal eval over 100K
-production takes scored attribution at 6.5/10 — holder/subject confusion was
-the #1 error. These six rules are the contract. Long form with worked
-examples lives in `docs/takes-vs-facts.md`.
+WHO BELIEVES the claim, not who it's ABOUT. Cross-modal eval over production
+takes found holder/subject confusion as the core error. These rules are the
+contract:
 
-1. **Holder ≠ subject.** The test: did this person SAY or CLEARLY IMPLY this?
-   - YES → `holder = people/<slug>`
-   - NO, it's your analysis OF them → `holder = brain`
-   - Example: "Alice has a hero/rescuer pattern" → `holder=brain` (analysis ABOUT Alice, not stated BY Alice)
+1. **Holder ≠ subject.** Did this person SAY or CLEARLY IMPLY this?
+   - YES -> `holder = people/<slug>`
+   - NO, it is your analysis OF them -> `holder = brain`
 2. **Atomic claims.** Split compound rows into separate rows. One claim per row.
-3. **Amplification ≠ endorsement.** A retweet-only signal caps at `weight 0.55`.
-   The user shared something; they didn't necessarily endorse every clause.
-4. **Self-reported ≠ verified.** "Bob reports 7 figures" → `holder=people/bob`,
-   `weight=0.75`, NOT `holder=world/1.0`. Self-report is a strong individual
-   signal, not consensus fact.
-5. **No false precision.** Use 0.05 increments only (`0.35`, `0.55`, `0.75`).
-   `0.74` and `0.82` imply calibration accuracy that doesn't exist. The engine
-   layer rounds on insert — match the grid in your fence and avoid the warning.
-6. **"So what" test.** Skip metadata-style trivia (Twitter handles, follower
-   counts, obvious bio fields). A take has to be load-bearing for some future
-   query.
+3. **Amplification ≠ endorsement.** A retweet/share-only signal caps at low weight.
+4. **Self-reported ≠ verified.** Self-report is an individual signal, not world fact.
+5. **No false precision.** Use coarse confidence increments.
+6. **"So what" test.** Skip metadata trivia unless it is load-bearing.
 
-**Holder format (enforced as a parser warning in v0.32, error in v0.33+):**
-- `world` (consensus fact, no individual claimant)
-- `brain` (AI-inferred, holder genuinely ambiguous)
-- `people/<slug>` (individual's stated belief)
-- `companies/<slug>` (institutional fact, no individual claimant)
+Holder format:
 
-Slugs use the standard grammar (`[a-z0-9._-]+`). `Alice`, `people/Alice-Example`,
-and `world/alice-example` all fail validation.
+- `world` -- consensus fact, no individual claimant.
+- `brain` -- AI-inferred, holder genuinely ambiguous.
+- `people/<slug>` -- individual's stated belief.
+- `companies/<slug>` -- institutional fact, no individual claimant.
 
-**Founder-describing-own-company rule.** When a founder describes their own
-company, the holder is the FOUNDER, not the company. "We can hit $10M ARR"
-said by Alice → `holder=people/alice-example`, NOT `holder=companies/acme-example`.
-Companies don't speak; their employees do.
+Founder-describing-own-company rule: when a founder describes their own company,
+the holder is the founder, not the company. Companies do not speak; their people do.

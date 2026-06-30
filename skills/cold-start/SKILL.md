@@ -32,13 +32,21 @@ writes_to:
   - people/
   - companies/
   - meetings/
-  - daily/
-  - media/
   - conversations/
   - sources/
+  - notes/
+  - ideas/
+  - concepts/
+  - projects/
+  - personal/
 ---
 
 # Cold Start — Day-One Brain Bootstrapping
+
+> **Convention:** see `skills/conventions/graph-safe-writing.md` before import
+> phases that create entity links, and `skills/conventions/post-run-retrieval-gate.md`
+> after each batch. Cold-start is bulk graph creation; sample, verify, then
+> expand.
 
 You have a working brain. Search works. Now what?
 
@@ -402,7 +410,8 @@ transcripts.
 Delegate to `meeting-ingestion` skill. Key rules:
 - Always pull the **complete transcript**, not just the AI summary
 - Entity propagation is MANDATORY — every attendee gets a timeline update
-- A meeting is NOT fully ingested until all entity pages are updated
+- A meeting is NOT fully ingested until attendee and materially discussed entity
+  pages are updated
 
 ## Post-Bootstrap Checklist
 
