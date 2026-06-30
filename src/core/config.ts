@@ -318,6 +318,26 @@ export interface GBrainConfig {
   schema_pack?: string;
 
   /**
+   * Link-type inference mode for the legacy `inferLinkType` heuristics
+   * (src/core/link-extraction.ts). Two modes:
+   *   - 'legacy' (default) — reproduces current behavior exactly: per-edge
+   *     verb rules (layer 1) PLUS the page-GLOBAL role-keyword prior (layer 2)
+   *     that biases a person's outbound company links toward invested_in /
+   *     advises / works_at when a role keyword (e.g. "partner", "portfolio")
+   *     appears anywhere on the page.
+   *   - 'structured-first' — keeps layer 1 (local per-edge verbs) but SKIPS the
+   *     layer-2 page-global keyword prior, which over-stamps invested_in on
+   *     every company a non-investor links to. Links with no local verb fall
+   *     through to 'mentions'.
+   *
+   * Default 'legacy' = byte-for-byte current behavior; opt in via DB plane
+   * (`gbrain config set link_inference_mode structured-first`) or env override
+   * (`GBRAIN_LINK_INFERENCE_MODE=structured-first`). Read once per extract run
+   * (see isStructuredFirstInferenceEnabled in link-extraction.ts), never per-link.
+   */
+  link_inference_mode?: 'legacy' | 'structured-first';
+
+  /**
    * PR1 — MCP skill-catalog publishing. Lets a thin MCP client (Codex desktop,
    * Claude Code, Perplexity) discover and follow this agent repo's skills over
    * `gbrain serve`. See `src/core/skill-catalog.ts` for the trust-boundary memo.
@@ -923,6 +943,10 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // Link resolution (issue #972)
   'link_resolution',
   'link_resolution.global_basename',
+  // Link-type inference mode ('legacy' | 'structured-first'). Default 'legacy'
+  // reproduces current behavior; 'structured-first' suppresses the layer-2
+  // page-global role-keyword prior in inferLinkType.
+  'link_inference_mode',
   // Spend controls (v0.42.42.0, issue #2139). Previously `--force`-only — the
   // operator had to discover these by reading source. Registered so `config
   // set` accepts them directly. See docs/operations/spend-controls.md.
