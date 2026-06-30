@@ -106,7 +106,8 @@ describe('chat touchpoint — model resolver + aliases (Codex F-OV-5)', () => {
     expect(() => assertTouchpoint(getRecipe('anthropic')!, 'chat', 'claude-opus-4-7')).not.toThrow();
     expect(() => assertTouchpoint(getRecipe('openai')!, 'chat', 'gpt-5.2')).not.toThrow();
     expect(() => assertTouchpoint(getRecipe('google')!, 'chat', 'gemini-2.5-flash')).not.toThrow();
-    expect(() => assertTouchpoint(getRecipe('deepseek')!, 'chat', 'deepseek-chat')).not.toThrow();
+    expect(() => assertTouchpoint(getRecipe('deepseek')!, 'chat', 'deepseek-v4-pro')).not.toThrow();
+    expect(() => assertTouchpoint(getRecipe('deepseek')!, 'chat', 'deepseek-v4-flash')).not.toThrow();
   });
 
   test('assertTouchpoint rejects chat on embedding-only providers with a fix hint', () => {
