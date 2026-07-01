@@ -67,7 +67,7 @@ describe('#1434 — runSync auto-routes to sole_non_default source', () => {
     if (repoPath) rmSync(repoPath, { recursive: true, force: true });
   });
 
-  test('sole non-default source: performSync without --source routes there', async () => {
+  test('single matching --repo source: performSync without --source routes there', async () => {
     // local_path is required for tier 5.5 to fire — point at the synthetic
     // git repo so resolveSourceWithTier sees one non-default source with
     // a local_path AND falls through brain_default (unset).
@@ -117,10 +117,10 @@ describe('#1434 — runSync auto-routes to sole_non_default source', () => {
     expect(counts['studiovault']).toBeGreaterThan(0);
     expect(counts['default'] ?? 0).toBe(0);
 
-    // The nudge appears on stderr.
+    // With --repo, local_path matching is the winning tier; the sole-source
+    // nudge is only for the lower-priority sole_non_default fallback.
     const stderrText = captured.join('');
-    expect(stderrText).toContain("routing to source 'studiovault'");
-    expect(stderrText).toContain('sole non-default source registered');
+    expect(stderrText).not.toContain('sole non-default source registered');
   }, 60_000);
 
   test('explicit --source overrides auto-routing (no nudge)', async () => {
@@ -161,7 +161,7 @@ describe('#1434 — runSync auto-routes to sole_non_default source', () => {
     expect(counts['default']).toBeGreaterThan(0);
   }, 60_000);
 
-  test('2+ non-default sources: no auto-route, no nudge, falls through to default', async () => {
+  test('2+ non-default sources: --repo local_path match routes to that source', async () => {
     // Both need local_path to be counted by the sole_non_default helper.
     // Pre-existing helper filters local_path IS NOT NULL.
     const secondRepo = mkdtempSync(join(tmpdir(), 'gbrain-snd-routing-second-'));
@@ -197,10 +197,11 @@ describe('#1434 — runSync auto-routes to sole_non_default source', () => {
     const stderrText = captured.join('');
     expect(stderrText).not.toContain('sole non-default source registered');
 
-    // Multi-source brains fall through to seed_default — same as pre-fix.
+    // --repo is the sync target, so its registered local_path should resolve
+    // source identity even when the shell CWD is somewhere else.
     const counts = await pageCountBySource();
-    expect(counts['default'] ?? 0).toBeGreaterThan(0);
-    expect(counts['studiovault'] ?? 0).toBe(0);
+    expect(counts['default'] ?? 0).toBe(0);
+    expect(counts['studiovault'] ?? 0).toBeGreaterThan(0);
     expect(counts['second-vault'] ?? 0).toBe(0);
   }, 60_000);
 });

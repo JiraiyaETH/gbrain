@@ -3917,7 +3917,10 @@ See also:
   // and can pass --source to override if needed.
   const explicitSource = args.find((a, i) => args[i - 1] === '--source') || null;
   const { resolveSourceWithTier, formatSoleNonDefaultNudge } = await import('../core/source-resolver.ts');
-  const resolved = await resolveSourceWithTier(engine, explicitSource);
+  // When --repo is explicit, resolve source identity against that repo path
+  // rather than the shell CWD. This keeps cross-repo maintenance commands from
+  // accidentally borrowing the caller repo's source anchors.
+  const resolved = await resolveSourceWithTier(engine, explicitSource, repoPath ?? process.cwd());
   const sourceId: string = resolved.source_id;
   if (resolved.tier === 'sole_non_default') {
     const nudge = formatSoleNonDefaultNudge(sourceId);
