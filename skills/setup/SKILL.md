@@ -346,6 +346,12 @@ gbrain sync --no-pull --no-embed
 This indexes new/changed files without pulling from git or regenerating embeddings.
 Embeddings can be refreshed later in batch (`gbrain embed --stale`).
 
+For writes that create entity links or typed edges, treat wikilinks, markdown
+links, slug paths, and relationship-shaped frontmatter as graph evidence. Inspect
+`auto_links` when available, or run a focused `gbrain graph-query`; resolve/log
+unresolved entities; and run the smallest useful retrieval smoke so canonical
+pages still rank correctly.
+
 ### gbrain vs memory_search
 
 | Layer | What it stores | When to use |

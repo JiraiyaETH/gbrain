@@ -2,18 +2,28 @@
 
 Cross-cutting rules for every skill that writes Brain pages. Treat this as part of the Brain write contract, alongside `conventions/quality.md`.
 
+For user-facing retrieval and ranking checks after the graph shape is correct,
+also run `conventions/post-run-retrieval-gate.md`.
+
 ## Core principle
 
 A wikilink, markdown entity link, slug path, or relationship-shaped frontmatter field is not decoration. It is graph evidence. Write it only when the resulting edge would be useful and true.
 
 The Brain should compound through clean edges, not accumulate dense accidental links that future agents have to babysit.
 
+Graph-safe does **not** mean avoiding typed edges. Enrichment is expected to
+produce useful typed edges through `put_page` / auto-link when the page text gives
+clear relationship evidence. The standard is intentional typed relationships,
+verified after write.
+
 ## Edge budget
 
 Before writing or rewriting a page, decide the intended edge budget:
 
-1. **Strong typed edges** — only when the relationship is explicit and durable enough to query later.
-   - Examples: `works_at`, `founded`, `attended`, `signed`, `represents`, `invested_in`, `advises`, `sourced_from`, `derived_from`.
+1. **Strong typed edges** — expected when the relationship is explicit and durable enough to query later.
+   - Examples: `works_at`, `founded`, `attended`, `signed`,
+     `service_provider_for`, `uses_vendor`, `creator_for`, `invested_in`,
+     `advises`, `sourced_from`, `derived_from`.
    - Require clear local evidence. If the sentence would sound false as `A --verb--> B`, do not create the typed edge.
 2. **Weak edges** — use `mentions` / `relates_to` when the relationship is contextual, uncertain, or only co-mentioned.
 3. **Provenance only** — source slugs, transcript IDs, contract IDs, raw paths, and citation lists should usually be plain citation text, not body wikilinks, unless traversal to that exact page is intended.
@@ -60,6 +70,10 @@ Flag and review these automatically when they appear:
 - `company --advises--> meeting|person` unless the page explicitly represents an advisory firm advising that target
 - `person --invested_in--> companies/tailored` unless explicitly sourced as an investment
 - `person --works_at--> companies/tailored` when the page says KOL, TAP associate, vendor, referral partner, or client rather than staff
+- `company --represents--> client` when the more precise local schema verb is
+  `service_provider_for`
+- `company --works_at--> vendor/client` when the relationship is service,
+  vendor, or client-side rather than employment
 - blank link types or link types not present in the active schema pack
 - dense new typed edges created from a single source page without explicit evidence
 
