@@ -1,0 +1,12 @@
+{
+  "claim_id": "C1",
+  "claim": "",
+  "claim_type": "fact|number|method|judgment|hypothesis|recommendation",
+  "source_ids": [],
+  "evidence_confidence": "high|medium|low|very_low",
+  "downgrade_reasons": [],
+  "contradicting_source_ids": [],
+  "what_would_change_this": "",
+  "allowed_in_final_memo": false,
+  "notes": ""
+}

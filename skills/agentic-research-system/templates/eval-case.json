@@ -1,0 +1,13 @@
+{
+  "eval_case_id": "agentic-research-system-example-001",
+  "problem_description": "A prior run produced an unsupported decision memo claim about a vendor/tool capability.",
+  "input_brief": "Evaluate whether Tool A should be used for a production research pipeline.",
+  "allowed_tools": ["gbrain search", "web_search", "web_extract", "delegate_task"],
+  "must_find_evidence": ["official docs for Tool A", "at least one independent implementation or benchmark source"],
+  "must_not_do": ["cite search snippets", "treat vendor comparison pages as independent proof", "write to Brain before promotion approval"],
+  "failed_output": "Tool A is best-in-class and production-ready. [citation: search result snippet]",
+  "expected_output_shape": "decision memo with source IDs, confidence, recommendation strength, and evidence boundary",
+  "failure_category": "unsupported_material_claim",
+  "run_receipt_id": "",
+  "promotion_rule": "add to eval set after any repeated or safety-critical failure"
+}
