@@ -36,6 +36,13 @@ import { computePoolBudgetCheck } from '../src/commands/doctor.ts';
 
 let engine: PGLiteEngine;
 let repoPath: string;
+// Test isolation: point GBRAIN_HOME at a temp dir so sync-failure records
+// (syncFailuresPath → configDir()) land in an isolated ~/.gbrain, NOT the
+// developer's real one. Without this, the SLUG_MISMATCH fixture in the
+// blocked-sync test leaks a `notes/bad.md` (source `srcE`) failure into the
+// live ~/.gbrain/sync-failures.jsonl, which then wedges real `gbrain sync`.
+let gbrainHomeDir: string;
+let prevGbrainHome: string | undefined;
 
 function gitInit(repo: string): void {
   execSync('git init', { cwd: repo, stdio: 'pipe' });
@@ -83,6 +90,9 @@ async function seedCheckpoint(lastCommit: string, target: string, paths: string[
 
 describe('#1794 — resumable incremental sync (pinned target)', () => {
   beforeAll(async () => {
+    prevGbrainHome = process.env.GBRAIN_HOME;
+    gbrainHomeDir = mkdtempSync(join(tmpdir(), 'gbrain-1794-home-'));
+    process.env.GBRAIN_HOME = gbrainHomeDir;
     engine = new PGLiteEngine();
     await engine.connect({});
     await engine.initSchema();
@@ -90,6 +100,9 @@ describe('#1794 — resumable incremental sync (pinned target)', () => {
 
   afterAll(async () => {
     if (engine) await engine.disconnect();
+    if (prevGbrainHome === undefined) delete process.env.GBRAIN_HOME;
+    else process.env.GBRAIN_HOME = prevGbrainHome;
+    if (gbrainHomeDir) rmSync(gbrainHomeDir, { recursive: true, force: true });
   }, 60_000);
 
   beforeEach(async () => {
