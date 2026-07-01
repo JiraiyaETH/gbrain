@@ -1,0 +1,5 @@
+// Routing eval fixtures for skills/agentic-research-system. Each intent includes an explicit trigger substring while avoiding generic routing terms when testing non-ambiguous routing.
+{"intent":"Run a decision-grade memo on this vendor landscape","expected_skill":"agentic-research-system"}
+{"intent":"Do a source-backed memo and cross-model eval memo for it","expected_skill":"agentic-research-system"}
+{"intent":"Create a decision-grade memo with source cards and evidence registry","expected_skill":"agentic-research-system"}
+{"intent":"Run a cross-model eval memo for this decision packet","expected_skill":"agentic-research-system"}

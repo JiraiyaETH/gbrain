@@ -145,6 +145,11 @@
       "description": "Structured data research: search, extract, archive, deduplicate, track. Parameterized YAML recipes for investor updates, donations, company metrics."
     },
     {
+      "name": "agentic-research-system",
+      "path": "agentic-research-system/SKILL.md",
+      "description": "Decision-grade agentic research: Brain-first briefs, bounded subagent scouts, source/claim ledgers, citation audit, cross-model eval, decision memos, and promotion gates."
+    },
+    {
       "name": "minion-orchestrator",
       "path": "minion-orchestrator/SKILL.md",
       "description": "Unified Minions skill for deterministic shell jobs and LLM subagent orchestration. Submit, monitor, steer, pause/resume, replay. Replaces the older gbrain-jobs routing intent and sessions_spawn for durable observable background work."
