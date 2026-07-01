@@ -2,10 +2,13 @@
 
 Cross-cutting quality rules for all brain-writing skills.
 
-> **Graph-safety:** Also read `conventions/graph-safe-writing.md` before any
-> Brain write that can create links. Back-linking is mandatory, but wikilinks are
-> graph evidence, not decoration; strong typed edges must be sparse, intentional,
-> and verified after write.
+> **Schema-pack writing:** Before relationship frontmatter, run
+> `gbrain schema show --json` and use only `frontmatter_links` declared for the
+> page `type`. Author typed fields only for material relationships you have
+> evidence for. Incidental co-mentions stay as body prose or weak mentions.
+> Create minimal `type` + `title` stubs only when a material entity needs to
+> resolve so the edge/backlink exists; enrichment can deepen the stub later.
+> Inspect `auto_links.unresolved` after writes and resolve, defer, or log it.
 >
 > **Retrieval-safety:** Also read `conventions/post-run-retrieval-gate.md` after
 > meaningful writes. A page is not useful merely because it exists; it must be

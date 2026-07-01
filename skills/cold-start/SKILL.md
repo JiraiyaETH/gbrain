@@ -43,10 +43,12 @@ writes_to:
 
 # Cold Start — Day-One Brain Bootstrapping
 
-> **Convention:** see `skills/conventions/graph-safe-writing.md` before import
-> phases that create entity links, and `skills/conventions/post-run-retrieval-gate.md`
-> after each batch. Cold-start is bulk graph creation; sample, verify, then
-> expand.
+> **Convention:** before import phases that create entity links or relationship
+> frontmatter, run `gbrain schema show --json`, use only declared
+> `frontmatter_links`, and type only evidenced material relationships. Create
+> minimal stubs for material entities that need to resolve. Run
+> `skills/conventions/post-run-retrieval-gate.md` after each batch. Cold-start is
+> bulk graph creation; sample, verify, then expand.
 
 You have a working brain. Search works. Now what?
 

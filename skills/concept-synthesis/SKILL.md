@@ -23,9 +23,11 @@ writes_to:
 > **Convention:** see [_brain-filing-rules.md](../_brain-filing-rules.md) —
 > output files under `concepts/` per the primary-subject rule.
 >
-> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
-> and [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
-> before/after rewriting canonical concept pages or the concept map.
+> **Convention:** before relationship frontmatter, run
+> `gbrain schema show --json`, use only declared `frontmatter_links`, and type
+> only evidenced material relationships. Run
+> [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
+> after rewriting canonical concept pages or the concept map.
 
 ## What this solves
 

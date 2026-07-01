@@ -9,15 +9,15 @@
 #   BRAIN_DIR      brain repo dir          (default: $HOME/brain)
 #   GBRAIN_SOURCE  source id               (default: default)
 #   EXEMPT_PAGES   space-sep people/<slug> that are timeline-CAPPED — owner +
-#                  recurring team: keep the forward `attended` edge, no reverse
+#                  recurring team: keep the typed `attended` edge, no
 #                  timeline line. (default: empty — i.e. no cap)
 #
 # Gates: file presence; frontmatter conformance (type/title/date/status/id:
 # <recorder>); two-layer structure (analysis above ---, transcript below);
-# people-only body links; EVERY attendee resolves + (non-exempt) back-links in
-# a dated ## Timeline entry; live-DB: page retrievable, attended edges MATCH the
-# Attendees line exactly, no meeting->company/contract edge, reverse backlinks
-# present (unless all attendees are capped).
+# attendees frontmatter; no body entity links; EVERY resolved attendee has
+# (non-exempt) back-links in a dated ## Timeline entry; live-DB: page retrievable,
+# incoming attended backlinks are person-only, no meeting->company/contract edge,
+# reverse backlinks present (unless all attendees are capped).
 #
 # NOTE: pipefail + `gbrain | grep -q` SIGPIPEs the live process -> false fail.
 # Always capture gbrain output into a var / use here-strings.
@@ -45,7 +45,8 @@ grep -q '^title:'                          <<<"$fm" && P "fm title"       || F "
 grep -q '^date:'                           <<<"$fm" && P "fm date"        || F "fm date missing"
 grep -qE '^status: (ingested|lean-ingest)' <<<"$fm" && P "fm status"      || F "fm status missing/invalid"
 grep -qE '^id: '                           <<<"$fm" && P "fm id (dedup hook)" || F "fm 'id:' dedup hook missing"
-grep -qE '^(attendees|source|duration_min|fireflies_id):' <<<"$fm" && printf '  \033[33mWARN\033[0m drop inert frontmatter key(s) (belong in body)\n' || P "fm minimal"
+grep -qE '^attendees:'                     <<<"$fm" && P "fm attendees (typed edge source)" || F "fm attendees missing"
+grep -qE '^(source|duration_min|fireflies_id):' <<<"$fm" && printf '  \033[33mWARN\033[0m drop inert frontmatter key(s) (belong in body)\n' || P "fm typed/minimal"
 mtitle="$(awk '/^title:/{sub(/^title:[[:space:]]*/,""); gsub(/^['\''\"]|['\''\"]$/,"",$0); print; exit}' <<<"$fm")"
 mdate="$(awk '/^date:/{sub(/^date:[[:space:]]*/,""); gsub(/^['\''\"]|['\''\"]$/,"",$0); print; exit}' <<<"$fm")"
 msource="[Source: Meeting \"$mtitle\", $mdate]"
@@ -60,9 +61,33 @@ grep -qiE '^## .*decision' <<<"$body" && P "decisions header"    || F "no ## Dec
 if grep -nE '(\[\[|\]\()(companies|contracts)/' "$file" >/dev/null; then
   F "meeting links company/contract (spurious 'attended' edge):"; grep -nE '(\[\[|\]\()(companies|contracts)/' "$file" | sed 's/^/      /'
 else P "no company/contract links (prose-only)"; fi
-grep -qE '\[\[people/|\]\(people/' "$file" && P "people links present" || F "no [[people/]] or [..](people/) links in body"
+if grep -nE '\[\[people/|\]\(people/' "$file" >/dev/null; then
+  F "meeting body links people; attendees belong in frontmatter:"; grep -nE '\[\[people/|\]\(people/' "$file" | sed 's/^/      /'
+else P "no body people links (attendees frontmatter-driven)"; fi
 
-for px in $(grep -oE '(\[\[|\]\()people/[a-z0-9-]+' "$file" | sed -E 's/^(\[\[|\]\()//' | sort -u); do
+dbpage="$(gb get "$mpath")"; [ -n "$dbpage" ] && P "DB: page retrievable" || F "DB: $mpath not retrievable"
+graphjson="$(gb graph "$mpath" --depth 1)"
+own="$(printf '%s' "$graphjson" | jq -r --arg s "$mpath" '.[]|select(.slug==$s)|.links[]?|.to_slug+" ("+.link_type+")"' 2>/dev/null)"
+bad="$(grep -E '^(people|companies|contracts)/' <<<"$own" || true)"
+[ -z "$bad" ] && P "DB: no outgoing meeting entity edges" || { F "DB: meeting has outgoing entity edge(s):"; sed 's/^/      /' <<<"$bad"; }
+bljson="$(gb backlinks "$mpath")"
+dbatt="$(printf '%s' "$bljson" | jq -r '.[]?|select(.link_type=="attended" and (.from_slug|startswith("people/")))|.from_slug' 2>/dev/null | sort -u)"
+badatt="$(printf '%s' "$bljson" | jq -r '.[]?|select(.link_type=="attended" and ((.from_slug|startswith("people/"))|not))|.from_slug+" ("+.link_type+")"' 2>/dev/null | sort -u)"
+[ -z "$badatt" ] && P "DB: attended backlinks people-only" || { F "DB: non-person attended backlink(s):"; sed 's/^/      /' <<<"$badatt"; }
+fm_att_count="$(awk '
+  /^attendees:[[:space:]]*$/ {in_att=1; next}
+  in_att && /^[^[:space:]-][^:]*:/ {exit}
+  in_att && /^[[:space:]]*-[[:space:]]*/ {c++}
+  END {print c+0}
+' <<<"$fm")"
+dbatt_count="$(printf '%s' "$dbatt" | grep -c . || true)"
+if [ "${fm_att_count:-0}" -gt 0 ] && [ "$dbatt_count" -eq "${fm_att_count:-0}" ]; then
+  P "DB: attended backlinks count matches frontmatter ($dbatt_count)"
+else
+  F "DB: attendee/frontmatter mismatch — frontmatter=${fm_att_count:-0} resolved_backlinks=$dbatt_count"
+fi
+
+for px in $dbatt; do
   pf="$BRAIN/$px.md"
   if [ ! -f "$pf" ]; then F "iron-law: $px page MISSING (dangling link)"; continue; fi
   if grep -qE '^_Source note: unless otherwise noted, this page is derived from ' "$pf"; then
@@ -81,19 +106,7 @@ done
 for ex in $EXEMPT_PAGES; do
   if grep -q "\[\[$mpath\]\]" "$BRAIN/$ex.md" 2>/dev/null; then F "cap: $ex has a per-meeting entry for $mpath (omit — reachable via attended back-links)"; else P "cap respected: $ex"; fi
 done
-
-dbpage="$(gb get "$mpath")"; [ -n "$dbpage" ] && P "DB: page retrievable" || F "DB: $mpath not retrievable"
-graphjson="$(gb graph "$mpath" --depth 1)"
-own="$(printf '%s' "$graphjson" | jq -r --arg s "$mpath" '.[]|select(.slug==$s)|.links[]?|.to_slug+" ("+.link_type+")"' 2>/dev/null)"
-bad="$(grep -E '^(companies|contracts)/' <<<"$own" || true)"
-[ -z "$bad" ] && P "DB: meeting edges people-only" || { F "DB: meeting has edge to company/contract:"; sed 's/^/      /' <<<"$bad"; }
-attline="$(grep -m1 '^\*\*Attendees:\*\*' "$file" | grep -oE 'people/[a-z0-9-]+' | sort -u)"
-dbatt="$(printf '%s' "$graphjson" | jq -r --arg s "$mpath" '.[]|select(.slug==$s)|.links[]?|select(.link_type=="attended" and (.to_slug|startswith("people/")))|.to_slug' 2>/dev/null | sort -u)"
-miss="$(comm -23 <(printf '%s' "$attline") <(printf '%s' "$dbatt") | grep . || true)"
-extra="$(comm -13 <(printf '%s' "$attline") <(printf '%s' "$dbatt") | grep . || true)"
-if [ -z "$miss" ] && [ -z "$extra" ] && [ -n "$dbatt" ]; then P "DB: attended edges match Attendees line ($(printf '%s' "$dbatt"|grep -c .))"
-else F "DB: attendee/edge mismatch — missing=[$(echo $miss)] spurious=[$(echo $extra)]"; fi
-bl="$(gb backlinks "$mpath" | jq -r '[.[]|select(.from_slug|startswith("people/")or startswith("companies/"))]|length' 2>/dev/null || echo 0)"
+bl="$(printf '%s' "$bljson" | jq -r '[.[]|select(.from_slug|startswith("people/")or startswith("companies/"))]|length' 2>/dev/null || echo 0)"
 nc=0; for px in $dbatt; do is_exempt "$px" || { nc=1; break; }; done
 if [ "${bl:-0}" -ge 1 ]; then P "DB: $bl incoming entity back-link(s) — traversable"
 elif [ "$nc" = 0 ]; then P "DB: all-capped attendees — no reverse back-links expected"

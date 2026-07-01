@@ -26,9 +26,11 @@ writes_to:
 
 > **Convention:** see [conventions/quality.md](../conventions/quality.md) for
 > citation rules, back-link enforcement, and exact-phrasing requirements.
-> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
-> before adding links. Voice-note pages preserve messy exact phrasing, but the
-> agent-authored analysis/links must still be graph-safe.
+> Voice-note pages preserve messy exact phrasing, but agent-authored links and
+> frontmatter must still be intentional. If adding relationship frontmatter, run
+> `gbrain schema show --json`, use only declared `frontmatter_links`, and type
+> only evidenced material relationships. Create minimal stubs only for material
+> entities that need to resolve.
 > **Convention:** see [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
 > after write/sync when the note creates or updates durable pages.
 >
@@ -65,11 +67,15 @@ Whisper by default; OpenAI fallback for audio > 25MB segmented via ffmpeg).
 4. WRITE       → Create / update the destination brain page; preserve the
                  verbatim transcript in a block-quoted "User's Words"
                  section.
-5. CROSS-LINK  → For notable entities, add intentional timeline/back-link
+5. CROSS-LINK  → For notable/material entities, add intentional timeline/back-link
                  references from THEIR brain page to THIS one (Iron Law per
-                 conventions/quality.md). Do not wikilink every name in the raw
+                 conventions/quality.md). Create a minimal stub when needed to
+                 resolve a material edge. Do not wikilink every name in the raw
                  transcript; the transcript is source material, not graph schema.
-6. RETRIEVE    → Run the smoke/entity gate. Exact voice-note wording should be
+6. GRAPH       → Inspect the write receipt (`auto_links.created/removed/errors/
+                 unresolved`) and graph-query high-value pages. Resolve or log
+                 unresolved frontmatter refs before reporting done.
+7. RETRIEVE    → Run the smoke/entity gate. Exact voice-note wording should be
                  findable for the idea, but raw catch-all voice-note pages
                  should not outrank canonical people/company/project pages for
                  broad queries.

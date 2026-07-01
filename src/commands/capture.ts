@@ -358,6 +358,7 @@ interface CaptureResult {
   path?: string;
   source_kind: string;
   captured_at: string;
+  auto_links?: unknown;
 }
 
 function printReceipt(result: CaptureResult, quiet: boolean, json: boolean): void {
@@ -526,6 +527,7 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
       status?: string;
       chunks?: number;
       write_through?: { written: boolean; path?: string };
+      auto_links?: unknown;
     }>(raw);
     const result: CaptureResult = {
       slug: remoteResult.slug,
@@ -540,6 +542,7 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
       // root cause of WARN-8's audit-trail labeling problem.
       source_kind: 'capture-cli',
       captured_at: capturedAt,
+      auto_links: remoteResult.auto_links,
     };
     printReceipt(result, parsed.quiet ?? false, parsed.json ?? false);
     return;
@@ -592,6 +595,7 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
       status?: string;
       chunks?: number;
       write_through?: { written: boolean; path?: string; skipped?: string };
+      auto_links?: unknown;
     };
     printReceipt(
       {
@@ -604,6 +608,7 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
         // CV3: source_kind is the channel taxonomy, NOT the DB source FK.
         source_kind: 'capture-cli',
         captured_at: capturedAt,
+        auto_links: result.auto_links,
       },
       parsed.quiet ?? false,
       parsed.json ?? false,

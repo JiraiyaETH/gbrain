@@ -21,9 +21,10 @@ mutating: true
 # Daily Task Manager
 
 > **Convention:** routine task-list edits usually do not need graph links. If a
-> task establishes a durable person/company/project relationship, follow
-> `skills/conventions/graph-safe-writing.md`; if the task page becomes a
-> meaningful retrieval surface, run the smoke gate in
+> task establishes a durable person/company/project relationship, run
+> `gbrain schema show --json` before relationship frontmatter and type only the
+> evidenced material relationship; if the task page becomes a meaningful
+> retrieval surface, run the smoke gate in
 > `skills/conventions/post-run-retrieval-gate.md`.
 
 ## Contract
