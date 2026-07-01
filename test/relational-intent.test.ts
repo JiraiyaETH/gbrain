@@ -67,6 +67,35 @@ describe('parseRelationalQuery — archetypes', () => {
     expect(r!.seeds).toEqual(['alice']);
     expect(r!.direction).toBe('out');
   });
+
+  test('local creator intersection: which creators worked with both X and Y', () => {
+    const r = parseRelationalQuery('Which creators worked with both INFINIT and Silo Finance?');
+    expect(r!.kind).toBe('connects');
+    expect(r!.seeds).toEqual(['INFINIT', 'Silo Finance']);
+    expect(r!.linkTypes).toEqual(['creator_for']);
+    expect(r!.direction).toBe('in');
+  });
+
+  test('local creator intersection: worked on X as well as Y', () => {
+    const r = parseRelationalQuery('Which KOLs worked on Nillion as well as INFINIT?');
+    expect(r!.kind).toBe('connects');
+    expect(r!.seeds).toEqual(['Nillion', 'INFINIT']);
+    expect(r!.linkTypes).toEqual(['creator_for']);
+    expect(r!.direction).toBe('in');
+  });
+
+  test('local TAP intersection appends Tailored seed', () => {
+    const r = parseRelationalQuery('Which io.net creators also signed Tailored TAP associate agreements?');
+    expect(r!.kind).toBe('connects');
+    expect(r!.seeds).toEqual(['io.net', 'Tailored']);
+    expect(r!.linkTypes).toEqual(['creator_for', 'associate_of']);
+    expect(r!.direction).toBe('in');
+  });
+
+  test('local vendor and contract verbs', () => {
+    expect(parseRelationalQuery('who provides services to Tailored')!.linkTypes).toEqual(['service_provider_for']);
+    expect(parseRelationalQuery('who signed contracts/tap/arndxt-873cd435')!.linkTypes).toEqual(['signed']);
+  });
 });
 
 describe('parseRelationalQuery — precision-first / no-match', () => {
@@ -122,6 +151,10 @@ describe('default bank emits only known link types (no drift)', () => {
       'who advises bob-example',
       'who works at acme',
       'who at acme leads payments',
+      'which creators worked with both infinit and ionet',
+      'which io.net creators also signed Tailored TAP associate agreements',
+      'who provides services to tailored',
+      'who signed contracts/tap/example',
       'what did alice invest in',
       'where does alice work',
     ];
