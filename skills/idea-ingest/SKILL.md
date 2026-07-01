@@ -36,7 +36,8 @@ writes_to:
 This skill guarantees:
 - Every ingested item has a brain page with genuine analysis (not just a summary)
 - The author gets a people page (MANDATORY for anyone whose thinking is worth ingesting)
-- Cross-links created bidirectionally (source ↔ author, source ↔ mentioned entities)
+- Cross-links created bidirectionally for material relationships (source ↔
+  author, source ↔ high-signal related entities)
 - Raw source preserved for provenance via `gbrain files upload-raw`
 - Every fact has an inline `[Source: ...]` citation
 - Filing follows primary subject rules (not format-based)
@@ -44,8 +45,12 @@ This skill guarantees:
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
 > Also read `skills/conventions/graph-safe-writing.md`: wikilinks and slug paths
 > are graph evidence, not decoration.
+> After write/sync, run `skills/conventions/post-run-retrieval-gate.md`; ingested
+> source pages should improve related retrieval without outranking canonical
+> person/company/project pages incorrectly.
 
-Every mention of a person or company with a brain page MUST create a back-link.
+Every material person/company relationship with a brain page MUST create a
+back-link. Incidental names and provenance-only references stay plain prose.
 Format: `- **YYYY-MM-DD** | Referenced in [page title](path) — brief context`
 
 ## Phases
@@ -67,8 +72,8 @@ Format: `- **YYYY-MM-DD** | Referenced in [page title](path) — brief context`
    - Raw data dump → `sources/`
 
    Keep links sparse and intentional. Link the author, primary source, and a
-   small set of high-signal related pages. Do not wikilink every mentioned entity
-   or every provenance slug in the body; source-only references can stay as
+   small set of high-signal related pages. Do not wikilink incidental names
+   or provenance slugs in the body; source-only references can stay as
    citation text. Strong typed edges (`advises`, `works_at`, `invested_in`, etc.)
    require clear local evidence, otherwise default to `mentions`.
 
@@ -83,6 +88,11 @@ Format: `- **YYYY-MM-DD** | Referenced in [page title](path) — brief context`
    or log unresolved links.
 
 7. **Sync.** `gbrain sync` to update the index.
+
+8. **Retrieval gate.** Run the smoke or entity gate. Verify the source is
+   discoverable for its specific topic, related canonical pages still outrank it
+   for identity/company queries, and the answer uses the source as evidence
+   rather than inventing unsupported conclusions.
 
 ## Output Format
 
@@ -112,5 +122,5 @@ Format: `- **YYYY-MM-DD** | Referenced in [page title](path) — brief context`
 - Just summarizing without connecting to brain knowledge
 - Filing everything in `sources/` (sources is for raw data dumps only)
 - Skipping the author people page
-- Not cross-linking to mentioned entities
+- Not cross-linking material entities and relationships
 - Ingesting without checking brain first for existing coverage

@@ -31,16 +31,20 @@ Ingest meetings, articles, media, documents, and conversations into the brain.
 ## Contract
 
 - Every fact written to a brain page carries an inline `[Source: ...]` citation with date and provenance.
-- Every entity mention creates a back-link from the entity's page to the page mentioning them (Iron Law).
+- Every material entity relationship creates a traversable back-link from the
+  entity's page to the page mentioning it (Iron Law, clarified by graph-safety).
 - Raw sources are preserved for provenance via `gbrain files upload-raw` with automatic size routing.
 - State sections are rewritten with current best understanding, never appended to.
 - Entity detection fires on every inbound message; notable entities get pages or updates.
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
+> **Convention:** See `skills/conventions/post-run-retrieval-gate.md` after
+> meaningful ingest writes; retrieval quality is part of the write contract.
 
-Every mention of a person or company with a brain page MUST create a back-link
-FROM that entity's page TO the page mentioning them. An unlinked mention is a
-broken brain. See `skills/_brain-filing-rules.md` for format.
+Every material person/company relationship with a brain page MUST have a
+back-link FROM that entity's page TO the page asserting the relationship.
+Incidental names and provenance-only references stay plain prose/citation text.
+See `skills/_brain-filing-rules.md` and `skills/conventions/graph-safe-writing.md`.
 
 ## Citation Requirements (MANDATORY)
 
@@ -71,11 +75,15 @@ Every fact written to a brain page must carry an inline `[Source: ...]` citation
 4. **Create cross-reference links.** Link only intended graph relationships. Do
    not create typed edges for every entity pair mentioned together; co-mentions
    are `mentions` / `relates_to` unless a clear relationship verb is evidenced.
-5. **Back-link all entities.** Update EVERY mentioned entity's page with a back-link to this page (Iron Law).
-6. **Timeline merge.** The same event appears on ALL mentioned entities' timelines. If Alice met Bob at Acme Corp, the event goes on Alice's page, Bob's page, and Acme Corp's page.
+5. **Back-link material entities.** Update each entity page whose relationship/event is worth traversing with a back-link to this page (Iron Law).
+6. **Timeline merge.** The same event appears on all material participants' timelines. If Alice met Bob at Acme Corp, the event goes on Alice's page, Bob's page, and Acme Corp's page; incidental names stay in prose.
 7. **Verify graph output.** Inspect the `auto_links` receipt from writes and run
    focused `gbrain graph-query` readbacks for high-value pages. Repair suspicious
    edge shapes before reporting done.
+8. **Verify retrieval output.** Run the smallest applicable post-run retrieval
+   gate. Direct identity/company queries should surface canonical pages; new
+   source, transcript, contract, or log pages should support answers without
+   outranking canonical pages unless specifically queried.
 
 ## Entity Detection on Every Message
 
@@ -151,18 +159,18 @@ about a company -> `companies/`, reusable framework -> `concepts/`, raw data -> 
 2. **Save raw transcript** (both JSON and human-readable TXT)
 3. Analyze: executive summary, key ideas, key quotes with speaker attribution,
    notable stories/anecdotes, people and companies mentioned
-4. Extract and cross-reference all entities mentioned
+4. Extract and cross-reference high-signal entities and relationships
 5. **HARD RULE:** every video/podcast brain page MUST link to the raw diarized
    transcript. A page without transcript links is incomplete.
 
-**Write to:** `media/videos/` or `media/podcasts/` with back-links to all entities.
+**Write to:** `media/videos/` or `media/podcasts/` with back-links to material entities.
 
 **Quality bar:**
 - Compelling headline (not "This video discusses...")
 - Executive summary that makes you want to watch/listen
 - Key Ideas as actual insights, not topic labels
 - Verbatim quotes with real speaker names (not "speaker_0")
-- All entities extracted with context and back-linked
+- High-signal entities extracted with context and back-linked
 
 ### PDFs & Documents
 
@@ -201,7 +209,8 @@ about a company -> `companies/`, reusable framework -> `concepts/`, raw data -> 
    - Update their brain page State section if new info surfaced
    - Append to their Timeline with link to the meeting page
    - Create page if person/company is notable and has no page yet
-5. A meeting is NOT fully ingested until all entity pages are updated
+5. A meeting is NOT fully ingested until all attendee pages and materially
+   discussed entity pages are updated
 
 **Write to:** `meetings/YYYY-MM-DD-short-description.md`
 
@@ -278,15 +287,20 @@ up 100 bad pages is enormous.
 - State section is REWRITTEN, not appended to. Current best understanding only.
 - Timeline entries are reverse-chronological (newest first)
 - Every person/company mentioned gets a page if notable (see filing rules)
-- Link types: knows, works_at, invested_in, founded, met_at, discussed
+- Link types come from the active schema. Prefer precise declared verbs such as
+  `attended`, `works_at`, `invested_in`, `founded`, `advises`, `creator_for`,
+  `service_provider_for`, `uses_vendor`, `sourced_from`, `mentions`, and
+  `relates_to`.
 - Source attribution: every timeline entry includes [Source: ...] citation
-- Back-links: every entity mention creates a back-link (Iron Law)
+- Back-links: every material entity relationship creates a back-link (Iron Law)
 - Filing: file by primary subject, not format or source (see filing rules)
 
 ## Anti-Patterns
 
 - **Appending to State sections.** State is rewritten with the current best understanding on every update. Append-only State sections grow stale and contradictory.
-- **Ingesting without back-links.** An unlinked mention is a broken brain. Every entity mentioned must have a back-link from their page to the page mentioning them.
+- **Ingesting without material back-links.** A material entity relationship with
+  no traversable back-link is a broken brain. Do not compensate by linking every
+  incidental name; that creates a broken graph.
 - **Skipping raw source preservation.** Every ingested item must have its raw source preserved. A brain page without provenance is unverifiable.
 - **Bulk processing without sample test.** Test on 3-5 items first. Fix quality issues in the approach, not via one-off patches.
 - **Paraphrasing the user's original thinking.** The user's exact language IS the insight. Capture verbatim phrasing for ideas, theses, and frameworks.

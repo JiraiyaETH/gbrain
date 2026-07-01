@@ -16,6 +16,11 @@ mutating: true
 
 # Migrate Skill
 
+> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
+> before converting source links to Brain links, and
+> [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
+> after sample and bulk imports.
+
 Universal migration from any wiki, note tool, or brain system into GBrain.
 
 ## Contract

@@ -14,6 +14,12 @@ writes_pages:
 
 # capture — the single ingestion entrypoint
 
+> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
+> and [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
+> when captured content names material people, companies, projects, or
+> relationships. `capture` resolves to `put_page`, so auto-link receipts and
+> retrieval smoke checks apply to meaningful captures.
+
 When the user wants to save a thought, an article snippet, a transcript
 fragment, or any text into their brain, run `gbrain capture`. Don't reach
 for `gbrain put` or commit-then-sync — `capture` is the front door and it

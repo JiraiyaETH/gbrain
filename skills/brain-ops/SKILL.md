@@ -38,6 +38,8 @@ flows through in both directions.
 > **Convention:** See `skills/conventions/quality.md` for citation and back-link rules.
 > See `skills/conventions/graph-safe-writing.md` before any Brain write that can
 > create links or typed edges.
+> After meaningful writes, run `skills/conventions/post-run-retrieval-gate.md`
+> so changed pages are findable and do not outrank canonical pages incorrectly.
 
 ## Contract
 
@@ -47,20 +49,23 @@ This skill guarantees:
 - Every outbound response checks brain for relevant context
 - Source attribution on every fact written (inline `[Source: ...]` citations)
 - User's direct statements are highest-authority data
-- Back-links maintained on every brain write (Iron Law)
+- Back-links maintained for material entity relationships on every brain write (Iron Law)
 
 ## Iron Law: Back-Linking (MANDATORY)
 
-Every mention of a person or company with a brain page MUST create a back-link
-FROM that entity's page TO the page mentioning them. An unlinked mention is a
-broken brain. See `skills/conventions/quality.md` for format.
+Every material relationship to a person or company with a brain page MUST create
+a traversable back-link FROM that entity's page TO the page establishing the
+relationship. Incidental names, examples, and provenance-only mentions stay plain
+prose/citation text. An unlinked material relationship is a broken brain; dense
+incidental links are a broken graph. See `skills/conventions/quality.md` for
+format.
 
 > **Downstream upgrade note — auto-link Iron Law qualification**
-> Auto-link satisfies the Iron Law for ordinary entity-reference links on every
-> `put_page`: the agent's job is to include resolvable page references in
-> markdown/frontmatter and verify the `auto_links` response. Manual `gbrain link`
-> / `add_link` calls are reserved for relationships that cannot be expressed in
-> page content, or for explicit repair/backfill work.
+> Auto-link satisfies the Iron Law for ordinary material entity-reference links
+> on every `put_page`: the agent's job is to include resolvable page references
+> in markdown/frontmatter and verify the `auto_links` response. Manual
+> `gbrain link` / `add_link` calls are reserved for relationships that cannot be
+> expressed in page content, or for explicit repair/backfill work.
 
 ## Phases
 
@@ -106,11 +111,16 @@ text unless traversal to that exact page is intended.
 - No manual `add_link` calls needed for ordinary page writes.
 - Inferred link types: `attended` (meeting -> person), `works_at`, `invested_in`,
   `founded`, `advises`, `source` (frontmatter), `mentions` (default).
+  Manual/domain-specific link types may include `creator_for`,
+  `service_provider_for`, `uses_vendor`, `sourced_from`, and `relates_to`
+  when the active schema declares them.
 - The `put_page` MCP response includes `auto_links: { created, removed, errors }`
   so the agent can verify outcomes.
 - Inspect `auto_links` after every link-producing write. Resolve or log
   `unresolved`; graph-query high-value pages; repair suspicious edge shapes before
   reporting the write done. See `skills/conventions/graph-safe-writing.md`.
+- After a meaningful write, run the smallest applicable post-run retrieval gate
+  from `skills/conventions/post-run-retrieval-gate.md` before reporting done.
 - To disable: `gbrain config set auto_link false`. Default is on.
 - Timeline entries with specific dates still need explicit `gbrain timeline-add`
   (or batch via `gbrain extract timeline --source db`).
