@@ -32,7 +32,7 @@ Ingest meetings, articles, media, documents, and conversations into the brain.
 
 - Every fact written to a brain page carries an inline `[Source: ...]` citation with date and provenance.
 - Every material entity relationship creates a traversable back-link from the
-  entity's page to the page mentioning it (Iron Law, clarified by graph-safety).
+  entity's page to the page mentioning it (Iron Law).
 - Raw sources are preserved for provenance via `gbrain files upload-raw` with automatic size routing.
 - State sections are rewritten with current best understanding, never appended to.
 - Entity detection fires on every inbound message; notable entities get pages or updates.
@@ -44,7 +44,7 @@ Ingest meetings, articles, media, documents, and conversations into the brain.
 Every material person/company relationship with a brain page MUST have a
 back-link FROM that entity's page TO the page asserting the relationship.
 Incidental names and provenance-only references stay plain prose/citation text.
-See `skills/_brain-filing-rules.md` and `skills/conventions/graph-safe-writing.md`.
+See `skills/_brain-filing-rules.md` and `skills/conventions/quality.md`.
 
 ## Citation Requirements (MANDATORY)
 
@@ -61,25 +61,29 @@ Every fact written to a brain page must carry an inline `[Source: ...]` citation
 
 > **Router note:** This skill is a router. For specialized ingestion, see: idea-ingest, media-ingest, meeting-ingestion.
 >
-> **Graph-safety:** Read `skills/conventions/graph-safe-writing.md` before any
-> specialized ingest writes pages. Wikilinks and slug paths are graph evidence,
-> not decoration. Strong typed edges require explicit relationship evidence;
-> otherwise use `mentions` / `relates_to` or plain prose.
+> **Schema-pack write rule:** Before any specialized ingest writes relationship
+> frontmatter, run `gbrain schema show --json` and use only fields declared in
+> `frontmatter_links` for that page type. Strong typed fields require explicit
+> local evidence and materiality; incidental co-mentions stay prose or weak
+> mentions. Create minimal `type` + `title` stubs for material entities that
+> need to resolve, then let `enrich` deepen them later.
 
 1. **Parse the source.** Extract people, companies, dates, and events from the input.
 2. **For each entity mentioned:**
    - Read the entity's page from gbrain to check if it exists
    - If exists: update compiled_truth (rewrite State section with new info, don't append)
-   - If new: check notability gate, then store the page in gbrain with the appropriate type and slug
+   - If new: check notability/materiality, then store a minimal stub or full page
+     in gbrain with the appropriate type and slug
 3. **Append to timeline.** Add a timeline entry in gbrain for each event, with date, summary, and source citation.
 4. **Create cross-reference links.** Link only intended graph relationships. Do
    not create typed edges for every entity pair mentioned together; co-mentions
    are `mentions` / `relates_to` unless a clear relationship verb is evidenced.
 5. **Back-link material entities.** Update each entity page whose relationship/event is worth traversing with a back-link to this page (Iron Law).
 6. **Timeline merge.** The same event appears on all material participants' timelines. If Alice met Bob at Acme Corp, the event goes on Alice's page, Bob's page, and Acme Corp's page; incidental names stay in prose.
-7. **Verify graph output.** Inspect the `auto_links` receipt from writes and run
-   focused `gbrain graph-query` readbacks for high-value pages. Repair suspicious
-   edge shapes before reporting done.
+7. **Verify graph output.** Inspect the `auto_links` receipt from writes,
+   especially `auto_links.unresolved`, and run focused `gbrain graph-query`
+   readbacks for high-value pages. Resolve or explicitly log unresolved
+   frontmatter names; repair suspicious edge shapes before reporting done.
 8. **Verify retrieval output.** Run the smallest applicable post-run retrieval
    gate. Direct identity/company queries should surface canonical pages; new
    source, transcript, contract, or log pages should support answers without

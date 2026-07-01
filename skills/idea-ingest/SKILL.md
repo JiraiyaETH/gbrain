@@ -43,8 +43,11 @@ This skill guarantees:
 - Filing follows primary subject rules (not format-based)
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
-> Also read `skills/conventions/graph-safe-writing.md`: wikilinks and slug paths
-> are graph evidence, not decoration.
+> Before writing relationship frontmatter, run `gbrain schema show --json`, use
+> only declared `frontmatter_links` for that page type, and author typed fields
+> only for evidenced material relationships. Incidental co-mentions stay as prose
+> or weak mentions; create minimal stubs only for material entities that need to
+> resolve.
 > After write/sync, run `skills/conventions/post-run-retrieval-gate.md`; ingested
 > source pages should improve related retrieval without outranking canonical
 > person/company/project pages incorrectly.
@@ -61,7 +64,9 @@ Format: `- **YYYY-MM-DD** | Referenced in [page title](path) — brief context`
 
 3. **Identify the author — MANDATORY people page.** Anyone whose thinking is worth ingesting is worth tracking.
    - Search brain for existing author page
-   - If no page → CREATE ONE with compiled truth + timeline format
+   - If no page → CREATE ONE. Use a minimal `type` + `title` stub when the
+     author is only needed to resolve the material author edge; use compiled
+     truth + timeline when there is enough evidence.
    - If page exists → update timeline with this new publication
    - Cross-link both directions
 
@@ -85,7 +90,7 @@ Format: `- **YYYY-MM-DD** | Referenced in [page title](path) — brief context`
 
 6. **Graph receipt.** Inspect `auto_links` from `put_page` and run a focused
    graph readback for the ingested page if it created strong typed edges. Resolve
-   or log unresolved links.
+   or log `auto_links.unresolved` entries before reporting done.
 
 7. **Sync.** `gbrain sync` to update the index.
 

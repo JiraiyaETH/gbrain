@@ -16,8 +16,9 @@ mutating: true
 
 # Migrate Skill
 
-> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
-> before converting source links to Brain links, and
+> **Convention:** before converting source links or relationship fields to Brain
+> links/frontmatter, run `gbrain schema show --json`, use only declared
+> `frontmatter_links`, and type only evidenced material relationships. Run
 > [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
 > after sample and bulk imports.
 

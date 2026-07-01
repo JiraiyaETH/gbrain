@@ -16,9 +16,10 @@ because this file ships in the skillpack to downstream installs.
 
 ## Timeline cap (owner + recurring internal team)
 High-frequency internal attendees — the owner and the people who attend most internal
-syncs — keep the forward `attended` edge (wikilink them in the body) but get **NO
-per-meeting reverse timeline line**: across hundreds of meetings their page would
-balloon, and their meetings are already reachable via `gbrain backlinks people/<x>`.
+syncs — keep the `person --attended--> meeting` edge from `attendees:` frontmatter
+but get **NO per-meeting timeline line**: across hundreds of meetings their page
+would balloon, and their meetings are already reachable via
+`gbrain graph people/<x> --depth 1`.
 - The own-company page: prose only, NO per-meeting timeline entry unless the meeting is
   materially about the company's own build/strategy.
 - EXTERNAL attendees (clients, founders, partners, KOLs) get **FULL** per-meeting
@@ -41,12 +42,11 @@ brain's owner doc; recurring team = the internal people who recur) and passes th
 - An AI/tool name that appears as a "speaker" is NOT a person — no page.
 - Canonical slugs: prefer the short canonical form; dedup against alias variants
   (second email, name-with-surname, handle) BEFORE creating a page.
-- **Edge model (decided, do NOT flip): keep `meeting --attended--> person`.** It lets a
-  meeting forward-traverse to its attendees, and onward to their company at 2 hops via
-  `works_at`. Relational-retrieval depth defaults to 2, so the company is reachable
-  without a direct edge. Do NOT mint a direct `meeting --> company` edge (auto-extract
-  types every wikilink target in a meeting body as `attended`, so only wikilink PEOPLE
-  in the body; companies/contracts go in prose by display name).
+- **Edge model (Garry-aligned): keep `person --attended--> meeting`.** Meeting
+  attendance comes from `attendees:` frontmatter, not body wikilinks. Do NOT mint
+  direct meeting-body edges to people, companies, or contracts; use display names in
+  prose. Material entity traversal comes from the typed attendance backlinks plus each
+  person's/company's own timeline links.
 
 ## Phase 7 — QA gate invocation (template)
 ```bash

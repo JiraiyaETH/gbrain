@@ -49,7 +49,7 @@ This skill guarantees:
 Every material person/company relationship with a brain page MUST have a
 traversable back-link. Incidental names, provenance-only source slugs, and
 low-signal co-mentions stay plain prose/citation text. See
-`skills/conventions/quality.md` and `skills/conventions/graph-safe-writing.md`.
+`skills/conventions/quality.md`.
 
 ## Philosophy
 
@@ -74,7 +74,7 @@ rehashes. Gold standard: `people/tory-green` (~1 citation per prose bullet, ~0.6
   specific `[Source: ...]` only for a single dated/quoted fact. NEVER stack 2-3 citations on one
   line; never repeat the same long source string clause-by-clause. **Granular dated citations live
   in the Timeline, not the prose** — the Timeline is the per-event ledger; the prose is synthesis.
-- **Edge budget — wikilink ENTITIES, not provenance** (per `conventions/graph-safe-writing.md`).
+- **Edge budget — wikilink ENTITIES, not provenance**.
   Wikilinks are graph evidence, not decoration. Wikilink the real relationships (`people/*` and
   `companies/*` in `## Network`, roster, party lines, and the entity itself) — each entity ONCE per
   section. Keep PROVENANCE as plain text — `[Source: Meeting "X", YYYY-MM-DD]`, NOT
@@ -312,17 +312,22 @@ Active items, pending decisions, things to track.
 - Update related project/deal pages if relevant context surfaced
 - Check index files if the brain uses them
 
-Apply `skills/conventions/graph-safe-writing.md`: decide the intended edge
-budget before writing. Enrichment pages can be dense; keep wikilinks to durable
-relationships, timeline targets, primary sources, and high-signal network nodes.
-Use prose/citation text for provenance-only slugs and incidental names.
+Decide the intended edge budget before writing. Enrichment pages can be dense;
+keep wikilinks to durable relationships, timeline targets, primary sources, and
+high-signal network nodes. Use prose/citation text for provenance-only slugs and
+incidental names. Before writing relationship frontmatter, run
+`gbrain schema show --json` and use only fields declared in `frontmatter_links`
+for the page type being written. Author typed fields only for material
+relationships with evidence. If a material entity is missing, create a minimal
+`type` + `title` stub so the edge resolves, then deepen it through enrichment.
 
 **Note (v0.10.1):** Links between brain pages are auto-created on every
-`put_page` call (auto-link post-hook). Step 7 authors graph-safe
+`put_page` call (auto-link post-hook). Step 7 authors schema-pack-aware
 cross-reference text; `put_page` / auto-link creates and reconciles the actual
 graph rows, including typed edges when the relationship evidence is clear. Do
 not manually spam `add_link` for ordinary enrichment links; do verify via the
-`auto_links` field in the put_page response (`{ created, removed, errors }`).
+`auto_links` field in the put_page response (`{ created, removed, unresolved,
+errors }`).
 Timeline entries still need explicit `gbrain timeline-add` calls.
 
 If `auto_links.created` includes unexpected strong typed edges, repair the page

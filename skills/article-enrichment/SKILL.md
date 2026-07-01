@@ -20,9 +20,11 @@ writes_to:
 
 > **Convention:** see [conventions/quality.md](../conventions/quality.md) for
 > citation rules, verbatim-quote requirements, and back-link enforcement.
-> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
-> before adding links. Article pages can mention many entities; link only the
-> author, primary subject, and high-signal related pages worth traversing.
+> Article pages can mention many entities; link only the author, primary subject,
+> and high-signal related pages worth traversing. If adding relationship
+> frontmatter, run `gbrain schema show --json`, use only declared
+> `frontmatter_links`, and type only evidenced material relationships. Create
+> minimal stubs only for material entities that need to resolve.
 > **Convention:** see [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
 > after enrichment. The article should become better supporting evidence, not
 > wrongly outrank canonical person/company/project pages.
@@ -69,7 +71,10 @@ original is never lost.
 6. CROSS-LINK→ Add back-links from material people/companies pages
                (Iron Law per conventions/quality.md). Keep incidental names
                as prose/citation text.
-7. RETRIEVE  → Run the smoke gate: the enriched article should surface for its
+7. GRAPH     → Inspect the `put_page` `auto_links` receipt, resolve or log
+               `auto_links.unresolved`, and run a focused graph readback when
+               relationship links/frontmatter changed.
+8. RETRIEVE  → Run the smoke gate: the enriched article should surface for its
                specific ideas, while canonical pages still win broad identity,
                company, or project queries.
 ```
@@ -92,6 +97,7 @@ gbrain get media/articles/<slug>
 
 # 4. Write the enriched page
 #    Use the put_page operation with the new structured markdown body.
+#    Inspect response.auto_links, including unresolved frontmatter refs.
 
 # 5. Cross-link entities
 #    For every material person/company relationship, add a timeline back-link.

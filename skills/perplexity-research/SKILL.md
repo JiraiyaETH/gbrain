@@ -27,10 +27,11 @@ writes_to:
 > context as part of the Perplexity prompt — the web search focuses on
 > the delta between brain knowledge and current web state.
 >
-> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
-> and [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
-> before/after writing research pages that mention material entities or
-> relationships.
+> **Convention:** before writing relationship frontmatter, run
+> `gbrain schema show --json`, use only declared `frontmatter_links`, and type
+> only evidenced material relationships. Then run
+> [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
+> after research pages that mention material entities or relationships.
 
 ## What this does
 
