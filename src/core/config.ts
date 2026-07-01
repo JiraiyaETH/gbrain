@@ -329,13 +329,18 @@ export interface GBrainConfig {
    *     layer-2 page-global keyword prior, which over-stamps invested_in on
    *     every company a non-investor links to. Links with no local verb fall
    *     through to 'mentions'.
+   *   - 'mentions-only' — skips BOTH layer 1 (per-edge verbs) AND layer 2
+   *     (page-global prior); every body wikilink → `mentions`. Typed edges come
+   *     only from STRUCTURE: frontmatter_links, the contract party-field parser,
+   *     `image_of`, and the `meeting → attended` page-type rule (all preserved).
+   *     A superset of `structured-first` for the contract parser + layer-2 skip.
    *
    * Default 'legacy' = byte-for-byte current behavior; opt in via DB plane
    * (`gbrain config set link_inference_mode structured-first`) or env override
    * (`GBRAIN_LINK_INFERENCE_MODE=structured-first`). Read once per extract run
    * (see isStructuredFirstInferenceEnabled in link-extraction.ts), never per-link.
    */
-  link_inference_mode?: 'legacy' | 'structured-first';
+  link_inference_mode?: 'legacy' | 'structured-first' | 'mentions-only';
 
   /**
    * PR1 — MCP skill-catalog publishing. Lets a thin MCP client (Codex desktop,

@@ -9,6 +9,9 @@ import {
   makeResolver,
   parseTimelineEntries,
   isAutoLinkEnabled,
+  resolveLinkInferenceMode,
+  isStructuredFirstInferenceEnabled,
+  isMentionsOnlyInferenceEnabled,
   FRONTMATTER_LINK_MAP,
   type SlugResolver,
 } from '../src/core/link-extraction.ts';
@@ -877,6 +880,164 @@ describe('extractPageLinks — contract-structured edges', () => {
       allowAllResolver, { structuredFirst: true },
     );
     expect(candidates.every(c => c.linkType === 'mentions')).toBe(true);
+  });
+});
+
+// ─── link_inference_mode: mentions-only ────────────────────────
+//
+// 'mentions-only' skips BOTH prose layers in inferLinkType (layer 1 per-edge
+// verbs + layer 2 page-global prior) so every body wikilink → 'mentions'.
+// Deterministic page-type rules (media/image/meeting) and all STRUCTURED
+// typing (contract party parser, frontmatter_links) are preserved.
+describe('link_inference_mode: mentions-only', () => {
+  // 1. Layer-1 per-edge verbs are all suppressed under mentionsOnly (in legacy
+  //    each of these returns its typed edge).
+  test('inferLinkType: founded prose → mentions (legacy: founded)', () => {
+    // sanity: legacy still types it
+    expect(inferLinkType('person', 'founded Acme Corp', undefined, 'companies/acme')).toBe('founded');
+    expect(
+      inferLinkType('person', 'founded Acme Corp', undefined, 'companies/acme', undefined, /*structuredFirst*/true, /*mentionsOnly*/true),
+    ).toBe('mentions');
+  });
+
+  test('inferLinkType: invested prose → mentions (legacy: invested_in)', () => {
+    expect(inferLinkType('person', 'invested in Acme Corp', undefined, 'companies/acme')).toBe('invested_in');
+    expect(
+      inferLinkType('person', 'invested in Acme Corp', undefined, 'companies/acme', undefined, true, true),
+    ).toBe('mentions');
+  });
+
+  test('inferLinkType: advises prose → mentions (legacy: advises)', () => {
+    expect(inferLinkType('person', 'advises Acme Corp', undefined, 'companies/acme')).toBe('advises');
+    expect(
+      inferLinkType('person', 'advises Acme Corp', undefined, 'companies/acme', undefined, true, true),
+    ).toBe('mentions');
+  });
+
+  test('inferLinkType: works_at prose → mentions (legacy: works_at)', () => {
+    expect(inferLinkType('person', 'works at Acme Corp', undefined, 'companies/acme')).toBe('works_at');
+    expect(
+      inferLinkType('person', 'works at Acme Corp', undefined, 'companies/acme', undefined, true, true),
+    ).toBe('mentions');
+  });
+
+  // 2. Deterministic page-type rules STILL fire under mentionsOnly — they are
+  //    structural, not prose inference.
+  test('inferLinkType: meeting page-type rule still fires → attended', () => {
+    expect(inferLinkType('meeting', 'anything', undefined, 'people/x', undefined, true, true)).toBe('attended');
+  });
+
+  test('inferLinkType: media page-type rule still fires → mentions (even with founded prose)', () => {
+    expect(inferLinkType('media', 'founded X', undefined, 'companies/x', undefined, true, true)).toBe('mentions');
+  });
+
+  test('inferLinkType: image page-type rule still fires → image_of', () => {
+    expect(inferLinkType('image' as never, 'x', undefined, 'meetings/y', undefined, true, true)).toBe('image_of');
+  });
+
+  // 3. extractPageLinks integration (acceptance case): a person page whose body
+  //    has founded-by prose next to a [[company]] wikilink.
+  test('extractPageLinks: founded prose + [[company]] → mentions under mentionsOnly (acceptance)', async () => {
+    const BODY = 'She founded [[companies/acme]] in 2019.';
+    const mo = await extractPageLinks(
+      'people/jane', BODY, { type: 'person' }, 'person', allowAllResolver,
+      { structuredFirst: true, mentionsOnly: true },
+    );
+    const acmeMo = mo.candidates.find(c => c.targetSlug === 'companies/acme');
+    expect(acmeMo).toBeDefined();
+    expect(acmeMo!.linkType).toBe('mentions');
+
+    // Default opts (legacy) type the same edge as 'founded'.
+    const legacy = await extractPageLinks(
+      'people/jane', BODY, { type: 'person' }, 'person', allowAllResolver,
+    );
+    const acmeLegacy = legacy.candidates.find(c => c.targetSlug === 'companies/acme');
+    expect(acmeLegacy).toBeDefined();
+    expect(acmeLegacy!.linkType).toBe('founded');
+  });
+
+  // 4. Structured typing UNCHANGED under mentionsOnly.
+  //    (a) contract party parser emits the SAME typed edges with or without
+  //        mentionsOnly (the parser is gated on structuredFirst, not mentionsOnly).
+  const CONTRACT_BODY = [
+    '# Jordi — Theo Network KOL campaign',
+    '',
+    '**Agreement:** [[companies/tailored]] ⇄ Jordi (creator) — a Tailored-run KOL collaboration.',
+    '',
+    '**Creator:** [[people/jordi]]   ·   **Client:** [[companies/theo-network]]',
+  ].join('\n');
+
+  test('extractPageLinks: contract party parser typed edges unchanged under mentionsOnly', async () => {
+    const withMo = await extractPageLinks(
+      'contracts/theo/jordi-6df2021e', CONTRACT_BODY, { type: 'contract', subtype: 'kol-agreement' },
+      'contract', allowAllResolver, { structuredFirst: true, mentionsOnly: true },
+    );
+    const withoutMo = await extractPageLinks(
+      'contracts/theo/jordi-6df2021e', CONTRACT_BODY, { type: 'contract', subtype: 'kol-agreement' },
+      'contract', allowAllResolver, { structuredFirst: true },
+    );
+    const typed = (r: typeof withMo) => r.candidates
+      .filter(c => c.linkType !== 'mentions')
+      .map(c => `${c.fromSlug ?? ''}|${c.linkType}|${c.targetSlug}`)
+      .sort();
+    // Same creator_for + signed edges either way.
+    expect(typed(withMo)).toEqual(typed(withoutMo));
+    expect(typed(withMo)).toContain('people/jordi|creator_for|companies/theo-network');
+    expect(typed(withMo)).toContain('people/jordi|signed|contracts/theo/jordi-6df2021e');
+  });
+
+  //    (b) a frontmatter company: field on a person page still emits works_at.
+  test('extractPageLinks: frontmatter company: → works_at under mentionsOnly', async () => {
+    const { candidates } = await extractPageLinks(
+      'people/alice', 'Alice does stuff.', { type: 'person', company: 'companies/acme' },
+      'person', allowAllResolver,
+      { skipFrontmatter: false, structuredFirst: true, mentionsOnly: true },
+    );
+    const wa = candidates.find(c => c.linkType === 'works_at' && c.targetSlug === 'companies/acme');
+    expect(wa).toBeDefined();
+  });
+
+  // 5. Resolver unit tests: env override → mode + derived booleans.
+  test('resolveLinkInferenceMode: env "mentions-only" → mentions-only + both booleans true', async () => {
+    const engine = makeFakeEngine(new Map());
+    const prev = process.env.GBRAIN_LINK_INFERENCE_MODE;
+    process.env.GBRAIN_LINK_INFERENCE_MODE = 'mentions-only';
+    try {
+      expect(await resolveLinkInferenceMode(engine)).toBe('mentions-only');
+      expect(await isStructuredFirstInferenceEnabled(engine)).toBe(true);
+      expect(await isMentionsOnlyInferenceEnabled(engine)).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.GBRAIN_LINK_INFERENCE_MODE;
+      else process.env.GBRAIN_LINK_INFERENCE_MODE = prev;
+    }
+  });
+
+  test('resolveLinkInferenceMode: env "structured-first" → structuredFirst true, mentionsOnly false', async () => {
+    const engine = makeFakeEngine(new Map());
+    const prev = process.env.GBRAIN_LINK_INFERENCE_MODE;
+    process.env.GBRAIN_LINK_INFERENCE_MODE = 'structured-first';
+    try {
+      expect(await resolveLinkInferenceMode(engine)).toBe('structured-first');
+      expect(await isStructuredFirstInferenceEnabled(engine)).toBe(true);
+      expect(await isMentionsOnlyInferenceEnabled(engine)).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.GBRAIN_LINK_INFERENCE_MODE;
+      else process.env.GBRAIN_LINK_INFERENCE_MODE = prev;
+    }
+  });
+
+  test('resolveLinkInferenceMode: unknown value "bogus" → legacy, both booleans false', async () => {
+    const engine = makeFakeEngine(new Map());
+    const prev = process.env.GBRAIN_LINK_INFERENCE_MODE;
+    process.env.GBRAIN_LINK_INFERENCE_MODE = 'bogus';
+    try {
+      expect(await resolveLinkInferenceMode(engine)).toBe('legacy');
+      expect(await isStructuredFirstInferenceEnabled(engine)).toBe(false);
+      expect(await isMentionsOnlyInferenceEnabled(engine)).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.GBRAIN_LINK_INFERENCE_MODE;
+      else process.env.GBRAIN_LINK_INFERENCE_MODE = prev;
+    }
   });
 });
 
