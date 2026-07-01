@@ -1,0 +1,15 @@
+{
+  "registry_version": "1.0",
+  "approved_sources": [],
+  "claims": [
+    {
+      "claim_id": "C1",
+      "claim": "",
+      "approved_source_ids": [],
+      "citation_status": "approved|hypothesis_only|rejected",
+      "reason": ""
+    }
+  ],
+  "rejected_claims": [],
+  "auditor_notes": ""
+}

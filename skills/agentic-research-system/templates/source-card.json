@@ -1,0 +1,16 @@
+{
+  "source_id": "S1",
+  "title": "",
+  "url_or_slug": "",
+  "source_class": "official|docs|paper|benchmark|expert_blog|media|social|forum|vendor|unknown|brain",
+  "authority": "primary|secondary|tertiary",
+  "published_or_updated": "YYYY-MM-DD|unknown",
+  "accessed": "YYYY-MM-DD",
+  "why_included": "",
+  "key_quotes": [],
+  "claims_extracted": [],
+  "bias_or_incentive_notes": "",
+  "freshness_notes": "",
+  "can_support_final_claims": true,
+  "requires_corrobation_for": []
+}
