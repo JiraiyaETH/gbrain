@@ -13,6 +13,7 @@
 
 import type { BrainEngine } from './engine.ts';
 import type { PageType } from './types.ts';
+import type { SchemaPackManifest } from './schema-pack/manifest-v1.ts';
 import { ensureWellFormed } from './text-safe.ts';
 
 /**
@@ -709,7 +710,12 @@ export async function extractPageLinks(
   frontmatter: Record<string, unknown>,
   pageType: PageType,
   resolver: SlugResolver,
-  opts: { globalBasename?: boolean; skipFrontmatter?: boolean; structuredFirst?: boolean } = {},
+  opts: {
+    globalBasename?: boolean;
+    skipFrontmatter?: boolean;
+    structuredFirst?: boolean;
+    frontmatterMappings?: FrontmatterFieldMapping[];
+  } = {},
 ): Promise<PageLinksResult> {
   const candidates: LinkCandidate[] = [];
   // Link-type inference mode (config `link_inference_mode`). Read once by the
@@ -846,7 +852,13 @@ export async function extractPageLinks(
   // path needed `resolveBasenameMatches` on the real resolver.
   let fmUnresolved: UnresolvedFrontmatterRef[] = [];
   if (!opts.skipFrontmatter) {
-    const fm = await extractFrontmatterLinks(slug, pageType, frontmatter, resolver);
+    const fm = await extractFrontmatterLinks(
+      slug,
+      pageType,
+      frontmatter,
+      resolver,
+      opts.frontmatterMappings,
+    );
     candidates.push(...fm.candidates);
     fmUnresolved = fm.unresolved;
   }
@@ -1185,6 +1197,42 @@ export const FRONTMATTER_LINK_MAP: FrontmatterFieldMapping[] = [
   { fields: ['related', 'see_also'], type: 'related_to', direction: 'outgoing', dirHint: '' },
 ];
 
+/**
+ * Convert active schema-pack frontmatter_links into extractor mappings.
+ *
+ * Pack entries are the global contract agents should follow. Older packs only
+ * know page_type/fields/link_type, so legacy entries with the same page_type +
+ * link_type provide direction/dirHint for backward compatibility. New pack-only
+ * entries must declare direction + dir_hint; otherwise emitting an edge would
+ * guess graph direction, which is worse than skipping the field.
+ */
+export function frontmatterMappingsFromPack(
+  pack: Pick<SchemaPackManifest, 'frontmatter_links'> | null | undefined,
+): FrontmatterFieldMapping[] {
+  if (!pack || pack.frontmatter_links.length === 0) return FRONTMATTER_LINK_MAP;
+
+  const out: FrontmatterFieldMapping[] = [];
+  for (const fl of pack.frontmatter_links) {
+    const inherited = FRONTMATTER_LINK_MAP.find(m =>
+      m.pageType === fl.page_type
+      && m.type === fl.link_type
+      && fl.fields.every(field => m.fields.includes(field)),
+    );
+    const direction = fl.direction ?? inherited?.direction;
+    const dirHint = fl.dir_hint ?? inherited?.dirHint;
+    if (!direction || dirHint === undefined) continue;
+    out.push({
+      fields: fl.fields,
+      pageType: fl.page_type,
+      type: fl.link_type,
+      direction,
+      dirHint,
+    });
+  }
+
+  return out.length > 0 ? out : FRONTMATTER_LINK_MAP;
+}
+
 // ─── Slug resolver ──────────────────────────────────────────────
 
 export interface SlugResolver {
@@ -1417,11 +1465,12 @@ export async function extractFrontmatterLinks(
   pageType: PageType,
   frontmatter: Record<string, unknown>,
   resolver: SlugResolver,
+  mappings: FrontmatterFieldMapping[] = FRONTMATTER_LINK_MAP,
 ): Promise<FrontmatterExtractResult> {
   const candidates: LinkCandidate[] = [];
   const unresolved: UnresolvedFrontmatterRef[] = [];
 
-  for (const mapping of FRONTMATTER_LINK_MAP) {
+  for (const mapping of mappings) {
     if (mapping.pageType && mapping.pageType !== pageType) continue;
     for (const field of mapping.fields) {
       const value = frontmatter[field];

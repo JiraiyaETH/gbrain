@@ -72,6 +72,19 @@ export const KNOWN_LINK_TYPES: ReadonlySet<string> = new Set([
   'advises',
   'works_at',
   'attended',
+  'creator_for',
+  'signed',
+  'service_provider_for',
+  'uses_vendor',
+  'associate_of',
+  'same_day_log',
+  'sourced_from',
+  'derived_from',
+  'supersedes',
+  'redirects_to',
+  'represents',
+  'built_on',
+  'collaborated_with',
   'yc_partner',
   'led_round',
   'mentions',
@@ -97,6 +110,8 @@ interface CompiledPattern {
   direction: RelationDirection;
   /** Number of seed capture groups (1, or 2 for connects). */
   seedGroups: 1 | 2;
+  /** Static seed phrases appended after captured seeds. */
+  extraSeeds?: string[];
 }
 
 // Bounded seed capture: 1–80 chars, lazy, so the trailing anchor decides the
@@ -111,6 +126,11 @@ const WHO_REL_VERBS: Array<{ verb: string; linkTypes: string[]; direction: Relat
   { verb: 'advises|advised', linkTypes: ['advises'], direction: 'in' },
   { verb: 'works at|worked at|works for', linkTypes: ['works_at'], direction: 'in' },
   { verb: 'attended', linkTypes: ['attended'], direction: 'in' },
+  { verb: 'created for|creates for|worked on|worked with|was a creator for|were creators for', linkTypes: ['creator_for'], direction: 'in' },
+  { verb: 'signed|signed with|was a signer on|were signers on', linkTypes: ['signed'], direction: 'in' },
+  { verb: 'provides services to|provided services to|is a service provider for|was a service provider for', linkTypes: ['service_provider_for'], direction: 'in' },
+  { verb: 'uses as vendor|used as vendor|uses vendor|used vendor', linkTypes: ['uses_vendor'], direction: 'out' },
+  { verb: 'is an associate of|are associates of|associated with', linkTypes: ['associate_of'], direction: 'in' },
 ];
 
 function buildPatterns(vocab?: RelationVocab): CompiledPattern[] {
@@ -130,6 +150,27 @@ function buildPatterns(vocab?: RelationVocab): CompiledPattern[] {
       'i',
     ),
     kind: 'connects', linkTypes: null, direction: 'both', seedGroups: 2,
+  });
+  patterns.push({
+    re: new RegExp(
+      `\\bwhich\\s+(?:creators?|kols?)\\s+(?:worked|work|created|create)\\s+(?:on|with|for)\\s+both\\s+${SEED}\\s+(?:and|&)\\s+${SEED}\\s*\\??$`,
+      'i',
+    ),
+    kind: 'connects', linkTypes: ['creator_for'], direction: 'in', seedGroups: 2,
+  });
+  patterns.push({
+    re: new RegExp(
+      `\\bwhich\\s+(?:creators?|kols?)\\s+(?:worked|work|created|create)\\s+(?:on|with|for)\\s+${SEED}\\s+(?:as well as|and|&)\\s+${SEED}\\s*\\??$`,
+      'i',
+    ),
+    kind: 'connects', linkTypes: ['creator_for'], direction: 'in', seedGroups: 2,
+  });
+  patterns.push({
+    re: new RegExp(
+      `\\bwhich\\s+${SEED}\\s+(?:creators?|kols?)\\s+also\\s+signed\\s+tailored\\s+tap\\s+associate\\s+agreements?\\s*\\??$`,
+      'i',
+    ),
+    kind: 'connects', linkTypes: ['creator_for', 'associate_of'], direction: 'in', seedGroups: 1, extraSeeds: ['Tailored'],
   });
 
   // intro — type-agnostic walk around the named person (no `introduced` edge).
@@ -236,7 +277,7 @@ export function parseRelationalQuery(query: string, vocab?: RelationVocab): Rela
 
     const seed = cleanSeed(m[1] ?? '');
     if (!validSeed(seed)) continue;
-    return { kind: p.kind, seeds: [seed], linkTypes: p.linkTypes, direction: p.direction, relationPhrase: m[0].trim() };
+    return { kind: p.kind, seeds: [seed, ...(p.extraSeeds ?? [])], linkTypes: p.linkTypes, direction: p.direction, relationPhrase: m[0].trim() };
   }
 
   return null;

@@ -35,12 +35,13 @@ import type { BrainEngine, LinkBatchInput, TimelineBatchInput } from '../core/en
 import type { PageType } from '../core/types.ts';
 import { parseMarkdown } from '../core/markdown.ts';
 import {
-  extractPageLinks, parseTimelineEntries, inferLinkType, makeResolver,
+  extractPageLinks, frontmatterMappingsFromPack, parseTimelineEntries, inferLinkType, makeResolver,
   isGlobalBasenameEnabled, isStructuredFirstInferenceEnabled, LINK_EXTRACTOR_VERSION_TS,
   WIKILINK_BASENAME_LINK_TYPE,
   buildBasenameIndex, queryBasenameIndex, stripCodeBlocks,
   type UnresolvedFrontmatterRef, type LinkCandidate,
 } from '../core/link-extraction.ts';
+import { loadActivePackBestEffort } from '../core/schema-pack/best-effort.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
 import { pathToSlug, pruneDir, isSyncable } from '../core/sync.ts';
@@ -135,6 +136,15 @@ export function resolveCandidateSources(
     return null;
   }
   return { fromSlug, fromSourceId, toSourceId };
+}
+
+async function loadFrontmatterMappings(engine: BrainEngine, sourceId?: string) {
+  const pack = await loadActivePackBestEffort({
+    engine,
+    remote: false,
+    sourceId,
+  } as never);
+  return frontmatterMappingsFromPack(pack?.manifest);
 }
 
 // isRetryableConnError reference retained for any inline classification at
@@ -1371,6 +1381,7 @@ async function extractLinksFromDB(
   // link_inference_mode: opt-in 'structured-first' inference. Read once per
   // extract run; threaded into each extractPageLinks call.
   const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
+  const frontmatterMappings = await loadFrontmatterMappings(engine, sourceIdFilter);
   // v0.32.8: listAllPageRefs enumerates (slug, source_id) so we can thread
   // sourceId to getPage AND build a cross-source resolution map for link
   // disambiguation. Pre-fix used getAllSlugs() which collapsed
@@ -1451,7 +1462,7 @@ async function extractLinksFromDB(
     // basename lookup; off by default for back-compat.
     const extracted = await extractPageLinks(
       slug, fullContent, page.frontmatter, page.type, resolver,
-      { skipFrontmatter: !includeFrontmatter, globalBasename, structuredFirst },
+      { skipFrontmatter: !includeFrontmatter, globalBasename, structuredFirst, frontmatterMappings },
     );
     unresolved.push(...extracted.unresolved);
 
@@ -1680,6 +1691,7 @@ async function extractStaleFromDB(
   // link_inference_mode: read once before the stale loop, threaded into each
   // extractPageLinks call. Off by default (legacy layer-2 prior intact).
   const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
+  const frontmatterMappings = await loadFrontmatterMappings(engine, sourceIdFilter);
   const allRefs = await engine.listAllPageRefs();
   const allSlugs = new Set<string>();
   const slugToSources = new Map<string, string[]>();
@@ -1712,7 +1724,7 @@ async function extractStaleFromDB(
       const fullContent = page.compiled_truth + '\n' + page.timeline;
       const extracted = await extractPageLinks(
         page.slug, fullContent, page.frontmatter, page.type, activeResolver,
-        { structuredFirst },
+        { structuredFirst, skipFrontmatter: !includeFrontmatter, frontmatterMappings },
       );
       for (const c of extracted.candidates) {
         const r = resolveCandidateSources(c, page.slug, page.source_id, allSlugs, slugToSources);
