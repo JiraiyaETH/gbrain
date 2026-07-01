@@ -36,7 +36,7 @@ import type { PageType } from '../core/types.ts';
 import { parseMarkdown } from '../core/markdown.ts';
 import {
   extractPageLinks, frontmatterMappingsFromPack, parseTimelineEntries, inferLinkType, makeResolver,
-  isGlobalBasenameEnabled, isStructuredFirstInferenceEnabled, LINK_EXTRACTOR_VERSION_TS,
+  isGlobalBasenameEnabled, resolveLinkInferenceMode, LINK_EXTRACTOR_VERSION_TS,
   WIKILINK_BASENAME_LINK_TYPE,
   buildBasenameIndex, queryBasenameIndex, stripCodeBlocks,
   type UnresolvedFrontmatterRef, type LinkCandidate,
@@ -361,7 +361,7 @@ function excerptForInference(s: string, idx: number, width: number): string {
  */
 export async function extractLinksFromFile(
   content: string, relPath: string, allSlugs: Set<string>,
-  opts?: { includeFrontmatter?: boolean; globalBasename?: boolean; structuredFirst?: boolean },
+  opts?: { includeFrontmatter?: boolean; globalBasename?: boolean; structuredFirst?: boolean; mentionsOnly?: boolean },
 ): Promise<ExtractedLink[]> {
   const links: ExtractedLink[] = [];
   const slug = pathToSlug(relPath);
@@ -376,6 +376,9 @@ export async function extractLinksFromFile(
   // link_inference_mode: opt-in 'structured-first' suppresses the layer-2
   // page-global role-keyword prior in inferLinkType. Off by default.
   const structuredFirst = opts?.structuredFirst ?? false;
+  // link_inference_mode: 'mentions-only' suppresses BOTH prose layers in
+  // inferLinkType so every body wikilink → 'mentions'. Off by default.
+  const mentionsOnly = opts?.mentionsOnly ?? false;
   const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
   const fsResolver = {
     async resolve(name: string, dirHint?: string | string[]): Promise<string | null> {
@@ -408,7 +411,7 @@ export async function extractLinksFromFile(
 
   const extracted = await extractPageLinks(
     slug, bodyContent, frontmatterForLinks, parsed.type, fsResolver,
-    { skipFrontmatter: !opts?.includeFrontmatter, globalBasename, structuredFirst },
+    { skipFrontmatter: !opts?.includeFrontmatter, globalBasename, structuredFirst, mentionsOnly },
   );
   for (const c of extracted.candidates) {
     pushLink({
@@ -446,7 +449,7 @@ export async function extractLinksFromFile(
         to_slug: target,
         link_type: isBasename
           ? WIKILINK_BASENAME_LINK_TYPE
-          : inferLinkType(parsed.type, context, bodyContent, target, parsed.title, structuredFirst),
+          : inferLinkType(parsed.type, context, bodyContent, target, parsed.title, structuredFirst, mentionsOnly),
         context,
         // Issue #972: tag basename edges so the FS path matches DB/put_page
         // provenance and migration v112's widened CHECK is exercised here too.
@@ -962,7 +965,9 @@ async function extractForSlugs(
   // Issue #972: read the basename flag once per extract run.
   const globalBasename = await isGlobalBasenameEnabled(engine);
   // link_inference_mode: read once per run, threaded into each extract call.
-  const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
+  const inferenceMode = await resolveLinkInferenceMode(engine);
+  const structuredFirst = inferenceMode !== 'legacy';
+  const mentionsOnly = inferenceMode === 'mentions-only';
 
   const linkBatch: LinkBatchInput[] = [];
   const timelineBatch: TimelineBatchInput[] = [];
@@ -1020,7 +1025,7 @@ async function extractForSlugs(
         const content = readFileSync(fullPath, 'utf-8');
 
         if (doLinks) {
-          const links = await extractLinksFromFile(content, relPath, allSlugs, { globalBasename, structuredFirst });
+          const links = await extractLinksFromFile(content, relPath, allSlugs, { globalBasename, structuredFirst, mentionsOnly });
           for (const link of links) {
             if (dryRun) {
               if (!jsonMode) console.log(`  ${link.from_slug} → ${link.to_slug} (${link.link_type})`);
@@ -1077,7 +1082,9 @@ async function extractLinksFromDir(
   // match for bare wikilinks like `[[struktura]]`.
   const globalBasename = await isGlobalBasenameEnabled(engine);
   // link_inference_mode: read once before the walk, threaded per file.
-  const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
+  const inferenceMode = await resolveLinkInferenceMode(engine);
+  const structuredFirst = inferenceMode !== 'legacy';
+  const mentionsOnly = inferenceMode === 'mentions-only';
 
   // Progress stream on stderr (separate from the action-events --json writes
   // to stdout, which tests grep for). Rate-gated; respects global --quiet /
@@ -1117,7 +1124,7 @@ async function extractLinksFromDir(
       if (isAborted(signal)) return;
       try {
         const content = readFileSync(file.path, 'utf-8');
-        const links = await extractLinksFromFile(content, file.relPath, allSlugs, { globalBasename, structuredFirst });
+        const links = await extractLinksFromFile(content, file.relPath, allSlugs, { globalBasename, structuredFirst, mentionsOnly });
         for (const link of links) {
           if (dryRunSeen) {
             const key = `${link.from_slug}::${link.to_slug}::${link.link_type}`;
@@ -1233,14 +1240,16 @@ export async function extractLinksForSlugs(
   // Issue #972: same flag as the standalone extract path.
   const globalBasename = await isGlobalBasenameEnabled(engine);
   // link_inference_mode: same opt-in flag as the standalone extract path.
-  const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
+  const inferenceMode = await resolveLinkInferenceMode(engine);
+  const structuredFirst = inferenceMode !== 'legacy';
+  const mentionsOnly = inferenceMode === 'mentions-only';
   let created = 0;
   for (const slug of slugs) {
     const filePath = join(repoPath, slug + '.md');
     if (!existsSync(filePath)) continue;
     try {
       const content = readFileSync(filePath, 'utf-8');
-      for (const link of await extractLinksFromFile(content, slug + '.md', allSlugs, { globalBasename, structuredFirst })) {
+      for (const link of await extractLinksFromFile(content, slug + '.md', allSlugs, { globalBasename, structuredFirst, mentionsOnly })) {
         try { await engine.addLink(link.from_slug, link.to_slug, link.context, link.link_type, link.link_source, undefined, undefined, linkOpts); created++; } catch { /* skip */ } // gbrain-allow-direct-insert: gbrain extract single-row fallback when batch path declines a row
       }
     } catch { /* skip */ }
@@ -1312,7 +1321,9 @@ async function extractLinksFromDB(
   const globalBasename = await isGlobalBasenameEnabled(engine);
   // link_inference_mode: opt-in 'structured-first' inference. Read once per
   // extract run; threaded into each extractPageLinks call.
-  const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
+  const inferenceMode = await resolveLinkInferenceMode(engine);
+  const structuredFirst = inferenceMode !== 'legacy';
+  const mentionsOnly = inferenceMode === 'mentions-only';
   const frontmatterMappings = await loadFrontmatterMappings(engine, sourceIdFilter);
   // v0.32.8: listAllPageRefs enumerates (slug, source_id) so we can thread
   // sourceId to getPage AND build a cross-source resolution map for link
@@ -1394,7 +1405,7 @@ async function extractLinksFromDB(
     // basename lookup; off by default for back-compat.
     const extracted = await extractPageLinks(
       slug, fullContent, page.frontmatter, page.type, resolver,
-      { skipFrontmatter: !includeFrontmatter, globalBasename, structuredFirst, frontmatterMappings },
+      { skipFrontmatter: !includeFrontmatter, globalBasename, structuredFirst, mentionsOnly, frontmatterMappings },
     );
     unresolved.push(...extracted.unresolved);
 
@@ -1622,7 +1633,9 @@ async function extractStaleFromDB(
   const activeResolver = includeFrontmatter ? resolver : nullResolver;
   // link_inference_mode: read once before the stale loop, threaded into each
   // extractPageLinks call. Off by default (legacy layer-2 prior intact).
-  const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
+  const inferenceMode = await resolveLinkInferenceMode(engine);
+  const structuredFirst = inferenceMode !== 'legacy';
+  const mentionsOnly = inferenceMode === 'mentions-only';
   const frontmatterMappings = await loadFrontmatterMappings(engine, sourceIdFilter);
   const allRefs = await engine.listAllPageRefs();
   const allSlugs = new Set<string>();
@@ -1656,7 +1669,7 @@ async function extractStaleFromDB(
       const fullContent = page.compiled_truth + '\n' + page.timeline;
       const extracted = await extractPageLinks(
         page.slug, fullContent, page.frontmatter, page.type, activeResolver,
-        { structuredFirst, skipFrontmatter: !includeFrontmatter, frontmatterMappings },
+        { structuredFirst, mentionsOnly, skipFrontmatter: !includeFrontmatter, frontmatterMappings },
       );
       for (const c of extracted.candidates) {
         const r = resolveCandidateSources(c, page.slug, page.source_id, allSlugs, slugToSources);

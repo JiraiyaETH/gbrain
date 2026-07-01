@@ -31,6 +31,13 @@ import { ensureWellFormed } from './text-safe.ts';
  */
 export const LINK_EXTRACTOR_VERSION_TS = '2026-05-31T00:00:00Z';
 
+/**
+ * The three values of the `link_inference_mode` config flag. See
+ * `resolveLinkInferenceMode` for resolution order and the `inferLinkType`
+ * JSDoc for what each mode gates.
+ */
+export type LinkInferenceMode = 'legacy' | 'structured-first' | 'mentions-only';
+
 // ─── Entity references ──────────────────────────────────────────
 
 export interface EntityRef {
@@ -714,6 +721,7 @@ export async function extractPageLinks(
     globalBasename?: boolean;
     skipFrontmatter?: boolean;
     structuredFirst?: boolean;
+    mentionsOnly?: boolean;
     frontmatterMappings?: FrontmatterFieldMapping[];
   } = {},
 ): Promise<PageLinksResult> {
@@ -722,6 +730,10 @@ export async function extractPageLinks(
   // caller and threaded in; when true, inferLinkType skips the layer-2 page-
   // global role-keyword prior. Default false = legacy behavior.
   const structuredFirst = opts.structuredFirst ?? false;
+  // 'mentions-only' mode: when true, inferLinkType skips BOTH prose layers so
+  // every body wikilink → 'mentions'. Structured typing (contract parser,
+  // frontmatter_links, image_of, meeting→attended) is unaffected. Default false.
+  const mentionsOnly = opts.mentionsOnly ?? false;
 
   // Page subject's display name, for the inferLinkType subject-scope guard: a
   // role keyword attributed to a DIFFERENT named person on this page must not be
@@ -809,7 +821,7 @@ export async function extractPageLinks(
       // stamp advises/works_at on a referenced entity).
       linkType: contractMentionsOnly
         ? 'mentions'
-        : inferLinkType(pageType, context, content, ref.slug, selfName, structuredFirst),
+        : inferLinkType(pageType, context, content, ref.slug, selfName, structuredFirst, mentionsOnly),
       context,
       linkSource: 'markdown',
     });
@@ -836,7 +848,7 @@ export async function extractPageLinks(
       targetSlug: m[1],
       linkType: contractMentionsOnly
         ? 'mentions'
-        : inferLinkType(pageType, context, content, m[1], selfName, structuredFirst),
+        : inferLinkType(pageType, context, content, m[1], selfName, structuredFirst, mentionsOnly),
       context,
       linkSource: 'markdown',
     });
@@ -1082,8 +1094,13 @@ function isReservedSlug(slug: string): boolean {
  *   entirely — links with no local per-edge verb fall through to 'mentions'.
  *   Default false reproduces legacy behavior (layer 1 + layer 2). Layer 1 is
  *   unaffected by this flag in both modes.
+ * @param mentionsOnly  When true (config `link_inference_mode: 'mentions-only'`),
+ *   skip BOTH layer 1 (per-edge verbs) AND layer 2 (page-global prior) so every
+ *   body wikilink resolves to 'mentions'. The deterministic page-type rules
+ *   above (media → mentions, image → image_of, meeting → attended) still fire —
+ *   they are structural, not prose inference. Default false.
  */
-export function inferLinkType(pageType: PageType, context: string, globalContext?: string, targetSlug?: string, selfName?: string, structuredFirst: boolean = false): string {
+export function inferLinkType(pageType: PageType, context: string, globalContext?: string, targetSlug?: string, selfName?: string, structuredFirst: boolean = false, mentionsOnly: boolean = false): string {
   if (pageType === 'media') {
     return 'mentions';
   }
@@ -1093,6 +1110,11 @@ export function inferLinkType(pageType: PageType, context: string, globalContext
   // declared here so graph-query knows the edge name.
   if ((pageType as string) === 'image') return 'image_of';
   if ((pageType as string) === 'meeting') return 'attended';
+  // 'mentions-only' mode: skip BOTH the layer-1 per-edge verb tests below AND
+  // the layer-2 page-role prior. Placed AFTER the deterministic page-type rules
+  // (which are structural, not prose inference) so meeting → attended still
+  // fires; only prose-driven typing is suppressed. Every body wikilink → mentions.
+  if (mentionsOnly) return 'mentions';
   // Per-edge verb rules.
   if (FOUNDED_RE.test(context)) return 'founded';
   if (INVESTED_RE.test(context)) return 'invested_in';
@@ -1667,30 +1689,49 @@ export async function isGlobalBasenameEnabled(engine: BrainEngine): Promise<bool
 }
 
 /**
- * Read the `link_inference_mode` config flag and return whether the
- * 'structured-first' inference mode is active. Defaults to FALSE ('legacy';
- * opt-in only) so existing brains keep the layer-2 page-global role-keyword
- * prior in `inferLinkType`.
- *
- * When TRUE: `inferLinkType` skips the layer-2 prior, so a person's outbound
- * company links with no LOCAL per-edge verb fall through to 'mentions' instead
- * of being stamped invested_in/advises/works_at off a page-global keyword.
- * Layer 1 (per-edge verbs) is unaffected.
+ * Resolve the `link_inference_mode` config flag to one of the three literal
+ * modes. Read once per extract run; the result is threaded (as
+ * structuredFirst/mentionsOnly flags) into every `inferLinkType` /
+ * `extractPageLinks` call.
  *
  * Resolution order (highest → lowest):
  *   1. Env var `GBRAIN_LINK_INFERENCE_MODE` (operator override)
  *   2. DB plane via `engine.getConfig('link_inference_mode')`
- *   3. Default false ('legacy')
+ *   3. Default 'legacy'
  *
- * Both sources are compared against the literal 'structured-first'; any other
- * value (including 'legacy') keeps legacy behavior.
+ * The value is trimmed + lowercased; it is returned ONLY if it exactly matches
+ * one of the three literals. Any other value (unknown, typo, empty) → 'legacy'.
+ */
+export async function resolveLinkInferenceMode(engine: BrainEngine): Promise<LinkInferenceMode> {
+  const raw = process.env.GBRAIN_LINK_INFERENCE_MODE
+    ?? (await engine.getConfig('link_inference_mode'));
+  if (raw == null) return 'legacy';
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'structured-first' || normalized === 'mentions-only' || normalized === 'legacy') {
+    return normalized;
+  }
+  return 'legacy';
+}
+
+/**
+ * Read the `link_inference_mode` config flag and return whether a non-legacy
+ * inference mode is active — true for BOTH 'structured-first' AND
+ * 'mentions-only', because both modes want the contract party-field parser
+ * active AND the layer-2 page-global role-keyword prior skipped.
+ *
+ * Defaults to FALSE ('legacy'; opt-in only) so existing brains keep the layer-2
+ * prior in `inferLinkType`.
  */
 export async function isStructuredFirstInferenceEnabled(engine: BrainEngine): Promise<boolean> {
-  const envVal = process.env.GBRAIN_LINK_INFERENCE_MODE;
-  if (envVal != null) {
-    return envVal.trim().toLowerCase() === 'structured-first';
-  }
-  const val = await engine.getConfig('link_inference_mode');
-  if (val == null) return false;
-  return val.trim().toLowerCase() === 'structured-first';
+  return (await resolveLinkInferenceMode(engine)) !== 'legacy';
+}
+
+/**
+ * True only when `link_inference_mode` resolves to 'mentions-only' — the mode
+ * that skips BOTH prose layers in `inferLinkType` so every body wikilink →
+ * 'mentions'. Structured typing (contract parser, frontmatter_links, image_of,
+ * meeting→attended) is preserved.
+ */
+export async function isMentionsOnlyInferenceEnabled(engine: BrainEngine): Promise<boolean> {
+  return (await resolveLinkInferenceMode(engine)) === 'mentions-only';
 }
