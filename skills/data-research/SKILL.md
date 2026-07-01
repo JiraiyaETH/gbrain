@@ -31,6 +31,11 @@ mutating: true
 Structured research pipeline: search sources, extract structured data,
 archive raw, deduplicate, update canonical trackers, backlink entities.
 
+> **Convention:** See `skills/conventions/quality.md` for citation and
+> back-linking rules, `skills/conventions/graph-safe-writing.md` for intentional
+> edges, and `skills/conventions/post-run-retrieval-gate.md` after tracker writes
+> or batch updates.
+
 ## Contract
 
 One skill for any email-to-structured-data pipeline. The only differences
@@ -101,8 +106,15 @@ Before adding to tracker:
 - Parse existing tracker page (markdown table)
 - Append new entries in correct section (grouped by year/quarter/entity)
 - Compute running totals
-- Backlink every mentioned entity (person → people/ page, company → companies/ page)
+- Backlink material tracker entities (person -> people/ page, company -> companies/ page)
 - Uses enrichment service for entity pages
+
+### Phase 8: Retrieval gate
+
+Run the smoke or batch gate from `skills/conventions/post-run-retrieval-gate.md`.
+Tracker pages should answer aggregate/category queries, while raw source packets
+and individual receipts/emails should not outrank the canonical tracker for
+summary questions.
 
 ## Built-In Recipes
 

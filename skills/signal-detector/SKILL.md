@@ -64,6 +64,9 @@ This skill guarantees:
 - Citations on every fact written
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
+> See `skills/conventions/graph-safe-writing.md` before creating links or typed
+> edges, and `skills/conventions/post-run-retrieval-gate.md` after meaningful
+> captures that should affect search.
 
 Every time this skill creates or updates a brain page that mentions a person or company:
 1. Check if that person/company has a brain page

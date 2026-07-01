@@ -36,17 +36,21 @@ This skill guarantees:
 - Meeting page created with attendees, summary, key decisions, action items
 - EVERY attendee gets a people page (created or updated)
 - EVERY company discussed gets entity propagation
-- Timeline entries on ALL mentioned entities (timeline merge)
-- Meeting is NOT fully ingested until enrich runs for every entity
+- Timeline entries on all material entities discussed in the meeting (timeline merge)
+- Meeting is NOT fully ingested until enrich runs for every attendee and
+  materially discussed entity that needs propagation
 - Back-links created bidirectionally
 - **Verified**: a meeting is NOT "done" until the Phase 7 QA gate AND a cache-busted before/after `/query` back-test both pass (structure, edges, traversal). "Looks fine" is not a gate.
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
 > **Convention:** See `skills/conventions/graph-safe-writing.md` for the
 > cross-skill rule that wikilinks/slug paths are graph evidence, not decoration.
+> **Convention:** See `skills/conventions/post-run-retrieval-gate.md`; the
+> Phase 7 query back-test is this skill's mandatory retrieval gate.
 
-Every attendee and company mentioned MUST get a back-link from their page to
-the meeting page. An unlinked mention is a broken brain.
+Every attendee and every materially discussed company/project/concept MUST get a
+back-link from its page to the meeting page. Passing names in transcript noise or
+context-only examples stay plain prose unless they need entity propagation.
 
 > **Deployment config (read FIRST).** This skill is brain-portable. The method and
 > conventions — source routing, the timeline-CAP concept (the owner + recurring
@@ -225,7 +229,7 @@ internal-team attendees who recur across most meetings.
 
 ### Phase 4: Entity propagation (MANDATORY)
 
-For each company, project, or concept discussed:
+For each materially discussed company, project, or concept:
 1. Check brain for existing page (reconcile — never clobber a richer existing page;
    for an already-rich page, insert ONE timeline line via a surgical file edit).
 2. Create/update as needed.
@@ -241,10 +245,11 @@ directly via the company page's own `→ [[meetings/...]]` back-link (step 3).
 
 ### Phase 5: Timeline merge
 
-The same event appears on ALL mentioned entities' timelines — authored as a
+The same event appears on all material entities' timelines — authored as a
 `## Timeline` wikilink in EACH entity's page FILE (see Phase 3; NOT `timeline-add`).
 If Alice met Bob at Acme Corp, the entry goes on Alice's page, Bob's page, AND Acme
-Corp's page. EXCEPTION: skip the brain owner / ubiquitous internal attendees (Phase 3
+Corp's page. Transcript-only incidental names do not get timeline entries.
+EXCEPTION: skip the brain owner / ubiquitous internal attendees (Phase 3
 owner-exception) — their meetings are reachable via the `attended` back-links.
 
 ### Phase 6: Sync
@@ -289,7 +294,7 @@ updated, {N} action items captured."
 
 - Creating the meeting page without enriching attendees
 - Skipping entity propagation ("I'll do that later")
-- Not merging timelines across all mentioned entities
+- Not merging timelines across material entities
 - Creating attendee stubs without meaningful content
 - Filing meeting pages without cross-linking to all participants
 - **Using `gbrain timeline-add` for attendee back-links** — it makes a DB-only row,

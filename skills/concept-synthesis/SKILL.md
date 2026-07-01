@@ -22,6 +22,10 @@ writes_to:
 >
 > **Convention:** see [_brain-filing-rules.md](../_brain-filing-rules.md) —
 > output files under `concepts/` per the primary-subject rule.
+>
+> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
+> and [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
+> before/after rewriting canonical concept pages or the concept map.
 
 ## What this solves
 

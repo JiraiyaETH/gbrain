@@ -26,6 +26,11 @@ writes_to:
 > for the lookup chain. This skill ENFORCES brain-first by sending brain
 > context as part of the Perplexity prompt — the web search focuses on
 > the delta between brain knowledge and current web state.
+>
+> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
+> and [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
+> before/after writing research pages that mention material entities or
+> relationships.
 
 ## What this does
 

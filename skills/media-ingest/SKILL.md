@@ -44,7 +44,7 @@ Ingest video, audio, PDF, book, screenshot, and GitHub repo content into the bra
 This skill guarantees:
 - Every ingested media item has a brain page with analysis (not just a transcript dump)
 - Transcripts (video/audio) saved in raw and human-readable formats
-- Entity extraction: every person and company mentioned gets back-linked
+- Entity extraction: every material person/company relationship gets back-linked
 - Raw source files preserved via `gbrain files upload-raw` when the raw file is appropriate for Brain provenance
 - Sensitive personal media archives are handled as an exception: keep originals outside the Brain in a topic-specific `/Users/jarvis/data/...` folder, generate metadata/OCR/index artifacts there, and write only distilled summaries/timelines/pointers to Brain
 - Filing by primary subject, not format
@@ -55,8 +55,12 @@ This skill guarantees:
 > See `skills/conventions/graph-safe-writing.md` before writing entity links;
 > source/media pages often mention many entities, but wikilinks should be an
 > intentional edge budget, not a complete named-entity dump.
+> See `skills/conventions/post-run-retrieval-gate.md` after write/sync; media
+> pages should support retrieval without swamping canonical entities.
 
-Every mention of a person or company with a brain page MUST create a back-link.
+Every material person/company relationship with a brain page MUST create a
+back-link. Incidental names in long transcripts, books, screenshots, or repos
+stay plain prose unless traversal is intended.
 
 ## Phases
 
@@ -108,7 +112,7 @@ file path, or low-signal named entity into wikilinks.
 
 ### Phase 4: Entity extraction and propagation
 
-For every person and company mentioned:
+For every material person and company relationship:
 1. Check brain for existing page
 2. Create/enrich if needed (delegate to enrich skill)
 3. Add back-link from entity page to this media page
@@ -123,6 +127,13 @@ A media item is NOT fully ingested until entity propagation is complete.
 ### Phase 5: Sync
 
 `gbrain sync` to update the index.
+
+### Phase 6: Retrieval gate
+
+Run the smoke or entity gate from `skills/conventions/post-run-retrieval-gate.md`.
+Verify the media page surfaces for specific content queries, while canonical
+person/company/project pages still win broad identity or "what do we know"
+queries.
 
 ## Output Format
 

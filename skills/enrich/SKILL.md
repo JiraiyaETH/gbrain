@@ -42,10 +42,14 @@ This skill guarantees:
 > **Filing rule:** Read `skills/_brain-filing-rules.md` before creating any new page.
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
+> **Convention:** See `skills/conventions/post-run-retrieval-gate.md` after
+> person/company enrichment; enriched pages must rank for identity, alias,
+> relationship, and priority probes without displacing more canonical pages.
 
-Every mention of a person or company with a brain page MUST create a back-link
-FROM that entity's page TO the page mentioning them. An unlinked mention is a
-broken brain. See `skills/_brain-filing-rules.md` for format.
+Every material person/company relationship with a brain page MUST have a
+traversable back-link. Incidental names, provenance-only source slugs, and
+low-signal co-mentions stay plain prose/citation text. See
+`skills/conventions/quality.md` and `skills/conventions/graph-safe-writing.md`.
 
 ## Philosophy
 
@@ -103,9 +107,9 @@ rehashes. Gold standard: `people/tory-green` (~1 citation per prose bullet, ~0.6
 - Any ingest pipeline encounters a notable entity
 
 ### Do NOT enrich
-- Random mentions with no relationship signal
-- Bot/spam accounts
-- Entities with no substantive connection to the user's work
+- Follow the notability gate in `skills/_brain-filing-rules.md` and
+  `skills/conventions/quality.md`. Do not enrich non-notable entities or
+  incidental mentions.
 - Same page enriched within the past week (unless new signal warrants it)
 
 ## Enrichment Tiers
@@ -314,14 +318,22 @@ relationships, timeline targets, primary sources, and high-signal network nodes.
 Use prose/citation text for provenance-only slugs and incidental names.
 
 **Note (v0.10.1):** Links between brain pages are auto-created on every
-`put_page` call (auto-link post-hook). Step 7 focuses on content
-cross-references (updating related pages' compiled truth with new signal
-from this enrichment), not on creating links. Verify via the `auto_links`
-field in the put_page response (`{ created, removed, errors }`).
+`put_page` call (auto-link post-hook). Step 7 authors graph-safe
+cross-reference text; `put_page` / auto-link creates and reconciles the actual
+graph rows, including typed edges when the relationship evidence is clear. Do
+not manually spam `add_link` for ordinary enrichment links; do verify via the
+`auto_links` field in the put_page response (`{ created, removed, errors }`).
 Timeline entries still need explicit `gbrain timeline-add` calls.
 
 If `auto_links.created` includes unexpected strong typed edges, repair the page
 text or downgrade the edge before reporting the enrichment done.
+
+### Step 8: Post-run retrieval gate
+
+Run the entity gate in `skills/conventions/post-run-retrieval-gate.md` before
+reporting enrichment done. At minimum, verify identity/alias retrieval,
+relationship retrieval for newly added edges, and priority ranking against raw
+logs, contracts, source pages, or daily logs that mention the same name.
 
 ### Downstream upgrade note — drain unresolved frontmatter names
 
@@ -388,7 +400,9 @@ An enriched company page contains:
 - **Open Threads** (active items, pending decisions)
 - **Timeline** in reverse chronological order with dated, cited entries
 
-Both page types have bidirectional back-links to every entity they mention.
+Both page types have bidirectional back-links for every material relationship
+they assert; incidental mentions remain prose/citations unless traversal is
+intended.
 
 ## Tools Used
 

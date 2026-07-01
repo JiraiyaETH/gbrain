@@ -259,7 +259,9 @@ Populate them periodically or after major imports:
 - `gbrain extract links --source db` — backfill structured links by walking pages
   from the engine. Reads `[Name](people/slug)` / `[Name](companies/slug)` references
   and infers relationship types (`attended`, `works_at`, `invested_in`, `founded`,
-  `advises`, `mentions`, `source`). Idempotent. Use `--source fs --dir <brain>`
+  `advises`, `mentions`, `source`). Manual/domain-specific verbs such as
+  `creator_for`, `service_provider_for`, `uses_vendor`, and `sourced_from`
+  may also exist in the active schema. Idempotent. Use `--source fs --dir <brain>`
   if you have a markdown checkout to walk instead.
 - `gbrain extract timeline --source db` — backfill structured timeline entries.
   Parses `- **YYYY-MM-DD** | summary` lines from page content. Idempotent (DB
@@ -271,8 +273,10 @@ Populate them periodically or after major imports:
 - `gbrain health` — review `link_coverage` and `timeline_coverage` percentages
   on entity pages (person/company). Below 50% means more extraction is needed.
 
-Available link types (use with `gbrain graph-query --type`):
-`attended`, `works_at`, `invested_in`, `founded`, `advises`, `mentions`, `source`.
+Available link types (use with `gbrain graph-query --type`) are declared by the
+active schema. Common verbs include `attended`, `works_at`, `invested_in`,
+`founded`, `advises`, `creator_for`, `service_provider_for`, `uses_vendor`,
+`sourced_from`, `mentions`, and `relates_to`.
 
 Going forward, every `gbrain put` call auto-creates and reconciles links via the
 auto-link post-hook (default on; disable: `gbrain config set auto_link false`).
@@ -318,6 +322,11 @@ queries across difficulty tiers:
 
 Compare results from `gbrain search` (keyword) vs `gbrain query` (hybrid).
 Quality matters more than speed (2.5s right > 200ms wrong).
+
+Use `skills/conventions/post-run-retrieval-gate.md` as the shared standard for
+smoke/entity/relational/batch gates. When a curated qrels or retrieval-quality
+fixture exists, run it here and report the failing query ids/slugs, not just the
+aggregate score.
 
 When to run benchmarks:
 - After major brain imports or re-imports
