@@ -220,6 +220,8 @@ describe('capture — local install integration', () => {
     expect(json.slug).toBe('inbox/json-out');
     expect(json.content_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(json.captured_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(json.auto_links).toBeDefined();
+    expect(json.auto_links.unresolved).toEqual([]);
   });
 });
 

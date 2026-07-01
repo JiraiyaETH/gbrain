@@ -52,9 +52,11 @@ This skill guarantees:
 **Private personal media exception:** when the source is a private personal photo/video collection, relationship evidence set, family archive, wedding evidence pool, guest list material, passport/ID-adjacent collection, or anything with sensitive personal context, do **not** default to raw-uploading originals into Brain. Keep raw media outside Brain in a private local data folder or secure vault; write only distilled indexes, timelines, proof summaries, and pointers into Brain. See `references/personal-photo-evidence-source-pools.md`. For relationship/legal evidence curation specifically, including screenshot/call-history guidance and MAS-style shortlist workflow, see `references/private-relationship-evidence-curation.md`.
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
-> See `skills/conventions/graph-safe-writing.md` before writing entity links;
-> source/media pages often mention many entities, but wikilinks should be an
-> intentional edge budget, not a complete named-entity dump.
+> Source/media pages often mention many entities, but links/frontmatter should
+> be an intentional edge budget, not a complete named-entity dump. Before writing
+> relationship frontmatter, run `gbrain schema show --json`, use only declared
+> `frontmatter_links`, and type only evidenced material relationships. Create
+> minimal stubs only for material entities that need to resolve.
 > See `skills/conventions/post-run-retrieval-gate.md` after write/sync; media
 > pages should support retrieval without swamping canonical entities.
 
@@ -114,13 +116,16 @@ file path, or low-signal named entity into wikilinks.
 
 For every material person and company relationship:
 1. Check brain for existing page
-2. Create/enrich if needed (delegate to enrich skill)
+2. Create a minimal stub if needed so the material edge resolves; delegate deep
+   enrichment to the enrich skill
 3. Add back-link from entity page to this media page
 4. Add timeline entry on entity page
 
 After write, inspect `auto_links` and run focused graph readbacks for high-value
-pages. Strong typed edges from media pages are suspicious unless explicitly
-evidenced; otherwise they should be `mentions` / `relates_to`.
+pages. Resolve or explicitly log `auto_links.unresolved`; unresolved names are
+entity/enrichment candidates, not harmless noise. Strong typed edges from media
+pages are suspicious unless explicitly evidenced; otherwise they should be
+`mentions` / `relates_to`.
 
 A media item is NOT fully ingested until entity propagation is complete.
 

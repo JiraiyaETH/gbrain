@@ -43,8 +43,10 @@ This skill guarantees:
 - **Verified**: a meeting is NOT "done" until the Phase 7 QA gate AND a cache-busted before/after `/query` back-test both pass (structure, edges, traversal). "Looks fine" is not a gate.
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
-> **Convention:** See `skills/conventions/graph-safe-writing.md` for the
-> cross-skill rule that wikilinks/slug paths are graph evidence, not decoration.
+> **Convention:** Before relationship frontmatter, run `gbrain schema show --json`
+> and use the active pack's `frontmatter_links`. Attendee edges belong in
+> `attendees:` frontmatter when the pack declares it; only actual attendees go
+> there.
 > **Convention:** See `skills/conventions/post-run-retrieval-gate.md`; the
 > Phase 7 query back-test is this skill's mandatory retrieval gate.
 
@@ -54,7 +56,7 @@ context-only examples stay plain prose unless they need entity propagation.
 
 > **Deployment config (read FIRST).** This skill is brain-portable. The method and
 > conventions — source routing, the timeline-CAP concept (the owner + recurring
-> internal team keep the forward `attended` edge but drop the reverse per-meeting
+> internal team keep the typed `attended` edge but drop the per-meeting
 > timeline line so their pages don't balloon), enrichment depth, the edge model, and
 > entity/dedup rules — live in `references/doctrine.md` next to this skill. Read it
 > first. This brain's specific VALUES (which slugs are capped, the source name, the
@@ -63,11 +65,11 @@ context-only examples stay plain prose unless they need entity propagation.
 > names, so they stay out of this shipped reference.
 
 **House style (edges + citations) — load-bearing:**
-- **Bare wikilinks** `[[people/<slug>]]`, not piped `[[people/<slug>|Display]]` (identical edge; bare is the convention).
+- **Attendee edges live in frontmatter** via `attendees:`. Use display names or known `people/<slug>` values that resolve to existing people pages.
 - **No self-citations in the meeting body** — the meeting page IS the source; provenance is the `id:` frontmatter + the transcript below the line.
 - **Entity-page source model:** edges/back-links provide traversal and source-set traceability; inline citations provide claim-level provenance. On people/company/project pages enriched from a meeting, cite/link the meeting in the dated `## Timeline` entry and avoid a top-of-page source note or repeated per-bullet `[Source: Meeting ...]` wallpaper. Use inline citations only for claims where source ambiguity, authority, conflict, sensitivity, dates, numbers, contact fields, or cross-source synthesis require claim-level proof.
-- **Never write a slug PATH (`people/x`, `companies/x`, `contracts/x`) in body PROSE** — only inside the attendee `[[people/x]]` links. FS-path extraction turns a bare path in prose into a real (false) edge; in prose use display NAMES.
-- **Wikilink ONLY actual attendees** in the body; people merely mentioned go in a `**Mentioned**` line, by name.
+- **Never write a slug PATH (`people/x`, `companies/x`, `contracts/x`) in body PROSE.** FS-path extraction turns a bare path in prose into a real edge; in prose use display NAMES.
+- **Do not wikilink attendees in the meeting body.** Put actual attendees in frontmatter; people merely mentioned go in a `**Mentioned**` line by name.
 - **DEDUP by date, not title**: a different DATE = a different meeting even with an identical title (recurring "Monday Meeting" / "tailored-sync" / weekly syncs). Only collapse a SAME-DATE + SAME-PARTICIPANT dup-pair (two recorder ids of one call); note the sibling id in body provenance, never `delete` a distinct meeting.
 
 ## Phases
@@ -117,20 +119,21 @@ title: {Meeting Title}
 date: 'YYYY-MM-DD'
 status: ingested              # 'lean-ingest' for a stub; Phase-0 idempotency reads this
 id: fireflies-{recording_id}  # deterministic dedup hook (engine-level, cross-slug)
+attendees:
+  - {Attendee Name}
+  - {people/known-attendee-slug}
 ---
 ```
-Frontmatter is stripped before embedding and inert for retrieval; every non-excluded
-key is also folded into `content_hash`, so inert/volatile keys (`attendees`,
-`duration_min`, `source`, `updated`, …) bust the hash and force needless re-embeds.
-**Everything else lives in the body** — the attendee graph comes from body
-`[[people/<slug>]]` links (NOT a frontmatter list); duration, source, and summary are
-prose. (Model verified against `import-file.ts` content_hash/dedup + `markdown.ts` strip.)
+`attendees:` is relationship-bearing frontmatter: the active schema pack maps it to
+`person --attended--> meeting`, matching Garry's v0.13 frontmatter edge contract.
+Keep it stable and intentional. Other volatile details (`duration_min`, `source`,
+`updated`, …) belong in body prose because they do not create meeting relationships.
 
 Body:
 ```markdown
 # {Meeting Title} — {Date}
 
-**Attendees:** {list with links to people pages}
+**Attendees:** {plain display names, no wikilinks}
 **Date:** {YYYY-MM-DD}
 **Duration:** {if available}
 
@@ -157,7 +160,7 @@ company, deal, project, concept). Shape:
 ```markdown
 # {Title} — {Date}
 
-**Attendees:** {[[people/<slug>]] wikilinks, with (org)} — ATTENDEES ONLY
+**Attendees:** {plain display names, with org when useful} — ATTENDEES ONLY
 **Duration:** {N min} · **Source:** Fireflies [Source: Meeting "{Title}", {Date}]
 
 ## Crux
@@ -179,8 +182,9 @@ company, deal, project, concept). Shape:
 **Entity-page ordering (prevents silently-missing edges) — REQUIRED.** Link extraction only
 creates an edge to a page that EXISTS at extraction time. So create each attendee/company
 page (Phases 3–4) and THEN re-write the meeting page once more (`put`) so its
-`[[people/<slug>]]` resolve and the `attended` edges form. Afterward verify every attendee
-in the `**Attendees:**` line has an `attended` edge (no missing, no extra).
+`attendees:` frontmatter resolves and the `attended` edges form. Afterward verify every
+frontmatter attendee has an incoming `person --attended--> meeting` edge (no missing,
+no extra).
 
 ### Downstream upgrade note — unresolved attendee/frontmatter check
 
@@ -215,14 +219,14 @@ brain's convention (every page) is a `## Timeline` wikilink in the FILE, which c
 BOTH the edge and the display in one write.
 
 **Attended links:** when the meeting page is written via `gbrain put`, the auto-link
-hook types every body wikilink from the meeting as `attended`
-(`meeting --attended--> person`). So reference each attendee in the meeting body as
-`[[people/<slug>]]` (or `[Name](people/slug)`) — no manual `gbrain link` needed.
+hook reads `attendees:` frontmatter and creates `person --attended--> meeting`.
+Do not add attendee wikilinks to the meeting body; they create the older local
+`meeting --attended--> person` shape and diverge from Garry's frontmatter policy.
 
 **OWNER EXCEPTION — timeline bloat (v1.1.0).** Do NOT add a per-meeting timeline entry
 to the BRAIN OWNER's page: the owner attends ~every meeting, so their timeline would
 balloon to hundreds of entries. The owner's meetings are already reachable via the
-`meeting --attended--> owner` back-links (`gbrain backlinks people/<owner>`). Per
+`person --attended--> meeting` edges (`gbrain graph people/<owner> --depth 1`). Per
 Garry's pattern the owner lives in `USER.md`, not the people graph; if they have a
 `people/` page, keep it free of per-meeting entries. Apply the same cap to heavy
 internal-team attendees who recur across most meetings.
@@ -236,12 +240,12 @@ For each materially discussed company, project, or concept:
 3. Add a `## Timeline` entry on the ENTITY page (`- <date> — … → [[meetings/<slug>]]`).
 4. The entity page links to the meeting (entity → meeting). Done.
 
-**NEVER wikilink a company/contract inside the MEETING body (v1.1.0 fix).** The
-auto-link hook types every meeting-body wikilink as `attended`, so `[[companies/X]]`
-in a meeting creates a nonsensical `meeting --attended--> company` edge (a company
-can't attend). Reference companies/contracts in the meeting body as PLAIN PROSE — the
-company is reachable from the meeting transitively via its attendees' `works_at`, and
-directly via the company page's own `→ [[meetings/...]]` back-link (step 3).
+**NEVER wikilink a person/company/contract inside the MEETING body (v1.1.0 fix).**
+Attendance edges come from `attendees:` frontmatter. Body wikilinks in a meeting can
+still mint relationship edges from prose, so keep people/companies/contracts as PLAIN
+PROSE in the meeting body. Material companies are reachable via the company page's own
+`→ [[meetings/...]]` timeline back-link (step 3), and attendee companies remain
+reachable from each person via `works_at`.
 
 ### Phase 5: Timeline merge
 
@@ -267,11 +271,11 @@ slug-path leak, schema drift) — every one of those was caught here, not by eye
    BRAIN_DIR=<brain> GBRAIN_SOURCE=<src> EXEMPT_PAGES="<owner + capped team>" \
      bash skills/meeting-ingestion/scripts/qa-meeting.sh <slug>
    ```
-   Exit 0 = clean. It checks frontmatter conformance; two-layer structure; body
-   links people-only; the DB `attended` edges MATCH the Attendees line EXACTLY
-   (catches BOTH missing and spurious edges); no meeting→company/contract edge;
-   reverse backlinks live (unless all attendees are capped); cap respected. FIX
-   every FAIL and re-run — never proceed on HAS-FAILURES.
+   Exit 0 = clean. It checks frontmatter conformance; two-layer structure; no body
+   entity links; DB incoming `person --attended--> meeting` backlinks match the
+   `attendees:` count; no meeting→person/company/contract edge; entity timeline
+   backlinks live (unless all attendees are capped); cap respected. FIX every FAIL
+   and re-run — never proceed on HAS-FAILURES.
 
 2. **Query back-test (traversal proof).** Run a cache-busted `/query` the meeting
    should answer, BEFORE and AFTER ingest; confirm the meeting + its attendees/

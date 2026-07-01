@@ -32,9 +32,10 @@ Structured research pipeline: search sources, extract structured data,
 archive raw, deduplicate, update canonical trackers, backlink entities.
 
 > **Convention:** See `skills/conventions/quality.md` for citation and
-> back-linking rules, `skills/conventions/graph-safe-writing.md` for intentional
-> edges, and `skills/conventions/post-run-retrieval-gate.md` after tracker writes
-> or batch updates.
+> back-linking rules and `skills/conventions/post-run-retrieval-gate.md` after
+> tracker writes or batch updates. Before relationship frontmatter, run
+> `gbrain schema show --json`, use only declared `frontmatter_links`, and type
+> only evidenced material relationships.
 
 ## Contract
 
@@ -108,6 +109,13 @@ Before adding to tracker:
 - Compute running totals
 - Backlink material tracker entities (person -> people/ page, company -> companies/ page)
 - Uses enrichment service for entity pages
+- Before writing relationship frontmatter, inspect the active schema pack and
+  use only declared `frontmatter_links` for that tracker/page type. Create
+  minimal stubs only for material entities that need to resolve; enrichment can
+  deepen them later.
+- After each tracker/entity write, inspect `auto_links`, resolve or log
+  `auto_links.unresolved`, and graph-query high-value entities whose edges
+  changed.
 
 ### Phase 8: Retrieval gate
 

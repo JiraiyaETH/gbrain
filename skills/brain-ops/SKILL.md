@@ -36,8 +36,6 @@ flows through in both directions.
 
 > **Convention:** See `skills/conventions/brain-first.md` for the 5-step lookup protocol.
 > **Convention:** See `skills/conventions/quality.md` for citation and back-link rules.
-> See `skills/conventions/graph-safe-writing.md` before any Brain write that can
-> create links or typed edges.
 > After meaningful writes, run `skills/conventions/post-run-retrieval-gate.md`
 > so changed pages are findable and do not outrank canonical pages incorrectly.
 
@@ -101,24 +99,25 @@ to the graph (`links` table) with inferred relationship types. Stale links
 (refs no longer in the page text) are removed in the same call. This is
 "auto-link" reconciliation.
 
-**Graph-safe writing gate:** auto-link is useful only when page text is clean
-graph evidence. Before writing, decide the intended edge budget. Use wikilinks,
-markdown entity links, slug paths, and relationship-shaped frontmatter only when
-the resulting edge should exist. If the relationship is contextual or uncertain,
-prefer `mentions` / `relates_to`; if it is provenance-only, keep it as citation
-text unless traversal to that exact page is intended.
+**Schema-pack write gate:** auto-link is useful only when page text is clean
+graph evidence. Before writing relationship frontmatter, run
+`gbrain schema show --json`, find the page `type`, and use only fields declared
+in `frontmatter_links` for that type. Author typed fields only for material
+relationships with local evidence. Incidental co-mentions stay as body prose or
+weak mentions. Create minimal `type` + `title` stubs only when a material entity
+needs to resolve so the edge/backlink exists; `enrich` can deepen the stub later.
 
 - No manual `add_link` calls needed for ordinary page writes.
-- Inferred link types: `attended` (meeting -> person), `works_at`, `invested_in`,
-  `founded`, `advises`, `source` (frontmatter), `mentions` (default).
-  Manual/domain-specific link types may include `creator_for`,
-  `service_provider_for`, `uses_vendor`, `sourced_from`, and `relates_to`
-  when the active schema declares them.
-- The `put_page` MCP response includes `auto_links: { created, removed, errors }`
-  so the agent can verify outcomes.
+- Inferred link types come from the active schema pack plus deterministic
+  structural parsers. Common examples include `attended`, `works_at`,
+  `invested_in`, `founded`, `signed`, `creator_for`, `service_provider_for`,
+  `uses_vendor`, `sourced_from`, `mentions`, and `relates_to` when the active
+  schema declares them.
+- The `put_page` MCP response includes `auto_links: { created, removed,
+  unresolved, errors }` so the agent can verify outcomes.
 - Inspect `auto_links` after every link-producing write. Resolve or log
   `unresolved`; graph-query high-value pages; repair suspicious edge shapes before
-  reporting the write done. See `skills/conventions/graph-safe-writing.md`.
+  reporting the write done.
 - After a meaningful write, run the smallest applicable post-run retrieval gate
   from `skills/conventions/post-run-retrieval-gate.md` before reporting done.
 - To disable: `gbrain config set auto_link false`. Default is on.

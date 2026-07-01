@@ -41,17 +41,15 @@ live in other skills. Before writing anything, read and OBEY:
 - **`conventions/quality.md`** — the back-link iron law ("an unlinked mention is
   a broken brain"), citation format, the **timeline format `- **YYYY-MM-DD** | …`**,
   and **reverse-chronological order** (newest entry on top).
-- **`conventions/graph-safe-writing.md`** — wikilinks and slug paths are graph
-  evidence, not decoration. Contract pages should link true parties,
-  counterparties, clients, sources, and timeline targets, not every incidental
-  name or provenance slug.
+- **Active schema pack** — run `gbrain schema show --json` before using
+  relationship frontmatter. Use only declared `frontmatter_links` for
+  `type: contract`, and type only evidenced material parties/signers. Contract
+  pages should link true parties, counterparties, clients, sources, and timeline
+  targets, not every incidental name or provenance slug.
 - **`conventions/post-run-retrieval-gate.md`** — after sync/extract, verify the
   contract supports relationship queries without outranking canonical person,
   company, or project pages for broad identity queries.
 - **`brain-ops`** — the read → reconcile → write cycle; brain-first lookup.
-- **`schema.md`** (in the brain repo, e.g. `~/brain/schema.md`) — the two-layer
-  page model, the minimal-frontmatter rule, and the person/company templates
-  including the **Contact** section.
 - **`_brain-filing-rules` / `RESOLVER.md`** — where a page goes.
 - **`enrich`** — entity enrichment. This skill produces only *thin stubs*;
   `enrich` fattens them later. Never enrich during ingest.
@@ -133,7 +131,7 @@ default** (flag pure-default `<!-- needs_review: term_end_defaulted -->`).
 `status = expired` if `term_end < today`. At-will agreements (TAP) with no term stay `active`.
 
 ### 5. Entity stubs (thin — no enrichment)
-- Creator/associate → `people/{slug}.md` per `schema.md`'s person template:
+- Creator/associate → `people/{slug}.md` minimal stub:
   Exec summary (mark `*[Stub from contract ingest]*`), State, **Contact**
   (X/handle + signer email if in the doc, else `[No data yet]`),
   `What they believe: [No data yet]`, Open threads (note enrich), Timeline.
@@ -157,15 +155,20 @@ default** (flag pure-default `<!-- needs_review: term_end_defaulted -->`).
 ### 7. Checkpoint
 Write files (NOT bulk `put_page` — stay collision-safe with concurrent
 sessions/autopilot). Then: `git commit` → `gbrain sync --no-pull` →
-`gbrain extract links --source db` → `gbrain extract timeline --source db` →
-`gbrain embed --stale` → graph-query readback to prove the edges + dated entries formed.
+`gbrain extract links --source db --include-frontmatter` → inspect the extract
+summary for unresolved frontmatter refs → `gbrain extract timeline --source db`
+→ `gbrain embed --stale` → graph-query readback to prove the edges + dated entries formed.
 Normalize hub timelines with `scripts/normalize-timeline.mjs` before committing when hub pages were touched.
 
 Graph readback must confirm the contract edge model stayed sane: Tailored ⇄
 counterparty, client as client/for-context, TAP associate as associate, curation
 platform as venue/context. If the extractor creates creator⇄client, company
 `attended`, or other suspicious strong typed edges, repair or downgrade before
-reporting done.
+reporting done. If the active schema pack declares contract frontmatter links
+such as `signers` / `signed_by`, either use those fields as the source of truth
+or rely on the deterministic labeled-party contract parser, but do not duplicate
+the same signer edge through both frontmatter and body links without a graph
+readback proving duplicates are not created.
 
 Then run the retrieval smoke/entity gate: the contract should appear for
 contract-specific or campaign-specific queries, but canonical party/client pages

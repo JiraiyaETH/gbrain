@@ -14,11 +14,16 @@ writes_pages:
 
 # capture — the single ingestion entrypoint
 
-> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
-> and [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
+> **Convention:** see [conventions/quality.md](../conventions/quality.md) and
+> [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
 > when captured content names material people, companies, projects, or
 > relationships. `capture` resolves to `put_page`, so auto-link receipts and
-> retrieval smoke checks apply to meaningful captures.
+> retrieval smoke checks apply to meaningful captures. If the capture input has
+> relationship frontmatter, run `gbrain schema show --json` first, use only
+> declared `frontmatter_links` for that page type, and author typed fields only
+> for evidenced material relationships. Incidental co-mentions stay as prose or
+> weak mentions. Create minimal stubs only for material entities that must
+> resolve, then inspect `auto_links.unresolved`.
 
 When the user wants to save a thought, an article snippet, a transcript
 fragment, or any text into their brain, run `gbrain capture`. Don't reach
@@ -84,7 +89,10 @@ captured:
 ```
 
 `--quiet` prints only the slug (use for `SLUG=$(gbrain capture "..." --quiet)`).
-`--json` prints structured output for downstream tools.
+`--json` prints structured output for downstream tools, including `auto_links`
+when the underlying `put_page` surface returns it. Agents capturing a fully
+formatted markdown file with relationship frontmatter must inspect
+`auto_links.unresolved` and resolve or log missing entities.
 
 ## Anti-Patterns
 

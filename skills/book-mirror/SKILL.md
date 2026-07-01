@@ -28,9 +28,11 @@ writes_to:
 > for the lookup chain (brain → search → external) the context-gathering
 > phase follows.
 >
-> **Convention:** see [conventions/graph-safe-writing.md](../conventions/graph-safe-writing.md)
-> and [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
-> before/after writing the assembled personalized book page.
+> **Convention:** before relationship frontmatter, run
+> `gbrain schema show --json`, use only declared `frontmatter_links`, and type
+> only evidenced material relationships. Run
+> [conventions/post-run-retrieval-gate.md](../conventions/post-run-retrieval-gate.md)
+> after writing the assembled personalized book page.
 
 ## What this does
 

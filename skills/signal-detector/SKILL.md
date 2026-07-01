@@ -64,9 +64,12 @@ This skill guarantees:
 - Citations on every fact written
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
-> See `skills/conventions/graph-safe-writing.md` before creating links or typed
-> edges, and `skills/conventions/post-run-retrieval-gate.md` after meaningful
-> captures that should affect search.
+> Before relationship frontmatter, run `gbrain schema show --json`, use only
+> declared `frontmatter_links`, and type only evidenced material relationships.
+> Incidental co-mentions stay as prose or weak mentions; create minimal stubs
+> only for material entities that need to resolve. Run
+> `skills/conventions/post-run-retrieval-gate.md` after meaningful captures that
+> should affect search.
 
 Every time this skill creates or updates a brain page that mentions a person or company:
 1. Check if that person/company has a brain page
@@ -93,7 +96,8 @@ meetings, and concepts. An original without cross-links is a dead original.
 1. Extract entity mentions (people, companies, media titles)
 2. For each entity:
    - `gbrain search "name"` — does a page exist?
-   - If NO page → check notability. If notable, create page with enrichment.
+   - If NO page → check notability/materiality. If notable, create a minimal
+     stub when needed for edge resolution, or a fuller page when evidence supports it.
    - If page exists but THIN → trigger enrich
    - If page exists and RICH → no action
 3. For new FACTS with specific dates → call `gbrain timeline-add <slug> <date> "<summary>"`
@@ -102,6 +106,9 @@ meetings, and concepts. An original without cross-links is a dead original.
 references a person or company, the auto-link post-hook on `put_page`
 automatically creates the link from the new page to that entity. You don't
 need to call `gbrain link` manually. Timeline entries still need explicit calls.
+If you write relationship frontmatter, consult the active schema pack first and
+use only declared `frontmatter_links`. After `put_page`, inspect `auto_links`;
+resolve or log `auto_links.unresolved` before considering the capture complete.
 
 ### Phase 3: Signal Logging
 

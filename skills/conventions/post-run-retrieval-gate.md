@@ -1,8 +1,8 @@
 # Post-Run Retrieval Gate
 
 Cross-cutting verification for skills that write or materially rewrite Brain
-pages. Graph-safe writing proves edges are shaped correctly; this gate proves
-the updated brain can still be found and ranked correctly.
+pages. The schema-pack write receipt/readback proves edges are shaped correctly;
+this gate proves the updated brain can still be found and ranked correctly.
 
 ## When to run
 
