@@ -16,7 +16,8 @@ import { expandQuery } from './search/expansion.ts';
 import { dedupResults } from './search/dedup.ts';
 import { captureEvalCandidate, isEvalCaptureEnabled, isEvalScrubEnabled } from './eval-capture.ts';
 import type { HybridSearchMeta } from './types.ts';
-import { extractPageLinks, isAutoLinkEnabled, isAutoTimelineEnabled, isGlobalBasenameEnabled, isStructuredFirstInferenceEnabled, parseTimelineEntries, makeResolver, type UnresolvedFrontmatterRef } from './link-extraction.ts';
+import { extractPageLinks, frontmatterMappingsFromPack, isAutoLinkEnabled, isAutoTimelineEnabled, isGlobalBasenameEnabled, isStructuredFirstInferenceEnabled, parseTimelineEntries, makeResolver, type UnresolvedFrontmatterRef } from './link-extraction.ts';
+import { loadActivePackBestEffort } from './schema-pack/best-effort.ts';
 import { isFactsBackstopEligible } from './facts/eligibility.ts';
 import { stripTakesFence } from './takes-fence.ts';
 import { stripFactsFence } from './facts-fence.ts';
@@ -1144,9 +1145,15 @@ async function runAutoLink(
   // link_inference_mode: opt-in 'structured-first' suppresses the layer-2
   // page-global role-keyword prior in inferLinkType. Off by default.
   const structuredFirst = await isStructuredFirstInferenceEnabled(engine);
+  const pack = await loadActivePackBestEffort({
+    engine,
+    remote: false,
+    sourceId: opts?.sourceId,
+  } as never);
+  const frontmatterMappings = frontmatterMappingsFromPack(pack?.manifest);
   const { candidates, unresolved } = await extractPageLinks(
     slug, fullContent, parsed.frontmatter, parsed.type, resolver,
-    { globalBasename, structuredFirst },
+    { globalBasename, structuredFirst, frontmatterMappings },
   );
 
   // Resolve which targets exist (skip refs to non-existent pages to avoid FK

@@ -3,6 +3,7 @@ import {
   extractEntityRefs,
   extractPageLinks,
   extractFrontmatterLinks,
+  frontmatterMappingsFromPack,
   imageOfCandidates,
   inferLinkType,
   makeResolver,
@@ -1423,6 +1424,61 @@ describe('extractFrontmatterLinks — field-map coverage', () => {
     );
     expect(candidates).toHaveLength(0);
   });
+
+  test('pack mapping inherits legacy direction and dir hint when semantically identical', async () => {
+    const mappings = frontmatterMappingsFromPack({
+      frontmatter_links: [
+        { page_type: 'person', fields: ['company', 'companies'], link_type: 'works_at' },
+      ],
+    });
+    const { candidates } = await extractFrontmatterLinks(
+      'people/pedro',
+      'person' as never,
+      { company: 'Stripe' },
+      resolver,
+      mappings,
+    );
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      fromSlug: 'people/pedro',
+      targetSlug: 'companies/stripe',
+      linkType: 'works_at',
+    });
+  });
+
+  test('pack-only mapping materializes when direction and dir_hint are explicit', async () => {
+    const mappings = frontmatterMappingsFromPack({
+      frontmatter_links: [
+        {
+          page_type: 'contract',
+          fields: ['signers', 'signed_by'],
+          link_type: 'signed',
+          direction: 'incoming',
+          dir_hint: ['people', 'companies'],
+        },
+      ],
+    });
+    const { candidates } = await extractFrontmatterLinks(
+      'contracts/example',
+      'contract' as never,
+      { signers: ['Pedro', 'Stripe'] },
+      resolver,
+      mappings,
+    );
+    expect(candidates).toHaveLength(2);
+    expect(candidates.map(c => c.fromSlug).sort()).toEqual(['companies/stripe', 'people/pedro']);
+    expect(candidates.every(c => c.targetSlug === 'contracts/example')).toBe(true);
+    expect(candidates.every(c => c.linkType === 'signed')).toBe(true);
+  });
+
+  test('pack-only mapping without direction is skipped instead of guessed', () => {
+    const mappings = frontmatterMappingsFromPack({
+      frontmatter_links: [
+        { page_type: 'contract', fields: ['signers'], link_type: 'signed' },
+      ],
+    });
+    expect(mappings).toBe(FRONTMATTER_LINK_MAP);
+  });
 });
 
 describe('makeResolver — fallback chain', () => {
@@ -1847,4 +1903,3 @@ describe('inferLinkType — link_inference_mode structured-first', () => {
     expect(spicenet!.linkType).toBe('invested_in');
   });
 });
-

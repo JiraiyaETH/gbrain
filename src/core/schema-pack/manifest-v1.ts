@@ -147,6 +147,8 @@ const FrontmatterLinkSchema = z.object({
   page_type: z.string(),
   fields: z.array(z.string()).min(1),
   link_type: z.string(),
+  direction: z.enum(['outgoing', 'incoming']).optional(),
+  dir_hint: z.union([z.string(), z.array(z.string())]).optional(),
 }).strict();
 
 const EnrichableSchema = z.object({
