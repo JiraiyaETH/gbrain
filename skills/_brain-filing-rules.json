@@ -125,7 +125,6 @@
       "concepts/*",
       "people/*",
       "companies/*",
-      "notes/*",
       "dream-cycle-summaries/*"
     ],
     "routes": {
