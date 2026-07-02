@@ -61,6 +61,14 @@ export interface SourceRow {
   config: Record<string, unknown>;
 }
 
+export interface GetHealthOpts {
+  /**
+   * Restrict health metrics to the supplied source universe. Omitted means
+   * legacy global health; an empty array means an explicitly empty universe.
+   */
+  sourceIds?: string[];
+}
+
 export interface TraverseGraphOpts {
   sourceId?: string;
   sourceIds?: string[];
@@ -1859,7 +1867,7 @@ export interface BrainEngine {
 
   // Stats + health
   getStats(): Promise<BrainStats>;
-  getHealth(): Promise<BrainHealth>;
+  getHealth(opts?: GetHealthOpts): Promise<BrainHealth>;
 
   // Ingest log
   logIngest(entry: IngestLogInput): Promise<void>;

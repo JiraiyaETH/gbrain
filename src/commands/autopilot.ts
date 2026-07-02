@@ -505,6 +505,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
   while (!stopping) {
     const cycleStart = Date.now();
     let cycleOk = true;
+    let healthOptsForTick: { sourceIds: string[] } | undefined;
 
     // Refresh the lock mtime so another cron-fired autopilot doesn't
     // declare the instance stale after 10 minutes (Codex C).
@@ -635,10 +636,22 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
       try {
         const { MinionQueue } = await import('../core/minions/queue.ts');
         const { computeRecommendations, embeddingProviderConfigured, HOSTED_EMBED_KEY_CONFIG } = await import('../core/brain-score-recommendations.ts');
+        const {
+          dispatchPerSource,
+          dispatchGlobalMaintenance,
+          healthOptsForAutopilotUniverse,
+          loadAutopilotSourceUniverse,
+          resolveEffectiveFanoutMax,
+        } = await import('./autopilot-fanout.ts');
         const queue = new MinionQueue(engine);
         const slotMs = Math.floor(Date.now() / (baseInterval * 1000)) * baseInterval * 1000;
         const slot = new Date(slotMs).toISOString();
         const timeoutMs = Math.max(baseInterval * 2 * 1000, 300_000);
+        const sourceUniverse = await loadAutopilotSourceUniverse(engine);
+        healthOptsForTick = healthOptsForAutopilotUniverse(sourceUniverse);
+        const recommendationSourceId = healthOptsForTick?.sourceIds.length === 1
+          ? healthOptsForTick.sourceIds[0]
+          : undefined;
 
         // ── v0.40 D17: per-source freshness check ────────────────────
         // Runs first; independent of score gate. Submits a 'sync' job per
@@ -801,7 +814,9 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
         }
 
         // Cheap path: engine.getHealth() is a single SQL count query.
-        const health = await engine.getHealth();
+        // Scope it to the same source universe dispatchPerSource will service
+        // so code/isolated sources don't pin the score in a non-actionable band.
+        const health = await engine.getHealth(healthOptsForTick);
         const score = health.brain_score;
         // v0.40.x: recipe-aware embedding-provider check shared with doctor.ts.
         // Resolve the configured model (gateway → DB fallback), then pre-await
@@ -826,6 +841,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
             return !!(process.env[envVar] || (cfgField ? embedKeyCfg[cfgField] : undefined));
           }),
           hasChatApiKey: !!(process.env.ANTHROPIC_API_KEY || await engine.getConfig('anthropic_api_key')),
+          sourceId: recommendationSourceId,
         };
         // v0.41.18.0 (A5 + A19 + A22, T15): consult onboard recommendations
         // ALONGSIDE doctor's brain-score recommendations. Onboard's 4 new
@@ -834,14 +850,20 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
         // Per A19 fail-open: any throw in the onboard path falls through
         // to legacy doctor-only plan (no crash).
         let extraRemediations: ReturnType<typeof computeRecommendations> = [];
-        try {
-          const { runAllOnboardChecks } = await import('../core/onboard/checks.ts');
-          const onboardResults = await runAllOnboardChecks(engine);
-          extraRemediations = onboardResults.flatMap((r) => r.remediations);
-        } catch (err) {
-          process.stderr.write(
-            `[autopilot] onboard checks failed (fail-open per A19): ${err instanceof Error ? err.message : String(err)}\n`,
-          );
+        // Onboard checks are intentionally brain-wide aggregates
+        // (src/core/onboard/checks.ts). When this tick's score is scoped to
+        // the serviced source universe, including their remediations would
+        // make the plan disagree with the score's universe.
+        if (!healthOptsForTick) {
+          try {
+            const { runAllOnboardChecks } = await import('../core/onboard/checks.ts');
+            const onboardResults = await runAllOnboardChecks(engine);
+            extraRemediations = onboardResults.flatMap((r) => r.remediations);
+          } catch (err) {
+            process.stderr.write(
+              `[autopilot] onboard checks failed (fail-open per A19): ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          }
         }
         const plan = computeRecommendations(health, ctx, extraRemediations).filter((r) => r.status === 'remediable');
         const estTotal = plan.reduce((s, r) => s + r.est_seconds, 0);
@@ -871,7 +893,6 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
           // codex P1-3). Fresh-install brains with no sources rows fall
           // back to the legacy single autopilot-cycle so existing
           // behavior is preserved.
-          const { dispatchPerSource, dispatchGlobalMaintenance, resolveEffectiveFanoutMax } = await import('./autopilot-fanout.ts');
           // #2194 fix #1: clamp fan-out to the worker's effective concurrency
           // (reserve ≥1 slot), gated on a LIVE supervisor so a stale audit row
           // can't shrink throughput (codex #9/D5). autopilot-cycle jobs run on
@@ -883,6 +904,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
             timeoutMs,
             fanoutMax,
             jsonMode,
+            sourceUniverse,
           });
           // #2194 fix #3 / #2227 bug #3: dispatch the single brain-wide
           // maintenance job (embed/orphans/purge/…) once per window — the per-
@@ -991,7 +1013,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
     // 4. Health check + adaptive interval (same for both paths)
     let interval = baseInterval;
     try {
-      const health = await engine.getHealth();
+      const health = await engine.getHealth(healthOptsForTick);
       const score = (health as any).brain_score ?? 50;
       interval = score >= 90 ? baseInterval * 2
                : score < 70 ? Math.max(Math.floor(baseInterval / 2), 60)

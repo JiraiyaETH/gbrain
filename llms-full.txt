@@ -2016,7 +2016,7 @@ export interface BrainEngine {
 
   // Stats + health
   getStats(): Promise<BrainStats>;
-  getHealth(): Promise<BrainHealth>;
+  getHealth(opts?: { sourceIds?: string[] }): Promise<BrainHealth>;
 
   // Ingest log
   logIngest(entry: IngestLogInput): Promise<void>;
