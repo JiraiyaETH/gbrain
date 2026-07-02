@@ -82,7 +82,7 @@ Every time this skill creates or updates a brain page that mentions a person or 
 ### Phase 1: Idea/Observation Detection (PRIMARY)
 
 When the user expresses a novel thought, observation, thesis, or framework:
-- If it's the user's **original thinking** (they generated it) → create/update `originals/{slug}`
+- If it's the user's **original thinking** (they generated it) → create/update `ideas/{slug}` (this brain files originals on the ideas/ shelf)
 - If it's a **world concept** they're referencing → create/update `concepts/{slug}`
 - If it's a **product or business idea** → create/update `ideas/{slug}`
 
@@ -114,7 +114,7 @@ resolve or log `auto_links.unresolved` before considering the capture complete.
 
 Always log a one-line summary:
 - `Signals: 0 ideas, 0 entities, 0 facts (skipped: operational)`
-- `Signals: 1 idea (captured → originals/x), 2 entities (enriched → people/y, companies/z)`
+- `Signals: 1 idea (captured → ideas/x), 2 entities (enriched → people/y, companies/z)`
 
 This makes the ambient capture loop debuggable.
 
