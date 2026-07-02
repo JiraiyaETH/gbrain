@@ -502,8 +502,8 @@ export async function importFromContent(
   }
 
   // v0.39.3.0 CV8 — DB content_hash excludes timestamp-bearing frontmatter
-  // keys so identical body content from `gbrain capture` (which stamps
-  // `captured_at` and `ingested_at` per call) produces a stable hash.
+  // keys so identical body content from `gbrain capture` / `gbrain enrich`
+  // (which stamp captured_at / ingested_at / enriched_at) produces a stable hash.
   // Pre-fix, every capture-cli invocation produced a fresh hash because
   // the timestamp changed, defeating:
   //   - the existing.content_hash === hash short-circuit below (every
@@ -528,6 +528,8 @@ export async function importFromContent(
   // on the next import, so dropping them from the hash is safe.
   const HASH_EPHEMERAL_FRONTMATTER_KEYS = [
     'captured_at',
+    'enriched_at',
+    'enriched_by',
     'ingested_at',
     QUARANTINE_KEY,
     CONTENT_FLAG_KEY,

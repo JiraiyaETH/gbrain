@@ -1022,6 +1022,25 @@ export class PostgresEngine implements BrainEngine {
     return rowToPage(rows[0]);
   }
 
+  async mergePageFrontmatter(
+    slug: string,
+    sourceId: string,
+    patch: Record<string, unknown>,
+  ): Promise<boolean> {
+    slug = validateSlug(slug);
+    const sql = this.sql;
+    const rows = await sql`
+      UPDATE pages
+      SET frontmatter = COALESCE(frontmatter, '{}'::jsonb) || ${sql.json(patch as Parameters<typeof sql.json>[0])},
+          updated_at = now()
+      WHERE source_id = ${sourceId}
+        AND slug = ${slug}
+        AND deleted_at IS NULL
+      RETURNING id
+    `;
+    return rows.length > 0;
+  }
+
   async deletePage(slug: string, opts?: { sourceId?: string }): Promise<void> {
     const sql = this.sql;
     const sourceId = opts?.sourceId ?? 'default';

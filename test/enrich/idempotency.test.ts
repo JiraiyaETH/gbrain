@@ -5,7 +5,12 @@
  * Pure (no engine) — runs in the fast parallel loop.
  */
 import { describe, test, expect } from 'bun:test';
-import { backgroundIdempotencyKey } from '../../src/commands/enrich.ts';
+import {
+  asciiFoldForEvidenceQuery,
+  backgroundIdempotencyKey,
+  evidenceQueries,
+  formatChatUnavailableMessage,
+} from '../../src/commands/enrich.ts';
 
 describe('backgroundIdempotencyKey (P1#4)', () => {
   test('namespaced by source id', () => {
@@ -36,5 +41,18 @@ describe('backgroundIdempotencyKey (P1#4)', () => {
     expect(backgroundIdempotencyKey('a', ['--thin'])).not.toBe(
       backgroundIdempotencyKey('b', ['--thin']),
     );
+  });
+});
+
+describe('enrich evidence query helpers', () => {
+  test('adds ASCII-folded title and deduped aliases', () => {
+    expect(asciiFoldForEvidenceQuery('aarnâ')).toBe('aarna');
+    expect(evidenceQueries('aarnâ', ['Aarna', 'Aarnâ'])).toEqual(['aarnâ', 'aarna']);
+  });
+
+  test('chat unavailable message names explicit model without budget framing', () => {
+    const msg = formatChatUnavailableMessage('deepseek:deepseek-reasoner');
+    expect(msg).toContain('deepseek:deepseek-reasoner');
+    expect(msg).not.toMatch(/budget cap/i);
   });
 });
