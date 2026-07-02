@@ -205,7 +205,9 @@ For EACH attendee:
 2. If NO → create via enrich skill (this is mandatory, not optional)
 3. If YES → update compiled truth with meeting context
 4. Add a timeline entry IN THE PERSON'S PAGE FILE (under `## Timeline`):
-   `- <date> — Attended <meeting-title>… → [[meetings/<slug>]]`, then `gbrain put`.
+   `- **<YYYY-MM-DD>** | Attended <meeting-title>… → [[meetings/<slug>]]`, then `gbrain put`.
+   (Bold date + pipe is the ONLY format `extract timeline` parses — `- <date> — …` rows
+   are silently ignored and never reach the DB timeline.)
 5. **Capture archetype signals** — when stated or reasonably inferable, record on the
    person's page **where they are from / based in the world** and their **noted
    interests or hobbies** (e.g. `Location / origin:` and `Interests:` lines in compiled
@@ -237,7 +239,7 @@ For each materially discussed company, project, or concept:
 1. Check brain for existing page (reconcile — never clobber a richer existing page;
    for an already-rich page, insert ONE timeline line via a surgical file edit).
 2. Create/update as needed.
-3. Add a `## Timeline` entry on the ENTITY page (`- <date> — … → [[meetings/<slug>]]`).
+3. Add a `## Timeline` entry on the ENTITY page (`- **<YYYY-MM-DD>** | … → [[meetings/<slug>]]`).
 4. The entity page links to the meeting (entity → meeting). Done.
 
 **NEVER wikilink a person/company/contract inside the MEETING body (v1.1.0 fix).**
