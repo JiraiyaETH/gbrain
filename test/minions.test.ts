@@ -1489,6 +1489,116 @@ describe('MinionQueue: Idempotency', () => {
     expect(j2.id).toBe(j1.id);
     expect(j2.data).toEqual({ v: 1 }); // first wins
   });
+
+  test('waiting idempotency_key hit keeps live dedup behavior', async () => {
+    const j1 = await queue.add('sync', { v: 1 }, { idempotency_key: 'live-waiting' });
+    const j2 = await queue.add('sync', { v: 2 }, { idempotency_key: 'live-waiting' });
+
+    expect(j2.id).toBe(j1.id);
+    expect(j2.status).toBe('waiting');
+    expect(j2.data).toEqual({ v: 1 });
+  });
+
+  test('active idempotency_key hit keeps live dedup behavior', async () => {
+    const j1 = await queue.add('sync', { v: 1 }, { idempotency_key: 'live-active' });
+    const claimed = await queue.claim('tok-active', 30000, 'default', ['sync']);
+    expect(claimed?.id).toBe(j1.id);
+
+    const j2 = await queue.add('sync', { v: 2 }, { idempotency_key: 'live-active' });
+
+    expect(j2.id).toBe(j1.id);
+    expect(j2.status).toBe('active');
+    expect(j2.data).toEqual({ v: 1 });
+  });
+
+  test('completed idempotency_key hit re-arms the row as fresh waiting work', async () => {
+    const j1 = await queue.add('sync', { v: 1 }, { idempotency_key: 'terminal-completed', max_stalled: 2 });
+    const claimed = await queue.claim('tok-complete-1', 30000, 'default', ['sync']);
+    await queue.completeJob(claimed!.id, 'tok-complete-1', { old: true });
+
+    const j2 = await queue.add('sync', { v: 2 }, { idempotency_key: 'terminal-completed', max_stalled: 4 });
+
+    expect(j2.id).toBe(j1.id);
+    expect(j2.status).toBe('waiting');
+    expect(j2.data).toEqual({ v: 2 });
+    expect(j2.attempts_made).toBe(0);
+    expect(j2.attempts_started).toBe(0);
+    expect(j2.stalled_counter).toBe(0);
+    expect(j2.started_at).toBeNull();
+    expect(j2.finished_at).toBeNull();
+    expect(j2.result).toBeNull();
+    expect(j2.error_text).toBeNull();
+    expect(j2.stacktrace).toEqual([]);
+    expect(j2.max_stalled).toBe(4);
+
+    const claimedAgain = await queue.claim('tok-complete-2', 30000, 'default', ['sync']);
+    expect(claimedAgain?.id).toBe(j1.id);
+    expect(claimedAgain?.data).toEqual({ v: 2 });
+  });
+
+  const terminalCases = [
+    {
+      status: 'failed',
+      finish: async (job: MinionJob) => {
+        const claimed = await queue.claim('tok-failed', 30000, 'default', [job.name]);
+        await queue.failJob(claimed!.id, 'tok-failed', 'failed once', 'failed');
+      },
+    },
+    {
+      status: 'dead',
+      finish: async (job: MinionJob) => {
+        const claimed = await queue.claim('tok-dead', 30000, 'default', [job.name]);
+        await queue.failJob(claimed!.id, 'tok-dead', 'dead once', 'dead');
+      },
+    },
+    {
+      status: 'cancelled',
+      finish: async (job: MinionJob) => {
+        await queue.cancelJob(job.id);
+      },
+    },
+  ] as const;
+
+  for (const { status, finish } of terminalCases) {
+    test(`${status} idempotency_key hit re-arms as worker-claimable`, async () => {
+      const key = `terminal-${status}`;
+      const first = await queue.add('sync', { tick: 1 }, { idempotency_key: key });
+      await finish(first);
+      const terminal = await queue.getJob(first.id);
+      expect(terminal?.status).toBe(status);
+
+      const rearmed = await queue.add('sync', { tick: 2 }, { idempotency_key: key });
+
+      expect(rearmed.id).toBe(first.id);
+      expect(rearmed.status).toBe('waiting');
+      expect(rearmed.data).toEqual({ tick: 2 });
+      expect(rearmed.attempts_made).toBe(0);
+      expect(rearmed.finished_at).toBeNull();
+
+      const claimedAgain = await queue.claim(`tok-${status}-again`, 30000, 'default', ['sync']);
+      expect(claimedAgain?.id).toBe(first.id);
+    });
+  }
+
+  test('stable recommendation idempotency key across ticks executes again after completion', async () => {
+    const key = 'default:sync:8371ec09';
+    const firstTick = await queue.add('sync', { tick: 1 }, { idempotency_key: key });
+    const firstClaim = await queue.claim('tok-stable-1', 30000, 'default', ['sync']);
+    await queue.completeJob(firstClaim!.id, 'tok-stable-1', { tick: 1 });
+
+    const secondTick = await queue.add('sync', { tick: 2 }, { idempotency_key: key });
+    expect(secondTick.id).toBe(firstTick.id);
+    expect(secondTick.status).toBe('waiting');
+
+    const secondClaim = await queue.claim('tok-stable-2', 30000, 'default', ['sync']);
+    expect(secondClaim?.id).toBe(firstTick.id);
+    expect(secondClaim?.data).toEqual({ tick: 2 });
+    await queue.completeJob(secondClaim!.id, 'tok-stable-2', { tick: 2 });
+
+    const final = await queue.getJob(firstTick.id);
+    expect(final?.status).toBe('completed');
+    expect(final?.result).toEqual({ tick: 2 });
+  });
 });
 
 // --- v7 child_done auto-post ---
