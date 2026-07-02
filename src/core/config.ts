@@ -915,6 +915,10 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'emotional_weight.user_holder',
   // Cycle phase config
   'cycle.grade_takes.write_gstack_learnings',
+  // Takes bootstrap config
+  'takes.bootstrap_enabled',
+  'takes.autopilot_allowed',
+  'takes.page_types',
   // Content sanity (v0.41)
   'content_sanity.bytes_warn',
   'content_sanity.bytes_block',
