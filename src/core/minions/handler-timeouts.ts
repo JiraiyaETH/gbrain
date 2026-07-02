@@ -32,6 +32,7 @@ const TEN_MIN_MS = 10 * 60 * 1000;
  */
 export const HANDLER_DEFAULT_TIMEOUT_MS: Readonly<Record<string, number>> = {
   subagent: THIRTY_MIN_MS,
+  'shell-subagent': THIRTY_MIN_MS,
   subagent_aggregator: THIRTY_MIN_MS,
   'embed-backfill': THIRTY_MIN_MS,
   'autopilot-cycle': THIRTY_MIN_MS,

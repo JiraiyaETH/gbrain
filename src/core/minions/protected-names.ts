@@ -19,6 +19,9 @@ export const PROTECTED_JOB_NAMES: ReadonlySet<string> = new Set([
   // `gbrain agent run` CLI path (which sets allowProtectedSubmit) or a
   // trusted local `submit_job` (ctx.remote=false) can insert these rows.
   'subagent',
+  // Runs a local Claude CLI child process and writes parsed page blocks via
+  // the same subagent put_page policy path. Same protection posture.
+  'shell-subagent',
   'subagent_aggregator',
   // v0.36+ brain-health-100 wave (D11 from outside-voice review):
   // synthesize, patterns, consolidate are cycle phases that internally

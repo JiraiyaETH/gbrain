@@ -75,7 +75,7 @@ async function withSubagentAutoCancel<T>(engine: PGLiteEngine, body: () => Promi
         await engine.executeRaw(
           `UPDATE minion_jobs
               SET status = 'cancelled', finished_at = now()
-            WHERE name = 'subagent' AND status IN ('waiting', 'active')`,
+            WHERE name IN ('subagent', 'shell-subagent') AND status IN ('waiting', 'active')`,
         );
       } catch {
         // Race against shutdown is fine; ignore.
@@ -247,6 +247,39 @@ describe('E2E synthesize chunking — fan-out shape', () => {
       expect(rows[0].idempotency_key).toBe(expectedKey);
       // Specifically: legacy key shape has NO ":c<idx>of<n>" suffix.
       expect(rows[0].idempotency_key).not.toMatch(/:c\d+of\d+$/);
+    } finally {
+      await rig.cleanup();
+    }
+  }, 30_000);
+
+  test('use_subscription_billing=true submits shell-subagent children', async () => {
+    const rig = await setupRig();
+    try {
+      await rig.engine.setConfig('dream.synthesize.enabled', 'true');
+      await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
+      await rig.engine.setConfig('dream.synthesize.use_subscription_billing', 'true');
+
+      const basename = '2026-04-25-subscription-billing.txt';
+      const filePath = corpusPath(rig.corpusDir, basename);
+      const content = 'subscription billing transcript content\n'.repeat(100);
+      writeFileSync(filePath, content);
+      await seedVerdict(rig.engine, filePath, content);
+
+      await withoutAnthropicKey(async () => {
+        await withSubagentAutoCancel(rig.engine, async () => {
+          const result = await runPhaseSynthesize(rig.engine, {
+            brainDir: rig.brainDir,
+            dryRun: false,
+          });
+          const details = result.details as { children_submitted: number };
+          expect(details.children_submitted).toBe(1);
+        });
+      });
+
+      const rows = await rig.engine.executeRaw<{ name: string }>(
+        `SELECT name FROM minion_jobs ORDER BY id`,
+      );
+      expect(rows.map(r => r.name)).toEqual(['shell-subagent']);
     } finally {
       await rig.cleanup();
     }
