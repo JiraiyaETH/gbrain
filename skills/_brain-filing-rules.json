@@ -127,6 +127,10 @@
       "companies/*",
       "notes/*",
       "dream-cycle-summaries/*"
-    ]
+    ],
+    "routes": {
+      "reflection": "personal/reflections/{date}-<topic-slug>-{hash}",
+      "original": "ideas/{date}-<idea-slug>-{hash}"
+    }
   }
 }

@@ -1812,8 +1812,10 @@ export async function registerBuiltinHandlers(
   // jobs; only the CLI path with allowProtectedSubmit can). No separate
   // cost-ceremony env flag needed.
   const { makeSubagentHandler } = await import('../core/minions/handlers/subagent.ts');
+  const { makeShellSubagentHandler } = await import('../core/minions/handlers/shell-subagent.ts');
   const { subagentAggregatorHandler } = await import('../core/minions/handlers/subagent-aggregator.ts');
   worker.register('subagent', makeSubagentHandler({ engine }));
+  worker.register('shell-subagent', makeShellSubagentHandler({ engine }));
   worker.register('subagent_aggregator', subagentAggregatorHandler);
   process.stderr.write('[minion worker] subagent handlers enabled\n');
 
