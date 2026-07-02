@@ -1,7 +1,7 @@
 // src/core/extract-takes-from-pages.ts
-// v0.41.18.0 (A12, A24, T9). Haiku classifier loop over allowlisted page
-// types — concept, atom, lore, briefing, writing, originals — extracts
-// gradeable claims and inserts them as takes fence rows.
+// v0.41.18.0 (A12, A24, T9). Haiku classifier loop over configured
+// allowlisted page types (default: concept, atom, lore, briefing, writing,
+// originals) extracts gradeable claims and inserts them as takes fence rows.
 //
 // Two-gate consent per A12:
 //   - takes.bootstrap_enabled (default false): must be true to run at all.
@@ -20,6 +20,8 @@ import { chat, isAvailable } from './ai/gateway.ts';
 export const ALLOWED_PAGE_TYPES = [
   'concept', 'atom', 'lore', 'briefing', 'writing', 'originals',
 ] as const;
+
+const PAGE_TYPE_RE = /^[a-z][a-z0-9_-]*$/;
 
 const CLASSIFIER_SYSTEM = `You extract gradeable CLAIMS from longform writing.
 
@@ -100,6 +102,34 @@ export function parseClaimsJson(raw: string): Array<{ claim: string; kind: TakeK
   }
 }
 
+export function parseTakesPageTypesConfig(raw: string | null | undefined): string[] {
+  if (!raw || raw.trim().length === 0) return [...ALLOWED_PAGE_TYPES];
+
+  const pageTypes: string[] = [];
+  for (const part of raw.split(',')) {
+    const value = part.trim().toLowerCase();
+    if (!value) continue;
+    if (!PAGE_TYPE_RE.test(value)) {
+      process.stderr.write(
+        `[takes extract] ignoring invalid takes.page_types entry "${value}" ` +
+        `(expected ${PAGE_TYPE_RE.source})\n`,
+      );
+      continue;
+    }
+    pageTypes.push(value);
+  }
+
+  return pageTypes.length > 0 ? pageTypes : [...ALLOWED_PAGE_TYPES];
+}
+
+export async function resolveTakesPageTypes(engine: BrainEngine): Promise<string[]> {
+  try {
+    return parseTakesPageTypesConfig(await engine.getConfig('takes.page_types'));
+  } catch {
+    return [...ALLOWED_PAGE_TYPES];
+  }
+}
+
 export async function extractTakesFromPages(
   engine: BrainEngine,
   opts: ExtractTakesFromPagesOpts,
@@ -124,23 +154,26 @@ export async function extractTakesFromPages(
   }
 
   const dryRun = opts.dryRun ?? false;
-  const maxPages = opts.maxPages ?? 50;
+  const maxPages = Math.max(1, Math.floor(opts.maxPages ?? 50));
   const holder = opts.holder ?? 'system';
-  const sourceFilter = opts.sourceIdFilter ? `AND source_id = $1` : '';
-  const params = opts.sourceIdFilter ? [opts.sourceIdFilter] : [];
+  const pageTypes = await resolveTakesPageTypes(engine);
+  const params: unknown[] = [pageTypes];
+  const sourceFilter = opts.sourceIdFilter ? `AND source_id = $${params.length + 1}` : '';
+  if (opts.sourceIdFilter) params.push(opts.sourceIdFilter);
+  const limitParam = params.length + 1;
+  params.push(maxPages);
 
   // Fetch eligible pages. Order by updated_at DESC so recently-edited
   // pages get bootstrapped first.
-  const typesList = ALLOWED_PAGE_TYPES.map((t) => `'${t}'`).join(', ');
   const pages = await engine.executeRaw<PageRow>(
     `SELECT id, slug, source_id, type, compiled_truth, updated_at
        FROM pages
-      WHERE type IN (${typesList})
+      WHERE type = ANY($1::text[])
         AND deleted_at IS NULL
         AND length(COALESCE(compiled_truth, '')) > 200
         ${sourceFilter}
       ORDER BY updated_at DESC
-      LIMIT ${maxPages}`,
+      LIMIT $${limitParam}`,
     params,
   );
 
