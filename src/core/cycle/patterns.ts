@@ -19,14 +19,20 @@
  */
 
 import { join, dirname } from 'node:path';
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult, PhaseError } from '../cycle.ts';
 import { MinionQueue } from '../minions/queue.ts';
 import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.ts';
 import type { MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
 import { serializeMarkdown } from '../markdown.ts';
-import type { Page, PageType } from '../types.ts';
+import type { Page } from '../types.ts';
+import {
+  DEFAULT_DREAM_SYNTHESIZE_ROUTES,
+  loadDreamSynthesizePaths,
+  renderDreamSlugRoute,
+  type DreamSynthesizeRoutes,
+} from './synthesize.ts';
 
 export interface PatternsPhaseOpts {
   brainDir: string;
@@ -46,8 +52,14 @@ export async function runPhasePatterns(
       return skipped('disabled', 'dream.patterns.enabled is false');
     }
 
+    const synthPaths = await loadDreamSynthesizePaths();
+    const reflectionLikePrefix = deriveDreamRouteLikePrefix(
+      synthPaths.routes.reflection,
+      'wiki/personal/reflections/%',
+    );
+
     // Gather reflections within lookback window.
-    const reflections = await gatherReflections(engine, config.lookbackDays);
+    const reflections = await gatherReflections(engine, config.lookbackDays, reflectionLikePrefix);
     if (reflections.length < config.minEvidence) {
       return skipped(
         'insufficient_evidence',
@@ -64,20 +76,31 @@ export async function runPhasePatterns(
     }
 
     // Submit one subagent for pattern detection.
-    if (!process.env.ANTHROPIC_API_KEY) {
+    if (!config.useSubscriptionBilling && !process.env.ANTHROPIC_API_KEY) {
       return skipped('no_api_key', 'ANTHROPIC_API_KEY unset; pattern detection skipped');
     }
 
-    const allowedSlugPrefixes = await loadAllowedSlugPrefixes();
+    const allowedSlugPrefixes = synthPaths.globs;
     if (allowedSlugPrefixes.length === 0) {
       return failed(makeError('InternalError', 'NO_ALLOWLIST',
         'skills/_brain-filing-rules.json missing dream_synthesize_paths.globs'));
     }
 
     const queue = new MinionQueue(engine);
+    const childJobName = config.useSubscriptionBilling ? 'shell-subagent' : 'subagent';
+    const subagentModel = config.model.includes(':')
+      ? config.model
+      : config.model.toLowerCase().startsWith('claude-')
+        ? `anthropic:${config.model}`
+        : config.model;
     const data: SubagentHandlerData = {
-      prompt: buildPatternsPrompt(reflections, config.minEvidence),
-      model: config.model,
+      prompt: buildPatternsPrompt(
+        reflections,
+        config.minEvidence,
+        synthPaths.routes,
+        reflectionLikePrefix,
+      ),
+      model: subagentModel,
       max_turns: 30,
       allowed_slug_prefixes: allowedSlugPrefixes,
     };
@@ -85,7 +108,7 @@ export async function runPhasePatterns(
       max_stalled: 3,
       timeout_ms: 30 * 60 * 1000,
     };
-    const job = await queue.add('subagent', data as unknown as Record<string, unknown>, submitOpts, {
+    const job = await queue.add(childJobName, data as unknown as Record<string, unknown>, submitOpts, {
       allowProtectedSubmit: true,
     });
 
@@ -135,6 +158,7 @@ interface PatternsConfig {
   lookbackDays: number;
   minEvidence: number;
   model: string;
+  useSubscriptionBilling: boolean;
 }
 
 async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> {
@@ -142,6 +166,7 @@ async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> 
   const enabled = enabledStr === null ? true : enabledStr === 'true';
   const lookbackStr = await engine.getConfig('dream.patterns.lookback_days');
   const minEvidenceStr = await engine.getConfig('dream.patterns.min_evidence');
+  const useSubscriptionBillingRaw = await engine.getConfig('dream.synthesize.use_subscription_billing');
   // v0.28: unified model resolution
   const { resolveModel } = await import('../model-config.ts');
   const model = await resolveModel(engine, {
@@ -155,6 +180,7 @@ async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> 
     lookbackDays: lookbackStr ? Math.max(1, parseInt(lookbackStr, 10) || 30) : 30,
     minEvidence: minEvidenceStr ? Math.max(1, parseInt(minEvidenceStr, 10) || 3) : 3,
     model,
+    useSubscriptionBilling: useSubscriptionBillingRaw === 'true' || useSubscriptionBillingRaw === '1',
   };
 }
 
@@ -169,16 +195,17 @@ interface ReflectionRef {
 async function gatherReflections(
   engine: BrainEngine,
   lookbackDays: number,
+  reflectionLikePrefix: string,
 ): Promise<ReflectionRef[]> {
   const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
   const rows = await engine.executeRaw<{ slug: string; title: string | null; compiled_truth: string | null }>(
     `SELECT slug, title, compiled_truth
        FROM pages
-      WHERE slug LIKE 'wiki/personal/reflections/%'
+      WHERE slug LIKE $2
         AND updated_at >= $1::timestamptz
       ORDER BY updated_at DESC
       LIMIT 100`,
-    [since],
+    [since, reflectionLikePrefix],
   );
   return rows.map(r => ({
     slug: r.slug,
@@ -189,8 +216,18 @@ async function gatherReflections(
 
 // ── Prompt ────────────────────────────────────────────────────────────
 
-function buildPatternsPrompt(reflections: ReflectionRef[], minEvidence: number): string {
+function buildPatternsPrompt(
+  reflections: ReflectionRef[],
+  minEvidence: number,
+  routes: DreamSynthesizeRoutes = DEFAULT_DREAM_SYNTHESIZE_ROUTES,
+  reflectionLikePrefix = 'wiki/personal/reflections/%',
+): string {
   const today = new Date().toISOString().slice(0, 10);
+  const patternSlugTemplate = renderDreamSlugRoute(routes.pattern, today, '');
+  const reflectionEvidencePath = displayPathFromLikePrefix(reflectionLikePrefix);
+  const patternWritePrefix = displayPathFromLikePrefix(
+    deriveDreamRouteLikePrefix(routes.pattern, 'wiki/personal/patterns/%'),
+  );
   const corpus = reflections
     .map((r, i) => `### ${i + 1}. [[${r.slug}]] — ${r.title}\n${r.excerpt}`)
     .join('\n\n---\n\n');
@@ -199,15 +236,15 @@ function buildPatternsPrompt(reflections: ReflectionRef[], minEvidence: number):
 
 OUTPUT POLICY
 - Only name a pattern if it appears in at least ${minEvidence} DISTINCT reflections.
-- Each pattern page MUST cite the reflections that constitute its evidence (use [[wiki/personal/reflections/...]] wikilinks).
+- Each pattern page MUST cite the reflections that constitute its evidence (use [[${reflectionEvidencePath}]] wikilinks).
 - Use \`search\` to check whether a similar pattern page already exists; if yes, update it (use the same slug). If no, create a new one.
-- Pattern slug format: \`wiki/personal/patterns/<topic-slug>\` (lowercase alphanumeric + hyphens; no underscores, no extension, no date).
+- Pattern slug format: \`${patternSlugTemplate}\` (lowercase alphanumeric + hyphens; no underscores, no extension, no date).
 - A "pattern" is a recurring theme, anxiety, decision pattern, relationship dynamic, or self-knowledge motif. NOT a single insight. NOT a list of unrelated topics.
 
 DO NOT WRITE
 - A "patterns from today" digest (that's the dream-cycle-summaries page; not your job).
 - Patterns with <${minEvidence} reflections cited.
-- Anything outside wiki/personal/patterns/.
+- Anything outside ${patternWritePrefix}.
 
 CONTEXT
 - Today: ${today}
@@ -217,6 +254,23 @@ REFLECTIONS
 ${corpus}
 
 When done, briefly list the pattern slugs you wrote/updated in your final message.`;
+}
+
+function deriveDreamRouteLikePrefix(template: string, fallback: string): string {
+  const route = template.trim();
+  if (!route) return fallback;
+  const firstPlaceholder = route.search(/[<{]/);
+  const staticPrefix = firstPlaceholder >= 0 ? route.slice(0, firstPlaceholder) : route;
+  const slash = staticPrefix.lastIndexOf('/');
+  if (slash < 0) return fallback;
+  const dirPrefix = staticPrefix.slice(0, slash + 1);
+  return dirPrefix ? `${dirPrefix}%` : fallback;
+}
+
+function displayPathFromLikePrefix(likePrefix: string): string {
+  return likePrefix.endsWith('%')
+    ? `${likePrefix.slice(0, -1)}...`
+    : likePrefix;
 }
 
 // ── Provenance via put_page tool execution rows ─────────────────────
@@ -241,9 +295,37 @@ async function collectChildPutPageSlugs(
       ORDER BY 1`,
     [childIds],
   );
-  return rows
-    .map(r => r.slug)
-    .filter((s): s is string => typeof s === 'string' && s.length > 0)
+  const slugs = new Set<string>();
+  for (const r of rows) {
+    if (typeof r.slug === 'string' && r.slug.length > 0) slugs.add(r.slug);
+  }
+
+  const resultRows = await engine.executeRaw<{ result: unknown }>(
+    `SELECT result
+       FROM minion_jobs
+      WHERE id = ANY($1::int[])
+        AND name = 'shell-subagent'
+        AND status = 'completed'
+        AND result IS NOT NULL`,
+    [childIds],
+  );
+  for (const r of resultRows) {
+    let result: Record<string, unknown> | null = null;
+    try {
+      result = typeof r.result === 'string'
+        ? JSON.parse(r.result) as Record<string, unknown>
+        : (r.result && typeof r.result === 'object' ? r.result as Record<string, unknown> : null);
+    } catch {
+      result = null;
+    }
+    const written = result?.written_slugs;
+    if (!Array.isArray(written)) continue;
+    for (const slug of written) {
+      if (typeof slug === 'string' && slug.length > 0) slugs.add(slug);
+    }
+  }
+
+  return Array.from(slugs).sort()
     .map(slug => ({ slug, source_id: 'default' }));
 }
 
@@ -298,27 +380,6 @@ function renderPageToMarkdown(page: Page, tags: string[]): string {
   );
 }
 
-// ── Allow-list (shared with synthesize.ts) ───────────────────────────
-
-async function loadAllowedSlugPrefixes(): Promise<string[]> {
-  const candidates = [
-    join(process.cwd(), 'skills', '_brain-filing-rules.json'),
-    join(__dirname, '..', '..', '..', 'skills', '_brain-filing-rules.json'),
-  ];
-  for (const path of candidates) {
-    if (!existsSync(path)) continue;
-    try {
-      const raw = readFileSync(path, 'utf8');
-      const parsed = JSON.parse(raw) as { dream_synthesize_paths?: { globs?: unknown } };
-      const globs = parsed?.dream_synthesize_paths?.globs;
-      if (Array.isArray(globs) && globs.every(g => typeof g === 'string')) {
-        return globs as string[];
-      }
-    } catch { /* try next */ }
-  }
-  return [];
-}
-
 // ── Status helpers ───────────────────────────────────────────────────
 
 function ok(summary: string, details: Record<string, unknown> = {}): PhaseResult {
@@ -349,3 +410,10 @@ function failed(error: PhaseError): PhaseResult {
 function makeError(cls: string, code: string, message: string, hint?: string): PhaseError {
   return hint ? { class: cls, code, message, hint } : { class: cls, code, message };
 }
+
+export const __testing = {
+  buildPatternsPrompt,
+  deriveDreamRouteLikePrefix,
+  displayPathFromLikePrefix,
+  gatherReflections,
+};

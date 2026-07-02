@@ -686,22 +686,24 @@ async function checkCooldown(
 
 // ── Allow-list source of truth ───────────────────────────────────────
 
-interface DreamSynthesizeRoutes {
+export interface DreamSynthesizeRoutes {
   reflection: string;
   original: string;
+  pattern: string;
 }
 
-interface DreamSynthesizePaths {
+export interface DreamSynthesizePaths {
   globs: string[];
   routes: DreamSynthesizeRoutes;
 }
 
-const DEFAULT_DREAM_SYNTHESIZE_ROUTES: DreamSynthesizeRoutes = {
+export const DEFAULT_DREAM_SYNTHESIZE_ROUTES: DreamSynthesizeRoutes = {
   reflection: 'wiki/personal/reflections/{date}-<topic-slug>-{hash}',
   original: 'wiki/originals/ideas/{date}-<idea-slug>-{hash}',
+  pattern: 'wiki/personal/patterns/<topic-slug>',
 };
 
-async function loadDreamSynthesizePaths(): Promise<DreamSynthesizePaths> {
+export async function loadDreamSynthesizePaths(): Promise<DreamSynthesizePaths> {
   // Search a few known locations relative to the binary / repo. The first
   // hit wins; if none found, return [].
   const candidates = [
@@ -733,6 +735,9 @@ function parseDreamSynthesizeRoutes(raw: unknown): DreamSynthesizeRoutes {
     original: typeof r.original === 'string' && r.original.trim()
       ? r.original
       : DEFAULT_DREAM_SYNTHESIZE_ROUTES.original,
+    pattern: typeof r.pattern === 'string' && r.pattern.trim()
+      ? r.pattern
+      : DEFAULT_DREAM_SYNTHESIZE_ROUTES.pattern,
   };
 }
 
@@ -1025,7 +1030,7 @@ ${chunkText}
 When done, briefly list the slugs you wrote in your final message so the orchestrator can audit.`;
 }
 
-function renderDreamSlugRoute(template: string, dateHint: string, hashSuffix: string): string {
+export function renderDreamSlugRoute(template: string, dateHint: string, hashSuffix: string): string {
   return template
     .replaceAll('{date}', dateHint)
     .replaceAll('{hash}', hashSuffix);
