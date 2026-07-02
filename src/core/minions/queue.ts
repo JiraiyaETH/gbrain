@@ -42,6 +42,10 @@ const DEFAULT_MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5 MiB
 
 const TERMINAL_STATUSES = ['completed', 'failed', 'dead', 'cancelled'] as const;
 
+function isTerminalStatus(status: MinionJobStatus): boolean {
+  return (TERMINAL_STATUSES as readonly string[]).includes(status);
+}
+
 export class MinionQueue {
   readonly maxSpawnDepth: number;
   readonly maxAttachmentBytes: number;
@@ -130,15 +134,20 @@ export class MinionQueue {
     const maxSpawnDepth = opts?.max_spawn_depth ?? this.maxSpawnDepth;
 
     return this.engine.transaction(async (tx) => {
-      // 1. Idempotency fast path — if a row already exists for this key, return it
-      //    without doing any other work. The unique partial index guarantees
-      //    no second row can be inserted with the same non-null key.
+      // 1. Idempotency fast path. Live rows still dedup exactly as before. A
+      //    terminal row is only a re-arm candidate: after parent/cap checks, we
+      //    atomically flip that same row back to a fresh claimable state.
+      let rearmCandidate: MinionJob | null = null;
       if (opts?.idempotency_key) {
         const existing = await tx.executeRaw<Record<string, unknown>>(
           `SELECT * FROM minion_jobs WHERE idempotency_key = $1`,
           [opts.idempotency_key]
         );
-        if (existing.length > 0) return rowToMinionJob(existing[0]);
+        if (existing.length > 0) {
+          const existingJob = rowToMinionJob(existing[0]);
+          if (!isTerminalStatus(existingJob.status)) return existingJob;
+          rearmCandidate = existingJob;
+        }
       }
 
       // 1b. Submission-time backpressure for high-frequency named jobs.
@@ -160,7 +169,7 @@ export class MinionQueue {
       //
       // Engine compatibility: PGLite (WASM Postgres 17) supports
       // pg_advisory_xact_lock, so this works on both engines without branching.
-      if (opts?.maxWaiting !== undefined) {
+      if (!rearmCandidate && opts?.maxWaiting !== undefined) {
         const maxWaiting = Math.max(1, Math.floor(opts.maxWaiting));
         const backpressureQueue = opts?.queue ?? 'default';
         await tx.executeRaw(
@@ -216,6 +225,20 @@ export class MinionQueue {
           throw new Error(`spawn depth ${depth} exceeds maxSpawnDepth ${maxSpawnDepth}`);
         }
 
+        // If another submitter re-armed the same idempotency key while this
+        // transaction waited on the parent lock, return that fresh live row
+        // instead of counting it against max_children and throwing.
+        if (rearmCandidate && opts?.idempotency_key) {
+          const currentRows = await tx.executeRaw<Record<string, unknown>>(
+            `SELECT * FROM minion_jobs WHERE idempotency_key = $1`,
+            [opts.idempotency_key]
+          );
+          if (currentRows.length > 0) {
+            const current = rowToMinionJob(currentRows[0]);
+            if (!isTerminalStatus(current.status)) return current;
+          }
+        }
+
         if (parent.max_children !== null) {
           const countRows = await tx.executeRaw<{ count: string }>(
             `SELECT count(*)::text as count FROM minion_jobs
@@ -246,6 +269,92 @@ export class MinionQueue {
       const clampedMaxStalled = hasMaxStalled
         ? Math.max(1, Math.min(100, Math.floor(opts!.max_stalled as number)))
         : null;
+
+      let child: MinionJob | null = null;
+
+      if (rearmCandidate && opts?.idempotency_key) {
+        const maxStalledSet = hasMaxStalled
+          ? 'max_stalled = $21,'
+          : 'max_stalled = DEFAULT,';
+        const rearmSql = `UPDATE minion_jobs SET
+            name = $1,
+            queue = $2,
+            status = $3,
+            priority = $4,
+            data = $5::jsonb,
+            max_attempts = $6,
+            attempts_made = 0,
+            attempts_started = 0,
+            backoff_type = $7,
+            backoff_delay = $8,
+            backoff_jitter = $9,
+            stalled_counter = 0,
+            lock_token = NULL,
+            lock_until = NULL,
+            delay_until = $10,
+            parent_job_id = $11,
+            on_child_fail = $12,
+            tokens_input = 0,
+            tokens_output = 0,
+            tokens_cache_read = 0,
+            depth = $13,
+            max_children = $14,
+            timeout_ms = $15,
+            timeout_at = NULL,
+            remove_on_complete = $16,
+            remove_on_fail = $17,
+            idempotency_key = $18,
+            quiet_hours = $19::jsonb,
+            stagger_key = $20,
+            ${maxStalledSet}
+            result = NULL,
+            progress = NULL,
+            error_text = NULL,
+            stacktrace = '[]'::jsonb,
+            started_at = NULL,
+            finished_at = NULL,
+            updated_at = now()
+          WHERE id = $${hasMaxStalled ? 22 : 21}
+            AND status IN ('completed', 'failed', 'dead', 'cancelled')
+          RETURNING *`;
+        const rearmParams: unknown[] = [
+          jobName,
+          opts?.queue ?? 'default',
+          childStatus,
+          opts?.priority ?? 0,
+          data ?? {},
+          opts?.max_attempts ?? 3,
+          opts?.backoff_type ?? 'exponential',
+          opts?.backoff_delay ?? 1000,
+          opts?.backoff_jitter ?? 0.2,
+          delayUntil?.toISOString() ?? null,
+          opts?.parent_job_id ?? null,
+          opts?.on_child_fail ?? 'fail_parent',
+          depth,
+          opts?.max_children ?? null,
+          opts?.timeout_ms ?? defaultTimeoutMsFor(jobName),
+          opts?.remove_on_complete ?? false,
+          opts?.remove_on_fail ?? false,
+          opts.idempotency_key,
+          opts?.quiet_hours ?? null,
+          opts?.stagger_key ?? null,
+        ];
+        if (hasMaxStalled) rearmParams.push(clampedMaxStalled);
+        rearmParams.push(rearmCandidate.id);
+
+        const rearmed = await tx.executeRaw<Record<string, unknown>>(rearmSql, rearmParams);
+        if (rearmed.length === 0) {
+          const currentRows = await tx.executeRaw<Record<string, unknown>>(
+            `SELECT * FROM minion_jobs WHERE idempotency_key = $1`,
+            [opts.idempotency_key]
+          );
+          if (currentRows.length === 0) {
+            throw new Error(`idempotency_key ${opts.idempotency_key} re-arm found no current row`);
+          }
+          return rowToMinionJob(currentRows[0]);
+        }
+        child = rowToMinionJob(rearmed[0]);
+      }
 
       const baseCols = `name, queue, status, priority, data, max_attempts, backoff_type,
             backoff_delay, backoff_jitter, delay_until, parent_job_id, on_child_fail,
@@ -291,11 +400,11 @@ export class MinionQueue {
       ];
       if (hasMaxStalled) params.push(clampedMaxStalled);
 
-      const inserted = await tx.executeRaw<Record<string, unknown>>(insertSql, params);
+      const inserted = child ? [] : await tx.executeRaw<Record<string, unknown>>(insertSql, params);
 
       // ON CONFLICT DO NOTHING returns 0 rows — fall back to SELECT to fetch the
       // existing row that won the race.
-      if (inserted.length === 0 && opts?.idempotency_key) {
+      if (!child && inserted.length === 0 && opts?.idempotency_key) {
         const existing = await tx.executeRaw<Record<string, unknown>>(
           `SELECT * FROM minion_jobs WHERE idempotency_key = $1`,
           [opts.idempotency_key]
@@ -306,7 +415,7 @@ export class MinionQueue {
         return rowToMinionJob(existing[0]);
       }
 
-      const child = rowToMinionJob(inserted[0]);
+      child = child ?? rowToMinionJob(inserted[0]);
 
       // 4. Flip parent to waiting-children if this is a fresh child insert.
       //    Only transition from non-terminal, non-already-waiting-children states.
