@@ -48,16 +48,16 @@ describe('#2415: loadAllowedSlugPrefixes remap', () => {
   // Runs from the repo root, so skills/_brain-filing-rules.json resolves.
   test("default 'wiki' returns the filing-rule globs verbatim", async () => {
     const globs = await loadAllowedSlugPrefixes();
-    expect(globs).toContain('wiki/personal/reflections/*');
+    expect(globs).toContain('personal/*');
+    expect(globs).toContain('ideas/*');
     expect(globs).toContain('dream-cycle-summaries/*');
   });
 
-  test('custom root remaps only wiki/-rooted globs', async () => {
+  test('custom root remaps route-owned filing globs', async () => {
     const globs = await loadAllowedSlugPrefixes('notes');
-    expect(globs).toContain('notes/personal/reflections/*');
-    expect(globs).toContain('notes/originals/*');
-    expect(globs).toContain('notes/personal/patterns/*');
-    // Non-wiki globs pass through untouched.
+    expect(globs).toContain('notes/personal/*');
+    expect(globs).toContain('notes/ideas/*');
+    // Non-route globs pass through untouched.
     expect(globs).toContain('dream-cycle-summaries/*');
     expect(globs.some(g => g.startsWith('wiki/'))).toBe(false);
   });

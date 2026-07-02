@@ -33,6 +33,7 @@ describe('dream synthesize route templates', () => {
       {
         reflection: 'personal/reflections/{date}-<topic-slug>-{hash}',
         original: 'ideas/{date}-<idea-slug>-{hash}',
+        pattern: 'personal/patterns/<topic-slug>',
       },
     );
 

@@ -49,11 +49,11 @@ async function setupRig(): Promise<TestRig> {
 /**
  * Insert N reflection pages directly via engine.putPage so the patterns
  * gather query has data without going through the synthesize phase.
- * Slugs follow the v0.23 wiki/personal/reflections/<topic>-<hash> shape.
+ * Slugs follow the route-driven personal/reflections/<topic>-<hash> shape.
  */
 async function seedReflections(engine: PGLiteEngine, count: number): Promise<void> {
   for (let i = 0; i < count; i++) {
-    const slug = `wiki/personal/reflections/2026-04-${String(15 + i).padStart(2, '0')}-test-pattern-aaa${i}`;
+    const slug = `personal/reflections/2026-04-${String(15 + i).padStart(2, '0')}-test-pattern-aaa${i}`;
     await engine.putPage(slug, {
       type: 'note',
       title: `Reflection ${i}`,

@@ -23,10 +23,9 @@ describe('patterns phase wiring', () => {
     expect(patternsSrc).toContain('SubagentHandlerData');
   });
 
-  test('threads allowed_slug_prefixes from filing-rules JSON', () => {
+  test('threads allowed_slug_prefixes from shared synthesize paths loader', () => {
     expect(patternsSrc).toContain('allowed_slug_prefixes');
-    expect(patternsSrc).toContain('_brain-filing-rules.json');
-    expect(patternsSrc).toContain('dream_synthesize_paths');
+    expect(patternsSrc).toContain('loadDreamSynthesizePaths');
   });
 
   test('reads min_evidence + lookback_days config', () => {
@@ -47,6 +46,12 @@ describe('patterns phase wiring', () => {
     expect(patternsSrc).toContain('normalizeModelId');
     expect(patternsSrc).toContain('no_provider');
     expect(patternsSrc).not.toContain('process.env.ANTHROPIC_API_KEY');
+  });
+
+  test('uses subscription billing gate for shell-subagent parity', () => {
+    expect(patternsSrc).toContain('dream.synthesize.use_subscription_billing');
+    expect(patternsSrc).toContain('shell-subagent');
+    expect(patternsSrc).toContain('useSubscriptionBilling');
   });
 
   test('skips when reflections below min_evidence', () => {
@@ -74,12 +79,10 @@ describe('patterns phase wiring', () => {
 });
 
 describe('patterns scope filter', () => {
-  test('filters reflections by slug LIKE <output_root>/personal/reflections/%', () => {
-    // #2415: the namespace root is configurable (dream.synthesize.output_root,
-    // default 'wiki') and bound as a parameter — the scope filter itself and
-    // the reflections sub-path stay pinned.
+  test('filters reflections by configured output-root route-derived slug LIKE prefix', () => {
+    expect(patternsSrc).toContain('deriveDreamRouteLikePrefix');
     expect(patternsSrc).toContain('slug LIKE $2');
-    expect(patternsSrc).toContain('/personal/reflections/%');
+    expect(patternsSrc).not.toContain("slug LIKE 'wiki/personal/reflections/%'");
   });
 
   test('orders by updated_at DESC for recency-bias', () => {

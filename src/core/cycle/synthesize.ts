@@ -753,22 +753,24 @@ async function checkCooldown(
 
 // ── Allow-list source of truth ───────────────────────────────────────
 
-interface DreamSynthesizeRoutes {
+export interface DreamSynthesizeRoutes {
   reflection: string;
   original: string;
+  pattern: string;
 }
 
-interface DreamSynthesizePaths {
+export interface DreamSynthesizePaths {
   globs: string[];
   routes: DreamSynthesizeRoutes;
 }
 
-const DEFAULT_DREAM_SYNTHESIZE_ROUTES: DreamSynthesizeRoutes = {
+export const DEFAULT_DREAM_SYNTHESIZE_ROUTES: DreamSynthesizeRoutes = {
   reflection: 'wiki/personal/reflections/{date}-<topic-slug>-{hash}',
   original: 'wiki/originals/ideas/{date}-<idea-slug>-{hash}',
+  pattern: 'wiki/personal/patterns/<topic-slug>',
 };
 
-async function loadDreamSynthesizePaths(outputRoot = 'wiki'): Promise<DreamSynthesizePaths> {
+export async function loadDreamSynthesizePaths(outputRoot = 'wiki'): Promise<DreamSynthesizePaths> {
   // Search a few known locations relative to the binary / repo. The first
   // hit wins; if none found, return [].
   const candidates = [
@@ -784,10 +786,11 @@ async function loadDreamSynthesizePaths(outputRoot = 'wiki'): Promise<DreamSynth
       const routes = parseDreamSynthesizeRoutes(parsed?.dream_synthesize_paths?.routes);
       if (Array.isArray(globs) && globs.every(g => typeof g === 'string')) {
         return {
-          globs: (globs as string[]).map(g => remapDreamOutputRoot(g, outputRoot)),
+          globs: (globs as string[]).map(g => remapDreamAllowGlob(g, routes, outputRoot)),
           routes: {
-            reflection: remapDreamOutputRoot(routes.reflection, outputRoot),
-            original: remapDreamOutputRoot(routes.original, outputRoot),
+            reflection: remapDreamRoute(routes.reflection, outputRoot),
+            original: remapDreamRoute(routes.original, outputRoot),
+            pattern: remapDreamRoute(routes.pattern, outputRoot),
           },
         };
       }
@@ -796,8 +799,9 @@ async function loadDreamSynthesizePaths(outputRoot = 'wiki'): Promise<DreamSynth
   return {
     globs: [],
     routes: {
-      reflection: remapDreamOutputRoot(DEFAULT_DREAM_SYNTHESIZE_ROUTES.reflection, outputRoot),
-      original: remapDreamOutputRoot(DEFAULT_DREAM_SYNTHESIZE_ROUTES.original, outputRoot),
+      reflection: remapDreamRoute(DEFAULT_DREAM_SYNTHESIZE_ROUTES.reflection, outputRoot),
+      original: remapDreamRoute(DEFAULT_DREAM_SYNTHESIZE_ROUTES.original, outputRoot),
+      pattern: remapDreamRoute(DEFAULT_DREAM_SYNTHESIZE_ROUTES.pattern, outputRoot),
     },
   };
 }
@@ -812,10 +816,22 @@ export async function loadAllowedSlugPrefixes(outputRoot = 'wiki'): Promise<stri
   return (await loadDreamSynthesizePaths(outputRoot)).globs;
 }
 
-function remapDreamOutputRoot(path: string, outputRoot: string): string {
-  return outputRoot === 'wiki' || !path.startsWith('wiki/')
-    ? path
-    : `${outputRoot}/${path.slice('wiki/'.length)}`;
+function remapDreamRoute(path: string, outputRoot: string): string {
+  if (outputRoot === 'wiki' || path.startsWith(`${outputRoot}/`)) return path;
+  return path.startsWith('wiki/')
+    ? `${outputRoot}/${path.slice('wiki/'.length)}`
+    : `${outputRoot}/${path}`;
+}
+
+function remapDreamAllowGlob(
+  glob: string,
+  routes: DreamSynthesizeRoutes,
+  outputRoot: string,
+): string {
+  if (outputRoot === 'wiki' || glob.startsWith(`${outputRoot}/`)) return glob;
+  if (glob.startsWith('wiki/')) return `${outputRoot}/${glob.slice('wiki/'.length)}`;
+  const routedRoots = new Set(Object.values(routes).map(route => route.split('/')[0]));
+  return routedRoots.has(glob.split('/')[0]) ? `${outputRoot}/${glob}` : glob;
 }
 
 function parseDreamSynthesizeRoutes(raw: unknown): DreamSynthesizeRoutes {
@@ -828,6 +844,9 @@ function parseDreamSynthesizeRoutes(raw: unknown): DreamSynthesizeRoutes {
     original: typeof r.original === 'string' && r.original.trim()
       ? r.original
       : DEFAULT_DREAM_SYNTHESIZE_ROUTES.original,
+    pattern: typeof r.pattern === 'string' && r.pattern.trim()
+      ? r.pattern
+      : DEFAULT_DREAM_SYNTHESIZE_ROUTES.pattern,
   };
 }
 
@@ -1072,7 +1091,7 @@ function buildSynthesisPrompt(
   chunkIdx: number,
   chunkTotal: number,
   priorContradictionsBlock = '',
-  routes: DreamSynthesizeRoutes = DEFAULT_DREAM_SYNTHESIZE_ROUTES,
+  routesOrOutputRoot: DreamSynthesizeRoutes | string = DEFAULT_DREAM_SYNTHESIZE_ROUTES,
 ): string {
   const dateHint = t.inferredDate ?? today();
   const baseSlugSegment = sanitizeForSlug(t.basename) || `session-${dateHint}`;
@@ -1086,6 +1105,13 @@ function buildSynthesisPrompt(
   const transcriptHeader = isChunked
     ? `${t.filePath} (chunk ${chunkIdx + 1}/${chunkTotal})`
     : t.filePath;
+  const routes = typeof routesOrOutputRoot === 'string'
+    ? {
+        reflection: remapDreamRoute(DEFAULT_DREAM_SYNTHESIZE_ROUTES.reflection, routesOrOutputRoot),
+        original: remapDreamRoute(DEFAULT_DREAM_SYNTHESIZE_ROUTES.original, routesOrOutputRoot),
+        pattern: remapDreamRoute(DEFAULT_DREAM_SYNTHESIZE_ROUTES.pattern, routesOrOutputRoot),
+      }
+    : routesOrOutputRoot;
   const reflectionSlugTemplate = renderDreamSlugRoute(routes.reflection, dateHint, hashSuffix);
   const originalSlugTemplate = renderDreamSlugRoute(routes.original, dateHint, hashSuffix);
   return `You are synthesizing a conversation transcript into the user's personal knowledge brain.
@@ -1120,7 +1146,7 @@ ${chunkText}
 When done, briefly list the slugs you wrote in your final message so the orchestrator can audit.`;
 }
 
-function renderDreamSlugRoute(template: string, dateHint: string, hashSuffix: string): string {
+export function renderDreamSlugRoute(template: string, dateHint: string, hashSuffix: string): string {
   return template
     .replaceAll('{date}', dateHint)
     .replaceAll('{hash}', hashSuffix);

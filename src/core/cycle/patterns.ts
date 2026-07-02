@@ -27,11 +27,15 @@ import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.
 import type { MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
 import { serializeMarkdown } from '../markdown.ts';
 import type { Page, PageType } from '../types.ts';
-// #2415: allow-list + output-root resolution shared with the synthesize
-// phase — both phases must agree on the configured namespace.
-import { loadAllowedSlugPrefixes, loadOutputRoot } from './synthesize.ts';
 import { probeChatModel } from '../ai/gateway.ts';
 import { normalizeModelId } from '../model-id.ts';
+import {
+  DEFAULT_DREAM_SYNTHESIZE_ROUTES,
+  loadDreamSynthesizePaths,
+  loadOutputRoot,
+  renderDreamSlugRoute,
+  type DreamSynthesizeRoutes,
+} from './synthesize.ts';
 
 export interface PatternsPhaseOpts {
   brainDir: string;
@@ -51,8 +55,14 @@ export async function runPhasePatterns(
       return skipped('disabled', 'dream.patterns.enabled is false');
     }
 
+    const synthPaths = await loadDreamSynthesizePaths(config.outputRoot);
+    const reflectionLikePrefix = deriveDreamRouteLikePrefix(
+      synthPaths.routes.reflection,
+      'wiki/personal/reflections/%',
+    );
+
     // Gather reflections within lookback window.
-    const reflections = await gatherReflections(engine, config.lookbackDays, config.outputRoot);
+    const reflections = await gatherReflections(engine, config.lookbackDays, reflectionLikePrefix);
     if (reflections.length < config.minEvidence) {
       return skipped(
         'insufficient_evidence',
@@ -79,21 +89,34 @@ export async function runPhasePatterns(
     // unknown provider/model or Anthropic-without-key skips cheaply; other
     // providers' auth is checked lazily at dispatch and surfaces in the job
     // outcome. (Takeover of PR #2279's intent by @brettdavies.)
-    const probe = probeChatModel(normalizeModelId(config.model));
-    if (!probe.ok) {
-      return skipped('no_provider', `pattern detection skipped: ${probe.detail}`);
+    if (!config.useSubscriptionBilling) {
+      const probe = probeChatModel(normalizeModelId(config.model));
+      if (!probe.ok) {
+        return skipped('no_provider', `pattern detection skipped: ${probe.detail}`);
+      }
     }
 
-    const allowedSlugPrefixes = await loadAllowedSlugPrefixes(config.outputRoot);
+    const allowedSlugPrefixes = synthPaths.globs;
     if (allowedSlugPrefixes.length === 0) {
       return failed(makeError('InternalError', 'NO_ALLOWLIST',
         'skills/_brain-filing-rules.json missing dream_synthesize_paths.globs'));
     }
 
     const queue = new MinionQueue(engine);
+    const childJobName = config.useSubscriptionBilling ? 'shell-subagent' : 'subagent';
+    const subagentModel = config.model.includes(':')
+      ? config.model
+      : config.model.toLowerCase().startsWith('claude-')
+        ? `anthropic:${config.model}`
+        : config.model;
     const data: SubagentHandlerData = {
-      prompt: buildPatternsPrompt(reflections, config.minEvidence, config.outputRoot),
-      model: config.model,
+      prompt: buildPatternsPrompt(
+        reflections,
+        config.minEvidence,
+        synthPaths.routes,
+        reflectionLikePrefix,
+      ),
+      model: subagentModel,
       max_turns: 30,
       allowed_slug_prefixes: allowedSlugPrefixes,
     };
@@ -101,7 +124,7 @@ export async function runPhasePatterns(
       max_stalled: 3,
       timeout_ms: config.subagentTimeoutMs,
     };
-    const job = await queue.add('subagent', data as unknown as Record<string, unknown>, submitOpts, {
+    const job = await queue.add(childJobName, data as unknown as Record<string, unknown>, submitOpts, {
       allowProtectedSubmit: true,
     });
 
@@ -191,6 +214,7 @@ interface PatternsConfig {
   subagentTimeoutMs: number;
   /** #1594-family: waitForCompletion timeout, config `dream.patterns.subagent_wait_timeout_ms`. */
   subagentWaitTimeoutMs: number;
+  useSubscriptionBilling: boolean;
 }
 
 const DEFAULT_PATTERNS_SUBAGENT_TIMEOUT_MS = 30 * 60 * 1000;
@@ -208,6 +232,7 @@ async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> 
   const enabled = enabledStr === null ? true : enabledStr === 'true';
   const lookbackStr = await engine.getConfig('dream.patterns.lookback_days');
   const minEvidenceStr = await engine.getConfig('dream.patterns.min_evidence');
+  const useSubscriptionBillingRaw = await engine.getConfig('dream.synthesize.use_subscription_billing');
   // v0.28: unified model resolution
   const { resolveModel } = await import('../model-config.ts');
   const model = await resolveModel(engine, {
@@ -228,6 +253,7 @@ async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> 
     subagentWaitTimeoutMs: await getNumberConfig(
       engine, 'dream.patterns.subagent_wait_timeout_ms', DEFAULT_PATTERNS_SUBAGENT_WAIT_TIMEOUT_MS,
     ),
+    useSubscriptionBilling: useSubscriptionBillingRaw === 'true' || useSubscriptionBillingRaw === '1',
   };
 }
 
@@ -242,7 +268,7 @@ interface ReflectionRef {
 async function gatherReflections(
   engine: BrainEngine,
   lookbackDays: number,
-  outputRoot = 'wiki',
+  reflectionLikePrefix: string,
 ): Promise<ReflectionRef[]> {
   const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
   // #2415: reflections live under the configured output root (bound as a
@@ -254,7 +280,7 @@ async function gatherReflections(
         AND updated_at >= $1::timestamptz
       ORDER BY updated_at DESC
       LIMIT 100`,
-    [since, `${outputRoot}/personal/reflections/%`],
+    [since, reflectionLikePrefix],
   );
   return rows.map(r => ({
     slug: r.slug,
@@ -265,8 +291,18 @@ async function gatherReflections(
 
 // ── Prompt ────────────────────────────────────────────────────────────
 
-function buildPatternsPrompt(reflections: ReflectionRef[], minEvidence: number, outputRoot = 'wiki'): string {
+function buildPatternsPrompt(
+  reflections: ReflectionRef[],
+  minEvidence: number,
+  routes: DreamSynthesizeRoutes = DEFAULT_DREAM_SYNTHESIZE_ROUTES,
+  reflectionLikePrefix = 'wiki/personal/reflections/%',
+): string {
   const today = new Date().toISOString().slice(0, 10);
+  const patternSlugTemplate = renderDreamSlugRoute(routes.pattern, today, '');
+  const reflectionEvidencePath = displayPathFromLikePrefix(reflectionLikePrefix);
+  const patternWritePrefix = displayPathFromLikePrefix(
+    deriveDreamRouteLikePrefix(routes.pattern, 'wiki/personal/patterns/%'),
+  );
   const corpus = reflections
     .map((r, i) => `### ${i + 1}. [[${r.slug}]] — ${r.title}\n${r.excerpt}`)
     .join('\n\n---\n\n');
@@ -275,15 +311,15 @@ function buildPatternsPrompt(reflections: ReflectionRef[], minEvidence: number, 
 
 OUTPUT POLICY
 - Only name a pattern if it appears in at least ${minEvidence} DISTINCT reflections.
-- Each pattern page MUST cite the reflections that constitute its evidence (use [[${outputRoot}/personal/reflections/...]] wikilinks).
+- Each pattern page MUST cite the reflections that constitute its evidence (use [[${reflectionEvidencePath}]] wikilinks).
 - Use \`search\` to check whether a similar pattern page already exists; if yes, update it (use the same slug). If no, create a new one.
-- Pattern slug format: \`${outputRoot}/personal/patterns/<topic-slug>\` (lowercase alphanumeric + hyphens; no underscores, no extension, no date).
+- Pattern slug format: \`${patternSlugTemplate}\` (lowercase alphanumeric + hyphens; no underscores, no extension, no date).
 - A "pattern" is a recurring theme, anxiety, decision pattern, relationship dynamic, or self-knowledge motif. NOT a single insight. NOT a list of unrelated topics.
 
 DO NOT WRITE
 - A "patterns from today" digest (that's the dream-cycle-summaries page; not your job).
 - Patterns with <${minEvidence} reflections cited.
-- Anything outside ${outputRoot}/personal/patterns/.
+- Anything outside ${patternWritePrefix}.
 
 CONTEXT
 - Today: ${today}
@@ -293,6 +329,23 @@ REFLECTIONS
 ${corpus}
 
 When done, briefly list the pattern slugs you wrote/updated in your final message.`;
+}
+
+function deriveDreamRouteLikePrefix(template: string, fallback: string): string {
+  const route = template.trim();
+  if (!route) return fallback;
+  const firstPlaceholder = route.search(/[<{]/);
+  const staticPrefix = firstPlaceholder >= 0 ? route.slice(0, firstPlaceholder) : route;
+  const slash = staticPrefix.lastIndexOf('/');
+  if (slash < 0) return fallback;
+  const dirPrefix = staticPrefix.slice(0, slash + 1);
+  return dirPrefix ? `${dirPrefix}%` : fallback;
+}
+
+function displayPathFromLikePrefix(likePrefix: string): string {
+  return likePrefix.endsWith('%')
+    ? `${likePrefix.slice(0, -1)}...`
+    : likePrefix;
 }
 
 // ── Provenance via put_page tool execution rows ─────────────────────
@@ -317,9 +370,37 @@ async function collectChildPutPageSlugs(
       ORDER BY 1`,
     [childIds],
   );
-  return rows
-    .map(r => r.slug)
-    .filter((s): s is string => typeof s === 'string' && s.length > 0)
+  const slugs = new Set<string>();
+  for (const r of rows) {
+    if (typeof r.slug === 'string' && r.slug.length > 0) slugs.add(r.slug);
+  }
+
+  const resultRows = await engine.executeRaw<{ result: unknown }>(
+    `SELECT result
+       FROM minion_jobs
+      WHERE id = ANY($1::int[])
+        AND name = 'shell-subagent'
+        AND status = 'completed'
+        AND result IS NOT NULL`,
+    [childIds],
+  );
+  for (const r of resultRows) {
+    let result: Record<string, unknown> | null = null;
+    try {
+      result = typeof r.result === 'string'
+        ? JSON.parse(r.result) as Record<string, unknown>
+        : (r.result && typeof r.result === 'object' ? r.result as Record<string, unknown> : null);
+    } catch {
+      result = null;
+    }
+    const written = result?.written_slugs;
+    if (!Array.isArray(written)) continue;
+    for (const slug of written) {
+      if (typeof slug === 'string' && slug.length > 0) slugs.add(slug);
+    }
+  }
+
+  return Array.from(slugs).sort()
     .map(slug => ({ slug, source_id: 'default' }));
 }
 
@@ -404,3 +485,10 @@ function failed(error: PhaseError): PhaseResult {
 function makeError(cls: string, code: string, message: string, hint?: string): PhaseError {
   return hint ? { class: cls, code, message, hint } : { class: cls, code, message };
 }
+
+export const __testing = {
+  buildPatternsPrompt,
+  deriveDreamRouteLikePrefix,
+  displayPathFromLikePrefix,
+  gatherReflections,
+};
