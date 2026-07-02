@@ -26,21 +26,28 @@ This skill guarantees:
 - Schedule staggering: max 1 job per 5-minute slot, no collisions
 - Quiet hours gating: timezone-aware, with user-awake override
 - Thin job prompts: jobs say "Read skills/X/SKILL.md and run it" (no inline 3000-word prompts)
+- Explicit execution surface at creation time: deterministic jobs use no-agent/script or Minions shell; LLM cron jobs pre-define the narrowest `enabled_toolsets` exposed to that specific job
+- Tool least-privilege: a scheduled job must not inherit the whole agent cockpit unless Jiraiya explicitly approves the broad surface
 - Idempotency: jobs can run twice without duplicate side effects
 - Results saved as reports: `reports/{job-name}/{YYYY-MM-DD-HHMM}.md`
 
 ## Phases
 
-1. **Define job.** Name, schedule (cron expression), skill to run, timeout.
-2. **Validate schedule.** Check no collision with existing jobs (5-minute offset rule).
+1. **Define job.** Name, schedule (cron expression), skill to run, timeout, delivery target, and execution surface.
+2. **Pre-define job tool exposure.** Before creation, choose one:
+   - Deterministic/status/watchdog/change-detection job → use `script` with `no_agent=true`; green/no-change runs print nothing.
+   - GBrain durable shell/background work → submit via Minions shell with an idempotency key; do not wrap it in an LLM `agentTurn`.
+   - LLM synthesis/research/review job → set explicit `enabled_toolsets` to the smallest adequate set for this job, e.g. `['web']`, `['terminal','file']`, `['gbrain']`, or `['telegram_mtproto_readonly','gbrain']`.
+   - Reject or revise any agentic cron spec where `enabled_toolsets` is null, unless the operator explicitly approves broad inherited tools.
+3. **Validate schedule.** Check no collision with existing jobs (5-minute offset rule).
    - Slots: :05, :10, :15, :20, :25, :30, :35, :40, :45, :50
    - If collision detected, suggest the next available slot
-3. **Check quiet hours.** Default: 11 PM - 8 AM local time.
+4. **Check quiet hours.** Default: 11 PM - 8 AM local time.
    - Override: user-awake flag (if user is active, quiet hours suspended)
    - During quiet hours: save output to held queue
    - Morning contact releases the backlog
-4. **Register with host scheduler.** OpenClaw cron, Railway cron, crontab, or process manager. **Each registered entry should execute via Minions, not `agentTurn`.** See `skills/conventions/cron-via-minions.md` for the rewrite pattern (PGLite uses `--follow`, Postgres uses fire-and-forget + `--idempotency-key` on the cycle slot). GBrain's v0.11.0 migration auto-rewrites entries for built-in handlers; host-specific handlers need a code-level registration per `docs/guides/plugin-handlers.md`.
-5. **Write thin prompt.** Job prompt is one line: "Read skills/{name}/SKILL.md and run it."
+5. **Register with host scheduler.** OpenClaw cron, Railway cron, crontab, or process manager. **Each registered entry should execute via Minions, not `agentTurn`.** See `skills/conventions/cron-via-minions.md` for the rewrite pattern (PGLite uses `--follow`, Postgres uses fire-and-forget + `--idempotency-key` on the cycle slot). GBrain's v0.11.0 migration auto-rewrites entries for built-in handlers; host-specific handlers need a code-level registration per `docs/guides/plugin-handlers.md`.
+6. **Write thin prompt.** Job prompt is one line: "Read skills/{name}/SKILL.md and run it." Store detailed procedure in the skill, not inline in the cron prompt.
 
 ## Idempotency Requirement
 
