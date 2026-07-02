@@ -707,4 +707,43 @@ body unchanged
     shortCircuited = r2.status === 'skipped';
     expect(shortCircuited).toBe(true);
   });
+
+  test('enriched metadata differences produce IDENTICAL hash (enrich dedup)', async () => {
+    const content1 = `---
+type: person
+title: Alice Example
+enriched_at: '2026-05-22T10:00:00.000Z'
+enriched_by: cli:enrich
+---
+
+unchanged body
+`;
+    const content2 = `---
+type: person
+title: Alice Example
+enriched_at: '2026-05-22T11:00:00.000Z'
+enriched_by: cli:enrich
+---
+
+unchanged body
+`;
+
+    let firstHash: string | undefined;
+
+    const engine1 = mockEngine({
+      getPage: () => Promise.resolve(null),
+      putPage: (_slug: string, page: any) => {
+        firstHash = page.content_hash;
+        return Promise.resolve(null);
+      },
+    });
+    await importFromContent(engine1, 'people/alice-example', content1, { noEmbed: true });
+
+    const engine2 = mockEngine({
+      getPage: () => Promise.resolve({ content_hash: firstHash } as any),
+      putPage: () => Promise.resolve(null),
+    });
+    const r2 = await importFromContent(engine2, 'people/alice-example', content2, { noEmbed: true });
+    expect(r2.status).toBe('skipped');
+  });
 });

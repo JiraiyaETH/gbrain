@@ -1076,6 +1076,25 @@ export class PGLiteEngine implements BrainEngine {
     return rowToPage(rows[0] as Record<string, unknown>);
   }
 
+  async mergePageFrontmatter(
+    slug: string,
+    sourceId: string,
+    patch: Record<string, unknown>,
+  ): Promise<boolean> {
+    slug = validateSlug(slug);
+    const { rows } = await this.db.query(
+      `UPDATE pages
+          SET frontmatter = COALESCE(frontmatter, '{}'::jsonb) || $1::jsonb,
+              updated_at = now()
+        WHERE source_id = $2
+          AND slug = $3
+          AND deleted_at IS NULL
+        RETURNING id`,
+      [JSON.stringify(patch), sourceId, slug],
+    );
+    return rows.length > 0;
+  }
+
   async deletePage(slug: string, opts?: { sourceId?: string }): Promise<void> {
     const sourceId = opts?.sourceId ?? 'default';
     await this.db.query(

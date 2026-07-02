@@ -707,6 +707,20 @@ export interface BrainEngine {
    */
   putPage(slug: string, page: PageInput, opts?: { sourceId?: string }): Promise<Page>;
   /**
+   * Narrow metadata-only merge into `pages.frontmatter` for one page.
+   *
+   * This intentionally avoids the import/chunk/version pipeline. Use it when a
+   * caller needs to stamp derived metadata even when the rendered markdown body
+   * is content-identical and the import layer short-circuits on content_hash.
+   *
+   * Skips soft-deleted rows. Returns true when a live row was updated.
+   */
+  mergePageFrontmatter(
+    slug: string,
+    sourceId: string,
+    patch: Record<string, unknown>,
+  ): Promise<boolean>;
+  /**
    * v0.41.13 (#1309) — identity-based dedup pre-check for the import pipeline.
    *
    * Returns the first matching `{slug, id}` whose `(source_id, …)` matches
