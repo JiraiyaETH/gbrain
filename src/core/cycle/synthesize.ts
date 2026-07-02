@@ -397,7 +397,8 @@ export async function runPhaseSynthesize(
 
     // Fan-out: submit one subagent per worth-processing transcript (or one
     // per chunk for transcripts that exceed the model's per-prompt budget).
-    const allowedSlugPrefixes = await loadAllowedSlugPrefixes();
+    const synthPaths = await loadDreamSynthesizePaths();
+    const allowedSlugPrefixes = synthPaths.globs;
     if (allowedSlugPrefixes.length === 0) {
       return failed(makeError('InternalError', 'NO_ALLOWLIST',
         'skills/_brain-filing-rules.json missing dream_synthesize_paths.globs'));
@@ -448,6 +449,7 @@ export async function runPhaseSynthesize(
       }
 
       const isChunked = chunks.length > 1;
+      const childJobName = config.useSubscriptionBilling ? 'shell-subagent' : 'subagent';
       // queue.add subagent validator (classifyCapabilities → resolveRecipe)
       // requires `provider:model`. resolveModel can return a bare id when
       // TIER_DEFAULTS / DEFAULT_ALIASES carry a bare value; ensure the
@@ -460,7 +462,7 @@ export async function runPhaseSynthesize(
           : config.model;
       for (let i = 0; i < chunks.length; i++) {
         const childData: SubagentHandlerData = {
-          prompt: buildSynthesisPrompt(t, chunks[i], i, chunks.length, priorContradictionsBlock),
+          prompt: buildSynthesisPrompt(t, chunks[i], i, chunks.length, priorContradictionsBlock, synthPaths.routes),
           model: subagentModel,
           max_turns: 30,
           allowed_slug_prefixes: allowedSlugPrefixes,
@@ -481,7 +483,7 @@ export async function runPhaseSynthesize(
           timeout_ms: 30 * 60 * 1000, // 30 min per chunk
         };
         const child = await queue.add(
-          'subagent',
+          childJobName,
           childData as unknown as Record<string, unknown>,
           submitOpts,
           { allowProtectedSubmit: true },
@@ -593,6 +595,11 @@ interface SynthConfig {
    * `dream.synthesize.max_chunks_per_transcript`.
    */
   maxChunksPerTranscript: number;
+  /**
+   * When true, dream synthesize submits shell-subagent children that invoke
+   * the local Claude CLI instead of Anthropic API-backed subagent children.
+   */
+  useSubscriptionBilling: boolean;
 }
 
 async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
@@ -621,6 +628,7 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
   const cooldownHoursStr = await engine.getConfig('dream.synthesize.cooldown_hours');
   const maxPromptTokensStr = await engine.getConfig('dream.synthesize.max_prompt_tokens');
   const maxChunksStr = await engine.getConfig('dream.synthesize.max_chunks_per_transcript');
+  const useSubscriptionBillingRaw = await engine.getConfig('dream.synthesize.use_subscription_billing');
 
   let excludePatterns: string[] = ['medical', 'therapy'];
   if (excludeStr) {
@@ -658,6 +666,7 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
     cooldownHours: cooldownHoursStr ? Math.max(0, parseInt(cooldownHoursStr, 10) || 12) : 12,
     maxPromptTokens,
     maxChunksPerTranscript,
+    useSubscriptionBilling: useSubscriptionBillingRaw === 'true' || useSubscriptionBillingRaw === '1',
   };
 }
 
@@ -677,7 +686,22 @@ async function checkCooldown(
 
 // ── Allow-list source of truth ───────────────────────────────────────
 
-async function loadAllowedSlugPrefixes(): Promise<string[]> {
+interface DreamSynthesizeRoutes {
+  reflection: string;
+  original: string;
+}
+
+interface DreamSynthesizePaths {
+  globs: string[];
+  routes: DreamSynthesizeRoutes;
+}
+
+const DEFAULT_DREAM_SYNTHESIZE_ROUTES: DreamSynthesizeRoutes = {
+  reflection: 'wiki/personal/reflections/{date}-<topic-slug>-{hash}',
+  original: 'wiki/originals/ideas/{date}-<idea-slug>-{hash}',
+};
+
+async function loadDreamSynthesizePaths(): Promise<DreamSynthesizePaths> {
   // Search a few known locations relative to the binary / repo. The first
   // hit wins; if none found, return [].
   const candidates = [
@@ -688,14 +712,28 @@ async function loadAllowedSlugPrefixes(): Promise<string[]> {
     if (!existsSync(path)) continue;
     try {
       const raw = readFileSync(path, 'utf8');
-      const parsed = JSON.parse(raw) as { dream_synthesize_paths?: { globs?: unknown } };
+      const parsed = JSON.parse(raw) as { dream_synthesize_paths?: { globs?: unknown; routes?: unknown } };
       const globs = parsed?.dream_synthesize_paths?.globs;
+      const routes = parseDreamSynthesizeRoutes(parsed?.dream_synthesize_paths?.routes);
       if (Array.isArray(globs) && globs.every(g => typeof g === 'string')) {
-        return globs as string[];
+        return { globs: globs as string[], routes };
       }
     } catch { /* try next */ }
   }
-  return [];
+  return { globs: [], routes: DEFAULT_DREAM_SYNTHESIZE_ROUTES };
+}
+
+function parseDreamSynthesizeRoutes(raw: unknown): DreamSynthesizeRoutes {
+  if (!raw || typeof raw !== 'object') return DEFAULT_DREAM_SYNTHESIZE_ROUTES;
+  const r = raw as Record<string, unknown>;
+  return {
+    reflection: typeof r.reflection === 'string' && r.reflection.trim()
+      ? r.reflection
+      : DEFAULT_DREAM_SYNTHESIZE_ROUTES.reflection,
+    original: typeof r.original === 'string' && r.original.trim()
+      ? r.original
+      : DEFAULT_DREAM_SYNTHESIZE_ROUTES.original,
+  };
 }
 
 // ── Significance judge (gateway-routed; provider-agnostic) ──────────────
@@ -939,6 +977,7 @@ function buildSynthesisPrompt(
   chunkIdx: number,
   chunkTotal: number,
   priorContradictionsBlock = '',
+  routes: DreamSynthesizeRoutes = DEFAULT_DREAM_SYNTHESIZE_ROUTES,
 ): string {
   const dateHint = t.inferredDate ?? today();
   const baseSlugSegment = sanitizeForSlug(t.basename) || `session-${dateHint}`;
@@ -952,6 +991,8 @@ function buildSynthesisPrompt(
   const transcriptHeader = isChunked
     ? `${t.filePath} (chunk ${chunkIdx + 1}/${chunkTotal})`
     : t.filePath;
+  const reflectionSlugTemplate = renderDreamSlugRoute(routes.reflection, dateHint, hashSuffix);
+  const originalSlugTemplate = renderDreamSlugRoute(routes.original, dateHint, hashSuffix);
   return `You are synthesizing a conversation transcript into the user's personal knowledge brain.
 
 CONTEXT
@@ -967,10 +1008,10 @@ OUTPUT POLICY (ALL of these are required)
 
 TASKS
 A. Reflections (self-knowledge, pattern recognition, emotional processing):
-   slug: \`wiki/personal/reflections/${dateHint}-<topic-slug>-${hashSuffix}\`
+   slug: \`${reflectionSlugTemplate}\`
 
 B. Originals (new ideas, frames, theses, mental models):
-   slug: \`wiki/originals/ideas/${dateHint}-<idea-slug>-${hashSuffix}\`
+   slug: \`${originalSlugTemplate}\`
 
 C. People mentions: search first; if a page exists, do not put_page over it (the orchestrator handles people enrichment via timeline entries — your job is the reflection/original synthesis, NOT modifying existing person pages).
 
@@ -982,6 +1023,12 @@ ${chunkText}
 ---
 
 When done, briefly list the slugs you wrote in your final message so the orchestrator can audit.`;
+}
+
+function renderDreamSlugRoute(template: string, dateHint: string, hashSuffix: string): string {
+  return template
+    .replaceAll('{date}', dateHint)
+    .replaceAll('{hash}', hashSuffix);
 }
 
 function sanitizeForSlug(s: string): string {
@@ -1038,6 +1085,27 @@ async function collectChildPutPageSlugs(
     if (typeof r.slug !== 'string' || r.slug.length === 0) continue;
     const ci = chunkInfo.get(r.job_id);
     rewritten.add(ci ? rewriteChunkedSlug(r.slug, ci.hash6, ci.idx) : r.slug);
+  }
+  const resultRows = await engine.executeRaw<{ id: number; result: unknown }>(
+    `SELECT id, result
+       FROM minion_jobs
+      WHERE id = ANY($1::int[])
+        AND name = 'shell-subagent'
+        AND status = 'completed'
+        AND result IS NOT NULL`,
+    [childIds],
+  );
+  for (const r of resultRows) {
+    const result = typeof r.result === 'string'
+      ? JSON.parse(r.result) as Record<string, unknown>
+      : (r.result && typeof r.result === 'object' ? r.result as Record<string, unknown> : null);
+    const slugs = result?.written_slugs;
+    if (!Array.isArray(slugs)) continue;
+    for (const slug of slugs) {
+      if (typeof slug !== 'string' || slug.length === 0) continue;
+      const ci = chunkInfo.get(r.id);
+      rewritten.add(ci ? rewriteChunkedSlug(slug, ci.hash6, ci.idx) : slug);
+    }
   }
   return Array.from(rewritten).sort().map(slug => ({ slug, source_id: 'default' }));
 }
@@ -1242,4 +1310,8 @@ function makeError(cls: string, code: string, message: string, hint?: string): P
 // double-encoded jsonb regression). Not part of the runtime contract.
 export const __testing = {
   collectChildPutPageSlugs,
+  buildSynthesisPrompt,
+  DEFAULT_DREAM_SYNTHESIZE_ROUTES,
+  parseDreamSynthesizeRoutes,
+  renderDreamSlugRoute,
 };
