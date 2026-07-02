@@ -38,7 +38,7 @@ mount, CEO-class with multiple team brains) and
 
 ## Architecture
 
-Contract-first: `src/core/operations.ts` defines ~90 shared operations (v0.29 adds `get_recent_salience`, `find_anomalies`, `get_recent_transcripts`; v0.42.43.0 adds `volunteer_context` — push-based context, see `docs/guides/push-context.md`). CLI and MCP
+Contract-first: `src/core/operations.ts` defines ~90 shared operations (including `volunteer_context` for push-based context — see `docs/guides/push-context.md`). CLI and MCP
 server are both generated from this single source. Engine factory (`src/core/engine-factory.ts`)
 dynamically imports the configured engine (`'pglite'` or `'postgres'`). Skills are fat
 markdown files (tool-agnostic, work with both CLI and plugin contexts).
@@ -208,17 +208,12 @@ behavior as the production `query` op.
 tokenmax write (expansion=on, limit=50) can't be served to a conservative
 read.
 
-**v0.36.3.0 knobs_hash v=2 → v=3.** The hash now folds the active
-embedding column name + provider into the cache key, so a query routed
-through `embedding_voyage` (1024d Voyage) can't be served a cache row
-written against `embedding` (1536d OpenAI). Existing v=2 rows become
-unreachable on first re-query (one-time miss spike on upgrade);
-`mode.ts:KNOBS_HASH_VERSION` is the single source of truth.
-
-**v0.42.34.0 knobs_hash v=9 → v=10.** Folds the `relationalRetrieval` knob +
-depth into the cache key so a relational-on result set can't be served to a
-relational-off lookup (same contamination class as graph_signals). One-time
-miss spike on upgrade.
+**knobs_hash coverage.** Beyond the mode knobs, the hash also folds the active
+embedding column/provider and the `relationalRetrieval` knob + depth into the
+key — so a Voyage-embedded (1024d) or relational-on result can't be served to an
+OpenAI-embedded (1536d) or relational-off lookup. `mode.ts:KNOBS_HASH_VERSION`
+is the single source of truth; bumping it makes existing rows unreachable (a
+one-time miss spike on upgrade).
 
 **Relational retrieval (v0.42.34.0).** `relationalRetrieval` (on for
 balanced/tokenmax) adds a fourth recall arm: a relational query ("who invested
@@ -259,8 +254,9 @@ audit trail lives in the source repo's git history.
 
 ## Skills
 
-Read the skill files in `skills/` before doing brain operations. GBrain ships 30 skills
-organized by `skills/RESOLVER.md` (`AGENTS.md` is also accepted as of v0.19):
+Read the skill files in `skills/` before doing brain operations. GBrain ships 50+ skills
+organized by `skills/RESOLVER.md` (the source of truth for the current set; `AGENTS.md` is
+also accepted as of v0.19):
 
 **Original 8 (conformance-migrated):** ingest (thin router), query, maintain, enrich,
 briefing, migrate, setup, publish.
