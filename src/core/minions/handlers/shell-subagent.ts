@@ -28,8 +28,8 @@ You do not have brain tools in this mode. If you want to write pages, emit each
 page as exactly one fenced block in this format:
 
 \`\`\`gbrain-page
-slug: wiki/personal/reflections/YYYY-MM-DD-topic-hash
-type: note
+slug: <slug exactly as given by the task templates above>
+type: <page type fitting the content, e.g. personal or idea>
 ---
 # Page title
 
