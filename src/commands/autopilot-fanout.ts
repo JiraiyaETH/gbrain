@@ -66,6 +66,8 @@ export interface FanoutOpts {
   emit?: (line: string) => void;
   /** Sink for non-JSON human log lines; defaults to console.log. */
   log?: (line: string) => void;
+  /** Preloaded source universe for callers that already scoped health. */
+  sourceUniverse?: AutopilotSourceUniverse;
 }
 
 export interface FanoutResult {
@@ -84,6 +86,73 @@ export interface FanoutResult {
   /** True when this tick fell back to the legacy single-job path
    *  (no sources rows / engine empty). */
   legacy_fallback: boolean;
+}
+
+export interface AutopilotSourceUniverse {
+  /** Sources returned by the autopilot dispatch enumerator. */
+  sources: SourceRow[];
+  /** Sources autopilot actually services: federated prose/non-code sources. */
+  eligibleSources: SourceRow[];
+  /** Sources skipped because they're maintained by the code sync pipeline. */
+  skippedCodeSource: SourceRow[];
+  /** Sources skipped because they're isolated from federated/default recall. */
+  skippedIsolatedSource: SourceRow[];
+  /** True when source enumeration failed or returned no rows. */
+  legacyFallback: boolean;
+  /** Enumeration error, retained so dispatch can preserve today's JSON event. */
+  unavailableError?: unknown;
+}
+
+export interface AutopilotHealthOpts {
+  sourceIds: string[];
+}
+
+export interface AutopilotSourcePartition {
+  eligibleSources: SourceRow[];
+  skippedCodeSource: SourceRow[];
+  skippedIsolatedSource: SourceRow[];
+}
+
+export function partitionAutopilotSources(sources: SourceRow[]): AutopilotSourcePartition {
+  const eligibleSources: SourceRow[] = [];
+  const skippedCodeSource: SourceRow[] = [];
+  const skippedIsolatedSource: SourceRow[] = [];
+  for (const src of sources) {
+    if (src.config?.strategy === 'code') {
+      skippedCodeSource.push(src);
+    } else if (src.config?.federated !== true) {
+      skippedIsolatedSource.push(src);
+    } else {
+      eligibleSources.push(src);
+    }
+  }
+  return { eligibleSources, skippedCodeSource, skippedIsolatedSource };
+}
+
+export async function loadAutopilotSourceUniverse(engine: BrainEngine): Promise<AutopilotSourceUniverse> {
+  try {
+    const sources = await engine.listAllSources({ localPathOnly: true });
+    const partition = partitionAutopilotSources(sources);
+    return {
+      sources,
+      ...partition,
+      legacyFallback: sources.length === 0,
+    };
+  } catch (e) {
+    return {
+      sources: [],
+      eligibleSources: [],
+      skippedCodeSource: [],
+      skippedIsolatedSource: [],
+      legacyFallback: true,
+      unavailableError: e,
+    };
+  }
+}
+
+export function healthOptsForAutopilotUniverse(universe: AutopilotSourceUniverse): AutopilotHealthOpts | undefined {
+  if (universe.legacyFallback) return undefined;
+  return { sourceIds: universe.eligibleSources.map((s) => s.id) };
 }
 
 /**
@@ -377,20 +446,18 @@ export async function dispatchPerSource(
   const emit = opts.emit ?? ((line) => process.stderr.write(line + '\n'));
   const log = opts.log ?? ((line) => console.log(line));
 
-  let sources: SourceRow[];
-  try {
-    sources = await engine.listAllSources({ localPathOnly: true });
-  } catch (e) {
+  const universe = opts.sourceUniverse ?? await loadAutopilotSourceUniverse(engine);
+  if (universe.unavailableError) {
     // Brand-new brain without sources table (pre-v0.18) — fall through
     // to the legacy single-job path. The error path here also covers
     // a misconfigured engine, but legacy fallback is safer than failing.
     if (opts.jsonMode) {
+      const e = universe.unavailableError;
       emit(JSON.stringify({ event: 'fanout_unavailable', error: e instanceof Error ? e.message : String(e) }));
     }
-    sources = [];
   }
 
-  if (sources.length === 0) {
+  if (universe.legacyFallback) {
     // Legacy path — preserves today's behavior for single-source brains
     // (default source) and pre-v0.18 brains without the sources table.
     const job = await queue.add(
@@ -412,18 +479,7 @@ export async function dispatchPerSource(
     return { dispatched: [], skipped_fresh: [], skipped_cap: [], skipped_cooldown: [], skipped_code_source: [], skipped_isolated_source: [], legacy_fallback: true };
   }
 
-  const eligibleSources: SourceRow[] = [];
-  const skippedCodeSource: SourceRow[] = [];
-  const skippedIsolatedSource: SourceRow[] = [];
-  for (const src of sources) {
-    if (src.config?.strategy === 'code') {
-      skippedCodeSource.push(src);
-    } else if (src.config?.federated !== true) {
-      skippedIsolatedSource.push(src);
-    } else {
-      eligibleSources.push(src);
-    }
-  }
+  const { eligibleSources, skippedCodeSource, skippedIsolatedSource } = universe;
 
   // #2194 fix #2: load recent per-source failures + cooldown knobs so a
   // chronically-failing source is backed off instead of re-dispatched every

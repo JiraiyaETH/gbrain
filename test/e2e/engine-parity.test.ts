@@ -438,6 +438,83 @@ describeBoth('Engine parity — Postgres vs PGLite', () => {
     expect(pgliteFed).toEqual(pgFed);
   });
 
+  test('getHealth sourceIds scope parity', async () => {
+    const SRC = 'health-parity-prose';
+    const CODE = 'health-parity-code';
+    const sourceSql = `
+      INSERT INTO sources (id, name, local_path, config)
+        VALUES ($1, $1, $2, $3::jsonb)
+        ON CONFLICT (id) DO UPDATE SET local_path = EXCLUDED.local_path, config = EXCLUDED.config
+    `;
+    for (const eng of [pgEngine, pgliteEngine]) {
+      await eng.executeRaw(sourceSql, [SRC, `/tmp/${SRC}`, JSON.stringify({ federated: true })]);
+      await eng.executeRaw(sourceSql, [CODE, `/tmp/${CODE}`, JSON.stringify({ federated: true, strategy: 'code' })]);
+
+      await eng.putPage('health-parity/a', {
+        type: 'person',
+        title: 'Health Parity A',
+        compiled_truth: 'alpha',
+        timeline: '',
+      }, { sourceId: SRC });
+      await eng.putPage('health-parity/b', {
+        type: 'person',
+        title: 'Health Parity B',
+        compiled_truth: 'beta',
+        timeline: '',
+      }, { sourceId: SRC });
+      await eng.upsertChunks('health-parity/a', [{
+        chunk_index: 0,
+        chunk_text: 'alpha',
+        chunk_source: 'compiled_truth',
+        embedding: basisEmbedding(101),
+        token_count: 1,
+      }], { sourceId: SRC });
+      await eng.upsertChunks('health-parity/b', [{
+        chunk_index: 0,
+        chunk_text: 'beta',
+        chunk_source: 'compiled_truth',
+        embedding: basisEmbedding(102),
+        token_count: 1,
+      }], { sourceId: SRC });
+      await eng.addTimelineEntry('health-parity/a', { date: '2026-01-01', summary: 'A' }, { sourceId: SRC });
+      await eng.addTimelineEntry('health-parity/b', { date: '2026-01-02', summary: 'B' }, { sourceId: SRC });
+      await eng.addLink('health-parity/a', 'health-parity/b', '', 'health_parity_ab', 'manual', undefined, undefined, { fromSourceId: SRC, toSourceId: SRC });
+      await eng.addLink('health-parity/b', 'health-parity/a', '', 'health_parity_ba', 'manual', undefined, undefined, { fromSourceId: SRC, toSourceId: SRC });
+
+      await eng.putPage('health-parity/code-orphan', {
+        type: 'note',
+        title: 'Health Parity Code',
+        compiled_truth: 'orphan code',
+        timeline: '',
+      }, { sourceId: CODE });
+    }
+
+    const pgScoped = await pgEngine.getHealth({ sourceIds: [SRC] });
+    const pgliteScoped = await pgliteEngine.getHealth({ sourceIds: [SRC] });
+    const pick = (h: Awaited<ReturnType<BrainEngine['getHealth']>>) => ({
+      page_count: h.page_count,
+      orphan_pages: h.orphan_pages,
+      missing_embeddings: h.missing_embeddings,
+      brain_score: h.brain_score,
+      embed_coverage_score: h.embed_coverage_score,
+      link_density_score: h.link_density_score,
+      timeline_coverage_score: h.timeline_coverage_score,
+      no_orphans_score: h.no_orphans_score,
+      no_dead_links_score: h.no_dead_links_score,
+    });
+
+    expect(pick(pgliteScoped)).toEqual(pick(pgScoped));
+    expect(pgScoped.page_count).toBe(2);
+    expect(pgScoped.orphan_pages).toBe(0);
+    expect(pgScoped.brain_score).toBe(100);
+
+    const pgEmpty = await pgEngine.getHealth({ sourceIds: [] });
+    const pgliteEmpty = await pgliteEngine.getHealth({ sourceIds: [] });
+    expect(pick(pgliteEmpty)).toEqual(pick(pgEmpty));
+    expect(pgEmpty.page_count).toBe(0);
+    expect(pgEmpty.brain_score).toBe(100);
+  });
+
   // v0.42.7 (#1696): stale-page extraction watermark parity. Isolated under a
   // dedicated source so other tests' mutations don't perturb the counts.
   test('stale-page extraction methods: Postgres ↔ PGLite parity', async () => {
