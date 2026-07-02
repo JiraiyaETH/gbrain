@@ -18,9 +18,10 @@
  * canonical pattern (enforced by scripts/check-test-isolation.sh).
  */
 
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { buildGatewayConfig } from '../../src/cli.ts';
 import type { GBrainConfig } from '../../src/core/config.ts';
+import { configureGateway, isAvailable, resetGateway } from '../../src/core/ai/gateway.ts';
 import { withEnv } from '../helpers/with-env.ts';
 
 const PASSTHROUGHS: Array<{ envVar: string; recipeId: string }> = [
@@ -34,6 +35,8 @@ const PASSTHROUGHS: Array<{ envVar: string; recipeId: string }> = [
 const TEST_VALUE = 'http://proxy.example.test/v1';
 
 const baseConfig: GBrainConfig = {} as unknown as GBrainConfig;
+
+afterEach(() => resetGateway());
 
 /**
  * Build an env-override object that clears every passthrough and sets one.
@@ -78,6 +81,17 @@ describe('buildGatewayConfig env-baseURL passthrough', () => {
         deepseek_api_key: 'config-deepseek-key',
       } as unknown as GBrainConfig);
       expect(cfg.env.DEEPSEEK_API_KEY).toBe('env-deepseek-key');
+    });
+  });
+
+  test('explicit DeepSeek chat model uses file-plane key even when default chat is unavailable', async () => {
+    await withEnv({ ANTHROPIC_API_KEY: undefined, DEEPSEEK_API_KEY: undefined }, async () => {
+      configureGateway(buildGatewayConfig({
+        deepseek_api_key: 'config-deepseek-key',
+      } as unknown as GBrainConfig));
+
+      expect(isAvailable('chat')).toBe(false);
+      expect(isAvailable('chat', 'deepseek:deepseek-reasoner')).toBe(true);
     });
   });
 
