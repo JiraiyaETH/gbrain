@@ -155,13 +155,14 @@ export async function runPhaseEnrichThin(
 
   // Chat gateway required for synthesis (dry-run skips the LLM but still needs
   // the candidate query; allow dry-run without a gateway).
-  if (!opts.dryRun && !isAvailable('chat')) {
+  if (!opts.dryRun && !isAvailable('chat', cfg.model)) {
+    const target = cfg.model ?? '<configured chat model>';
     return {
       phase: 'enrich_thin',
       status: 'skipped',
       duration_ms: Date.now() - startedAt,
-      summary: 'no chat gateway configured',
-      details: { reason: 'no_chat_gateway' },
+      summary: `chat gateway unavailable for ${target}`,
+      details: { reason: 'no_chat_gateway', model: target },
     };
   }
 
@@ -222,6 +223,7 @@ export async function runPhaseEnrichThin(
       perSourceResults[src.id] = {
         candidates_considered: 0,
         pages_enriched: 0,
+        pages_unchanged: 0,
         pages_skipped_insufficient: 0,
         pages_skipped_lock: 0,
         pages_skipped_disappeared: 0,
@@ -231,16 +233,19 @@ export async function runPhaseEnrichThin(
     }
   }
 
-  const totals = { enriched: 0, skipped_insufficient: 0, sources_processed: 0 };
+  const totals = { enriched: 0, unchanged: 0, skipped_insufficient: 0, sources_processed: 0 };
   for (const r of Object.values(perSourceResults)) {
     if (!r.error) totals.sources_processed++;
     totals.enriched += r.pages_enriched;
+    totals.unchanged += r.pages_unchanged;
     totals.skipped_insufficient += r.pages_skipped_insufficient;
   }
 
   const anyError = Object.values(perSourceResults).some((r) => r.error);
   const status = anyError ? 'warn' : 'ok';
-  const summary = `${totals.enriched} page(s) enriched across ${totals.sources_processed}/${sources.length} sources, ~$${totalSpent.toFixed(4)} spent`;
+  const summary =
+    `${totals.enriched} page(s) enriched, ${totals.unchanged} unchanged across ` +
+    `${totals.sources_processed}/${sources.length} sources, ~$${totalSpent.toFixed(4)} spent`;
 
   return {
     phase: 'enrich_thin',
@@ -251,6 +256,7 @@ export async function runPhaseEnrichThin(
       sources_count: sources.length,
       sources_processed: totals.sources_processed,
       pages_enriched: totals.enriched,
+      pages_unchanged: totals.unchanged,
       pages_skipped_insufficient: totals.skipped_insufficient,
       spent_usd: totalSpent,
       skipped_by_brain_wide_walltime: skippedByBrainWideWalltime,

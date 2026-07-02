@@ -18,6 +18,7 @@ import {
 import { recordCompleted, loadOpCheckpoint } from '../../src/core/op-checkpoint.ts';
 import { tryAcquireDbLock } from '../../src/core/db-lock.ts';
 import { BudgetExhausted, BudgetTracker } from '../../src/core/budget/budget-tracker.ts';
+import { importFromContent } from '../../src/core/import-file.ts';
 
 let engine: PGLiteEngine;
 
@@ -218,6 +219,88 @@ describe('runEnrichCore', () => {
     expect(page!.compiled_truth).toContain('[Source: meetings/2026-summit]');
     expect(page!.frontmatter.enriched_by).toBe('cli:enrich');
     expect(typeof page!.frontmatter.enriched_at).toBe('string');
+  }, 30000);
+
+  test('content-identical synthesis stamps provenance and exits candidate pool', async () => {
+    const existing = `---
+type: person
+title: Alice Example
+---
+
+${STUB}
+`;
+    await importFromContent(engine, 'people/alice-example', existing, {
+      sourceId: 'default',
+      noEmbed: true,
+    });
+    await seedLinkInto('people/alice-example', 'meetings/2026-summit', RICH_CONTEXT);
+
+    let calls = 0;
+    const sameSynth: SynthesizeFn = async () => {
+      calls++;
+      return STUB;
+    };
+
+    const r1 = await runEnrichCore(engine, {
+      sourceId: 'default',
+      types: ['person'],
+      model: 'test:model',
+      synthesizeFn: sameSynth,
+      minContextChars: 1,
+    });
+    expect(r1.pages_enriched).toBe(0);
+    expect(r1.pages_unchanged).toBe(1);
+    expect(calls).toBe(1);
+
+    const page = await engine.getPage('people/alice-example', { sourceId: 'default' });
+    expect(page!.compiled_truth.trim()).toBe(STUB);
+    expect(page!.frontmatter.enriched_by).toBe('cli:enrich');
+    expect(typeof page!.frontmatter.enriched_at).toBe('string');
+
+    const r2 = await runEnrichCore(engine, {
+      sourceId: 'default',
+      types: ['person'],
+      model: 'test:model',
+      synthesizeFn: sameSynth,
+      minContextChars: 1,
+    });
+    expect(r2.candidates_considered).toBe(0);
+    expect(r2.pages_enriched).toBe(0);
+    expect(r2.pages_unchanged).toBe(0);
+    expect(calls).toBe(1);
+  }, 30000);
+
+  test('evidence retrieval uses ASCII-folded title and aliases', async () => {
+    await seedStub('companies/aarna-diacritic', 'aarnâ', 'company', { aliases: ['Aarna'] });
+    await importFromContent(
+      engine,
+      'notes/aarna-evidence',
+      `---
+type: note
+title: Aarna evidence
+---
+
+Aarna has rich customer discovery notes and a clear seed-stage roadmap.
+`,
+      { sourceId: 'default', noEmbed: true },
+    );
+
+    let prompt = '';
+    const synth: SynthesizeFn = async ({ user }) => {
+      prompt = user;
+      return '## Overview\nAarna has customer discovery notes. [Source: notes/aarna-evidence]';
+    };
+
+    const r = await runEnrichCore(engine, {
+      sourceId: 'default',
+      types: ['company'],
+      model: 'test:model',
+      synthesizeFn: synth,
+      minContextChars: 1,
+    });
+    expect(r.pages_enriched).toBe(1);
+    expect(prompt).toContain('[Source: notes/aarna-evidence]');
+    expect(prompt).toContain('Aarna has rich customer discovery notes');
   }, 30000);
 
   test('no context → skipped_insufficient, no write, no LLM call', async () => {

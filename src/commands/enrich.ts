@@ -36,6 +36,7 @@ import type { OperationContext } from '../core/operations.ts';
 import { isAvailable, chat, getChatModel, withBudgetTracker } from '../core/ai/gateway.ts';
 import { BudgetTracker, BudgetExhausted } from '../core/budget/budget-tracker.ts';
 import { hybridSearch } from '../core/search/hybrid.ts';
+import { normalizeAliasList } from '../core/search/alias-normalize.ts';
 import { serializeMarkdown } from '../core/markdown.ts';
 import { listSources } from '../core/sources-ops.ts';
 import {
@@ -137,6 +138,8 @@ export interface EnrichCoreOpts {
 export interface EnrichResult {
   candidates_considered: number;
   pages_enriched: number;
+  /** Model produced a content-identical page; only enrich metadata was stamped. */
+  pages_unchanged: number;
   /** Skipped because the brain knew too little (pre-LLM gate OR model SKIP). */
   pages_skipped_insufficient: number;
   /** Skipped because another worker/process held the per-page lock. */
@@ -207,27 +210,50 @@ async function retrieveEvidence(
   sourceId: string,
   slug: string,
   title: string,
+  aliases?: unknown,
 ): Promise<EnrichEvidence[]> {
   const evidence: EnrichEvidence[] = [];
   const seen = new Set<string>();
 
-  // 1. Hybrid search on the entity name — pages that mention it.
-  try {
-    const hits = await hybridSearch(engine, title || slug, {
-      limit: HYBRID_SEARCH_LIMIT,
-      sourceId,
-    });
-    for (const h of hits) {
-      if (h.slug === slug) continue; // don't feed the stub its own body twice
-      const dedup = `${h.slug}:${h.chunk_text.slice(0, 40)}`;
-      if (seen.has(dedup)) continue;
-      seen.add(dedup);
-      if (h.chunk_text && h.chunk_text.trim()) {
-        evidence.push({ source_slug: h.slug, text: h.chunk_text });
+  const pushSearchEvidence = (h: { slug: string; chunk_text?: string | null }) => {
+    if (h.slug === slug) return false; // don't feed the stub its own body twice
+    const text = (h.chunk_text ?? '').trim();
+    if (!text) return false;
+    const dedup = `${h.slug}:${text.slice(0, 40)}`;
+    if (seen.has(dedup)) return false;
+    seen.add(dedup);
+    evidence.push({ source_slug: h.slug, text });
+    return true;
+  };
+
+  // 1. Hybrid search on title variants and declared aliases. Merge boundedly so
+  // alias/ASCII recall improves without expanding the evidence budget.
+  const queries = evidenceQueries(title || slug, aliases);
+  if (queries.length > 0) {
+    const perQueryHits: Array<Array<{ slug: string; chunk_text?: string | null }>> = [];
+    for (const q of queries) {
+      try {
+        perQueryHits.push(await hybridSearch(engine, q, {
+          limit: HYBRID_SEARCH_LIMIT,
+          sourceId,
+        }));
+      } catch {
+        // Search unavailable for this query (no embeddings, pre-migration
+        // drift, etc.) → fall through to backlinks/facts.
+        perQueryHits.push([]);
       }
     }
-  } catch {
-    // Search unavailable (no embeddings) → fall through to other signals.
+    for (let i = 0; evidence.length < HYBRID_SEARCH_LIMIT; i++) {
+      let progressed = false;
+      for (const hits of perQueryHits) {
+        const h = hits[i];
+        if (!h) continue;
+        progressed = true;
+        pushSearchEvidence(h);
+        if (evidence.length >= HYBRID_SEARCH_LIMIT) break;
+      }
+      if (!progressed) break;
+    }
   }
 
   // 2. Inbound-link context — how OTHER pages describe this entity.
@@ -266,6 +292,32 @@ async function retrieveEvidence(
   }
 
   return evidence;
+}
+
+export function asciiFoldForEvidenceQuery(raw: string): string {
+  return (raw ?? '')
+    .normalize('NFKD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[^\x00-\x7F]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function evidenceQueries(title: string, aliases?: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (q: string) => {
+    const clean = (q ?? '').trim();
+    const key = clean.toLowerCase();
+    if (!clean || seen.has(key)) return;
+    seen.add(key);
+    out.push(clean);
+  };
+  add(title);
+  const folded = asciiFoldForEvidenceQuery(title);
+  if (folded && folded !== title.trim()) add(folded);
+  for (const alias of normalizeAliasList(aliases)) add(alias);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +369,13 @@ async function enrichOneLocked(ctx: EnrichOneCtx, candidate: EnrichCandidate): P
   }
 
   const kind = inferEnrichKind(page.type, slug);
-  const evidence = await retrieveEvidence(engine, sourceId, slug, page.title || slug);
+  const evidence = await retrieveEvidence(
+    engine,
+    sourceId,
+    slug,
+    page.title || slug,
+    (page.frontmatter as Record<string, unknown> | undefined)?.aliases,
+  );
   const rendered = renderEvidence(evidence);
   const grounding = assessGrounding(rendered, ctx.minContextChars);
 
@@ -360,12 +418,15 @@ async function enrichOneLocked(ctx: EnrichOneCtx, candidate: EnrichCandidate): P
   // retrieved context was sanitized in buildEnrichPrompt; the synthesized body
   // is the model's grounded output.
   const tags = await engine.getTags(slug, { sourceId }).catch(() => [] as string[]);
+  const enrichStamp = {
+    enriched_at: new Date().toISOString(),
+    enriched_by: ENRICHED_BY,
+  };
   const newFrontmatter: Record<string, unknown> = {
     ...page.frontmatter,
     // Provenance survives write-through (it only overrides ingested_via /
     // ingested_at / source_kind). enriched_at also drives the recency guard.
-    enriched_at: new Date().toISOString(),
-    enriched_by: ENRICHED_BY,
+    ...enrichStamp,
   };
   const content = serializeMarkdown(newFrontmatter, parsed.body, page.timeline ?? '', {
     type: page.type,
@@ -387,9 +448,15 @@ async function enrichOneLocked(ctx: EnrichOneCtx, candidate: EnrichCandidate): P
     remote: false,
     sourceId,
   };
-  await putPageOp.handler(opCtx, { slug, content });
+  const writeResult = await putPageOp.handler(opCtx, { slug, content }) as { status?: string };
 
-  ctx.result.pages_enriched++;
+  if (writeResult.status === 'skipped') {
+    const updated = await engine.mergePageFrontmatter(slug, sourceId, enrichStamp);
+    if (updated) ctx.result.pages_unchanged++;
+    else ctx.result.pages_skipped_disappeared++;
+  } else {
+    ctx.result.pages_enriched++;
+  }
   ctx.done.add(completedKey(sourceId, slug));
 }
 
@@ -407,6 +474,7 @@ export async function runEnrichCore(
   const result: EnrichResult = {
     candidates_considered: 0,
     pages_enriched: 0,
+    pages_unchanged: 0,
     pages_skipped_insufficient: 0,
     pages_skipped_lock: 0,
     pages_skipped_disappeared: 0,
@@ -737,6 +805,7 @@ function emptyAgg(): EnrichResult {
   return {
     candidates_considered: 0,
     pages_enriched: 0,
+    pages_unchanged: 0,
     pages_skipped_insufficient: 0,
     pages_skipped_lock: 0,
     pages_skipped_disappeared: 0,
@@ -748,11 +817,21 @@ function emptyAgg(): EnrichResult {
 function addInto(agg: EnrichResult, r: EnrichResult): void {
   agg.candidates_considered += r.candidates_considered;
   agg.pages_enriched += r.pages_enriched;
+  agg.pages_unchanged += r.pages_unchanged;
   agg.pages_skipped_insufficient += r.pages_skipped_insufficient;
   agg.pages_skipped_lock += r.pages_skipped_lock;
   agg.pages_skipped_disappeared += r.pages_skipped_disappeared;
   agg.pages_failed += r.pages_failed;
   agg.would_enrich = (agg.would_enrich ?? 0) + (r.would_enrich ?? 0);
+}
+
+export function formatChatUnavailableMessage(model?: string): string {
+  const target = model?.trim() ? `model "${model.trim()}"` : 'the configured chat model';
+  return (
+    `Chat gateway unavailable for ${target}. Configure the provider key/model ` +
+    '(for example, `gbrain config set chat_model anthropic:claude-haiku-4-5` ' +
+    'or the provider-specific API key), or pass --dry-run to preview candidates.'
+  );
 }
 
 export async function runEnrich(engine: BrainEngine, args: string[]): Promise<void> {
@@ -808,8 +887,8 @@ export async function runEnrich(engine: BrainEngine, args: string[]): Promise<vo
   }
 
   // Chat gateway required for non-dry-run.
-  if (!parsed.dryRun && !isAvailable('chat')) {
-    console.error('Chat gateway unavailable. Configure a chat model (e.g. `gbrain config set chat_model anthropic:claude-haiku-4-5`), or pass --dry-run to preview candidates.');
+  if (!parsed.dryRun && !isAvailable('chat', parsed.model)) {
+    console.error(formatChatUnavailableMessage(parsed.model));
     process.exit(1);
   }
 
@@ -873,7 +952,7 @@ export async function runEnrich(engine: BrainEngine, args: string[]): Promise<vo
       addInto(aggregate, r);
       if (r.spent_usd) totalSpent += r.spent_usd;
       if (r.budget_exhausted) anyBudgetExhausted = true;
-      progress.tick(1, `${sourceId}: ${r.pages_enriched} enriched`);
+      progress.tick(1, `${sourceId}: ${r.pages_enriched} enriched, ${r.pages_unchanged} unchanged`);
     }
   } finally {
     progress.finish();
@@ -897,7 +976,8 @@ export async function runEnrich(engine: BrainEngine, args: string[]): Promise<vo
     );
   } else {
     console.log(
-      `\nDone: enriched ${aggregate.pages_enriched} page(s) ` +
+      `\nDone: enriched ${aggregate.pages_enriched} page(s), ` +
+      `${aggregate.pages_unchanged} unchanged ` +
       `(${aggregate.pages_skipped_insufficient} skipped insufficient, ` +
       `${aggregate.pages_skipped_lock} lock-busy, ${aggregate.pages_failed} failed) ` +
       `across ${sourceIds.length} source(s). Spent ~$${totalSpent.toFixed(4)}.`,
