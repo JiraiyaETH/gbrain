@@ -4,6 +4,7 @@ import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import type { Transaction } from '@electric-sql/pglite';
 import type {
   BrainEngine,
+  GetHealthOpts,
   BatchOpts,
   LinkBatchInput, TimelineBatchInput,
   ReservedConnection,
@@ -4712,51 +4713,90 @@ export class PGLiteEngine implements BrainEngine {
     };
   }
 
-  async getHealth(): Promise<BrainHealth> {
+  async getHealth(opts?: GetHealthOpts): Promise<BrainHealth> {
+    const scoped = Array.isArray(opts?.sourceIds);
+    const sourceIds = opts?.sourceIds ?? [];
     // Combined metrics from master (brain_score components: dead_links, link_count,
     // pages_with_timeline) and v0.10.3 graph layer (link_coverage, timeline_coverage,
     // most_connected). Both coexist: master's brain_score is the composite
     // dashboard, v0.10.3 metrics give entity-page-level granularity.
     const { rows: [h] } = await this.db.query(`
-      WITH entity_pages AS (
-        SELECT id, slug FROM pages WHERE type IN ('person', 'company')
+      WITH scoped_pages AS (
+        SELECT id, slug, type, updated_at
+        FROM pages p
+        WHERE ($1::boolean IS NOT TRUE OR p.source_id = ANY($2::text[]))
+      ),
+      scoped_chunks AS (
+        SELECT cc.*
+        FROM content_chunks cc
+        WHERE ($1::boolean IS NOT TRUE OR EXISTS (SELECT 1 FROM scoped_pages p WHERE p.id = cc.page_id))
+      ),
+      scoped_links AS (
+        SELECT l.*
+        FROM links l
+        WHERE ($1::boolean IS NOT TRUE OR (
+          EXISTS (SELECT 1 FROM scoped_pages fp WHERE fp.id = l.from_page_id)
+          AND EXISTS (SELECT 1 FROM scoped_pages tp WHERE tp.id = l.to_page_id)
+        ))
+      ),
+      scoped_timeline_entries AS (
+        SELECT te.*
+        FROM timeline_entries te
+        WHERE ($1::boolean IS NOT TRUE OR EXISTS (SELECT 1 FROM scoped_pages p WHERE p.id = te.page_id))
+      ),
+      entity_pages AS (
+        SELECT id, slug FROM scoped_pages WHERE type IN ('person', 'company')
       )
       SELECT
-        (SELECT count(*) FROM pages) as page_count,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NOT NULL)::float /
-          GREATEST((SELECT count(*) FROM content_chunks), 1)::float as embed_coverage,
-        (SELECT count(*) FROM pages p
+        (SELECT count(*) FROM scoped_pages) as page_count,
+        (SELECT count(*) FROM scoped_chunks WHERE embedded_at IS NOT NULL)::float /
+          GREATEST((SELECT count(*) FROM scoped_chunks), 1)::float as embed_coverage,
+        (SELECT count(*) FROM scoped_pages p
          WHERE p.updated_at < (SELECT MAX(te.created_at) FROM timeline_entries te WHERE te.page_id = p.id)
         ) as stale_pages,
         -- Bug 11 — orphan = islanded (no inbound AND no outbound).
         -- See BrainHealth.orphan_pages docstring; docs updated to match this.
-        (SELECT count(*) FROM pages p
-         WHERE NOT EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = p.id)
-           AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_page_id = p.id)
+        (SELECT count(*) FROM scoped_pages p
+         WHERE NOT EXISTS (SELECT 1 FROM scoped_links l WHERE l.to_page_id = p.id)
+           AND NOT EXISTS (SELECT 1 FROM scoped_links l WHERE l.from_page_id = p.id)
         ) as orphan_pages,
         (SELECT count(*) FROM links l
          WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.id = l.to_page_id)
+           AND ($1::boolean IS NOT TRUE OR EXISTS (SELECT 1 FROM scoped_pages fp WHERE fp.id = l.from_page_id))
         ) as dead_links,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NULL) as missing_embeddings,
-        (SELECT count(*) FROM links) as link_count,
-        (SELECT count(DISTINCT page_id) FROM timeline_entries) as pages_with_timeline,
+        (SELECT count(*) FROM scoped_chunks WHERE embedded_at IS NULL) as missing_embeddings,
+        (SELECT count(*) FROM scoped_links) as link_count,
+        (SELECT count(DISTINCT page_id) FROM scoped_timeline_entries) as pages_with_timeline,
         (SELECT count(*) FROM entity_pages e
-         WHERE EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = e.id))::float /
+         WHERE EXISTS (SELECT 1 FROM scoped_links l WHERE l.to_page_id = e.id))::float /
           GREATEST((SELECT count(*) FROM entity_pages), 1)::float as link_coverage,
         (SELECT count(*) FROM entity_pages e
-         WHERE EXISTS (SELECT 1 FROM timeline_entries te WHERE te.page_id = e.id))::float /
+         WHERE EXISTS (SELECT 1 FROM scoped_timeline_entries te WHERE te.page_id = e.id))::float /
           GREATEST((SELECT count(*) FROM entity_pages), 1)::float as timeline_coverage
-    `);
+    `, [scoped, sourceIds]);
 
     // Top 5 most connected entities by total link count (in + out).
     const { rows: connected } = await this.db.query(`
+      WITH scoped_pages AS (
+        SELECT id, slug, type
+        FROM pages p
+        WHERE ($1::boolean IS NOT TRUE OR p.source_id = ANY($2::text[]))
+      ),
+      scoped_links AS (
+        SELECT l.*
+        FROM links l
+        WHERE ($1::boolean IS NOT TRUE OR (
+          EXISTS (SELECT 1 FROM scoped_pages fp WHERE fp.id = l.from_page_id)
+          AND EXISTS (SELECT 1 FROM scoped_pages tp WHERE tp.id = l.to_page_id)
+        ))
+      )
       SELECT p.slug,
-             (SELECT count(*) FROM links l WHERE l.from_page_id = p.id OR l.to_page_id = p.id)::int as link_count
-      FROM pages p
+             (SELECT count(*) FROM scoped_links l WHERE l.from_page_id = p.id OR l.to_page_id = p.id)::int as link_count
+      FROM scoped_pages p
       WHERE p.type IN ('person', 'company')
       ORDER BY link_count DESC
       LIMIT 5
-    `);
+    `, [scoped, sourceIds]);
 
     const r = h as Record<string, unknown>;
     const pageCount = Number(r.page_count);

@@ -14,6 +14,39 @@ import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 
 let engine: PGLiteEngine;
 
+function embedding(idx: number): Float32Array {
+  const out = new Float32Array(1536);
+  out[idx] = 1;
+  return out;
+}
+
+async function upsertSource(id: string, config: Record<string, unknown> = { federated: true }) {
+  await engine.executeRaw(
+    `INSERT INTO sources (id, name, local_path, config)
+       VALUES ($1, $1, $2, $3::jsonb)
+       ON CONFLICT (id) DO UPDATE SET local_path = EXCLUDED.local_path, config = EXCLUDED.config`,
+    [id, `/tmp/${id}`, JSON.stringify(config)],
+  );
+}
+
+async function putEmbeddedPage(sourceId: string, slug: string, title: string, embeddingIdx: number) {
+  await engine.putPage(slug, {
+    type: 'person',
+    title,
+    compiled_truth: `${title} body`,
+    timeline: '',
+    frontmatter: {},
+  }, { sourceId });
+  await engine.upsertChunks(slug, [{
+    chunk_index: 0,
+    chunk_text: `${title} body`,
+    chunk_source: 'compiled_truth',
+    embedding: embedding(embeddingIdx),
+    token_count: 2,
+  }], { sourceId });
+  await engine.addTimelineEntry(slug, { date: '2026-01-01', summary: `${title} event` }, { sourceId });
+}
+
 beforeAll(async () => {
   engine = new PGLiteEngine();
   await engine.connect({});
@@ -67,6 +100,36 @@ describe('Bug 11 — brain_score breakdown sums to total', () => {
     const h = await engine.getHealth();
     expect(h.brain_score).toBeGreaterThanOrEqual(0);
     expect(h.brain_score).toBeLessThanOrEqual(100);
+  });
+
+  test('getHealth({ sourceIds }) scopes score inputs to the requested sources', async () => {
+    const prose = 'health-prose';
+    const code = 'health-code';
+    await upsertSource(prose);
+    await upsertSource(code, { federated: true, strategy: 'code' });
+
+    await putEmbeddedPage(prose, 'health/a', 'Health A', 1);
+    await putEmbeddedPage(prose, 'health/b', 'Health B', 2);
+    await engine.addLink('health/a', 'health/b', '', 'mentions', 'manual', undefined, undefined, { fromSourceId: prose, toSourceId: prose });
+    await engine.addLink('health/b', 'health/a', '', 'mentions', 'manual', undefined, undefined, { fromSourceId: prose, toSourceId: prose });
+
+    await engine.putPage('code/orphan-1', { type: 'note', title: 'Code 1', compiled_truth: 'x', frontmatter: {} }, { sourceId: code });
+    await engine.putPage('code/orphan-2', { type: 'note', title: 'Code 2', compiled_truth: 'x', frontmatter: {} }, { sourceId: code });
+
+    const scoped = await engine.getHealth({ sourceIds: [prose] });
+    const global = await engine.getHealth();
+
+    expect(scoped.page_count).toBe(2);
+    expect(scoped.orphan_pages).toBe(0);
+    expect(scoped.missing_embeddings).toBe(0);
+    expect(scoped.link_density_score).toBe(25);
+    expect(scoped.timeline_coverage_score).toBe(15);
+    expect(scoped.no_orphans_score).toBe(15);
+    expect(scoped.brain_score).toBe(100);
+
+    expect(global.page_count).toBe(4);
+    expect(global.orphan_pages).toBe(2);
+    expect(global.brain_score).toBeLessThan(scoped.brain_score);
   });
 });
 
