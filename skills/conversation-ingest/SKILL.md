@@ -1,18 +1,14 @@
 ---
 name: conversation-ingest
-version: 1.1.2
+version: 2.0.0
 description: |
   Ingest chat and dialog history (Telegram, iMessage, WhatsApp, Discord, Signal,
-  Teams, IRC, Matrix) into the brain as `conversation`-type pages that compound
-  with the rest of the system via enrichment. Handles both the inline-posture
-  (small/active threads: full transcript in-page below a separator, matching
-  the meeting-page standard) and the sidecar posture (bulk/archive history:
-  summary in-page, gzipped raw transcript in `.raw/`, index kept clean).
-  After the retrieval smoke passes, typed-edge enrichment for substantive
-  dialogs is a STANDARD phase (not optional): resolve counterparties, create
-  stubs, write structured edges, add timeline rows, re-compile entity pages.
-  Scope: chat-and-dialog history only. Meetings → meeting-ingestion.
-  Single links/ideas → idea-ingest. Media files → media-ingest.
+  Teams, IRC, Matrix) into the brain as `conversation`-type pages. Handles the
+  inline posture (small/active threads: full transcript in-page) and the sidecar
+  posture (bulk/archive: summary in-page, gzipped raw in `.raw/`). After the
+  retrieval smoke passes, typed-edge enrichment for substantive dialogs executes
+  as a standard phase. Scope: chat-and-dialog history only. Meetings →
+  meeting-ingestion. Single links/ideas → idea-ingest. Media files → media-ingest.
 triggers:
   - "ingest telegram dialogs"
   - "import chat history"
@@ -43,233 +39,149 @@ writes_to:
 > **Filing rule:** Read `skills/_brain-filing-rules.md` before creating any page.
 > Conversations file to `conversations/` under the `conversation` type.
 
-> **MECE boundary.**
-> - Structured meetings with an agenda/attendee list → `skills/meeting-ingestion/SKILL.md`
-> - Single links, articles, or ideas → `skills/idea-ingest/SKILL.md`
-> - Video, audio, PDF, book, screenshot → `skills/media-ingest/SKILL.md`
-> - Bulk archive with unknown content type → `skills/cold-start/SKILL.md` for
->   sequencing; return here once the archive is identified as chat exports.
-> - This skill handles everything else: chat logs, DMs, group threads, and
->   multi-day dialogs from any messaging platform.
+## MECE Boundary
+
+- Structured meetings with agenda/attendees or captured by a meeting recorder → `skills/meeting-ingestion/SKILL.md`
+- Single links, articles, or ideas → `skills/idea-ingest/SKILL.md`
+- Video, audio, PDF, book, screenshot → `skills/media-ingest/SKILL.md`
+- This skill: chat logs, DMs, group threads, multi-day dialogs from any messaging platform.
 
 ## Contract
 
-This skill guarantees:
-- **Idempotent**: re-ingesting a grown dialog is an in-place update, never a
-  duplicate page. The peer-based slug + `id:` frontmatter field together form
-  the dedup anchor.
-- **Anti-clobber by construction**: slugs are derived from stable peer IDs
-  (`conversations/telegram-<peer_id>`), not display names. A renamed dialog
-  does not produce a new slug.
-- **No typed/traversable edges at write time**: no typed graph edges are
-  created from raw chat prose. Prose `[[wikilinks]]` in the raw transcript
-  are neutralized before import (see Phase 2). `mentions`-type edges from
-  the link extractor are acceptable (they are not traversable back-links);
-  typed/traversable edges come from enrichment (Phase 6) only.
-- **Index hygiene**: bulk/archive transcripts stay out of the search index
-  via the sidecar posture; the in-page posture is reserved for small/active
-  threads where the transcript is search-relevant.
-- **Typed-edge enrichment is STANDARD** (not optional): for every substantive
-  dialog, Phase 6 executes counterparty resolution, entity stub creation,
-  structured-edge writing, and timeline row insertion. A dialog that has
-  passed the Phase 5 smoke but skipped Phase 6 is INCOMPLETE.
-- **Verified**: a dialog is not "done" until the Phase 5 retrieval smoke
-  passes AND Phase 6 enrichment has executed or been explicitly logged as
-  skipped (trivial/one-off contact).
+- **Idempotent.** Re-ingesting a grown dialog updates in place — never a duplicate page. The stable peer-ID slug + `id:` frontmatter form the dedup anchor.
+- **Anti-clobber by construction.** Slugs derive from stable peer IDs, not display names. A renamed dialog does not produce a new slug.
+- **Edge-free at write time.** No typed graph edges are created at ingest. Prose wikilinks in the raw transcript are neutralized before import (Phase 2). `mentions`-type edges from the link extractor are acceptable; typed edges come from Phase 6 only.
+- **Index hygiene.** Bulk/archive transcripts stay out of the search index via the sidecar posture; inline posture is reserved for small/active threads.
+- **Typed-edge enrichment is STANDARD** (not optional). For every substantive dialog, Phase 6 executes counterparty resolution, stub creation, structured-edge writing, and timeline insertion. A dialog that passed Phase 5 but skipped Phase 6 is incomplete.
+- **Verified.** A dialog is done only when the Phase 5 retrieval smoke passes AND Phase 6 has executed or been explicitly logged as skipped.
 
-## Phases
+---
 
-### Phase 0: MECE check + idempotency (MANDATORY — run first)
+## Phase 0: MECE check + idempotency
 
-1. **Route check.** Was this recorded by a meeting tool (Zoom, Circleback,
-   Granola, Fireflies, Otter) OR does the content have multiple named
-   attendees and a session-like structure (agenda, facilitator, formal
-   action items with owners)? → route to
-   `skills/meeting-ingestion/SKILL.md` instead, regardless of whether
-   the meeting had a formal agenda. The meeting-ingestion skill handles
-   all recorder transcripts; this skill is for personal chat/DM history
-   only. Note: many DMs contain decisions and action items — that alone
-   is not a routing signal. Route on "was this a meeting session
-   captured by a recorder or structured meeting tool?" When in doubt,
-   prefer meeting-ingestion.
-   Otherwise continue.
+**Source reachability check (run first):**
+```bash
+gbrain sources list   # must show a 'default' source with a local_path
+```
+If no default source appears, stop and resolve source configuration before writing any pages.
 
-2. **Compute the target slug.** Use a stable peer-based identifier.
-   The slug is the FULL page path (including `conversations/` prefix).
-   Define two variables to avoid double-path errors in subsequent commands:
+**Route check.** Was this captured by a meeting recorder (Zoom, Circleback, Granola, Fireflies, Otter) OR does it have a session-like structure (multiple named attendees, agenda, formal action items)? → route to `skills/meeting-ingestion/SKILL.md`. DMs that contain decisions or action items are NOT a routing signal — route on "was this a meeting captured by a recorder?" When in doubt, prefer meeting-ingestion.
 
-   ```
-   page_path = conversations/<platform>-<stable-id>[-<period>]
-   id_key    = <platform>-<stable-id>[-<period>]   # used in id: frontmatter
-   ```
+**Compute the target slug.** Define two variables:
 
-   Platform patterns:
-   - Telegram: `page_path=conversations/telegram-<peer_id>`, `id_key=telegram-<peer_id>`
-     (numeric ID from the export; `-<period>` suffix for sub-pages,
-     e.g. `page_path=conversations/telegram-123456789-2026-q2`).
-   - iMessage/SMS: `page_path=conversations/imessage-<phone>` (E.164 without `+`,
-     e.g. `conversations/imessage-14155551234`).
-   - WhatsApp: `conversations/whatsapp-<normalized-phone>` or
-     `conversations/whatsapp-<group-hash>` for groups.
-   - Discord: `conversations/discord-<channel-id>`.
-   - Signal: `conversations/signal-<uuid>` (from the backup export).
-   - Teams: `conversations/teams-<thread-id>`.
-   - IRC/Matrix/other: `conversations/<platform>-<stable-channel-id>`.
+```
+page_path = conversations/<platform>-<stable-id>[-<period>]
+id_key    = <platform>-<stable-id>[-<period>]   # used in id: frontmatter
+```
 
-   All subsequent `gbrain get`, `gbrain put`, `gbrain search`, and sidecar
-   commands use `$page_path` — never concatenate `conversations/` again.
-   Sidecar: `.raw/${id_key}.json.gz` (NOT `.raw/${page_path}.json.gz`).
+Platform patterns:
 
-   - **Never use display names in slugs** — a renamed contact or channel
-     would generate a new slug, leaving the old page orphaned with no
-     dedup hook.
+| Platform | page_path pattern |
+|---|---|
+| Telegram | `conversations/telegram-<peer_id>` (numeric ID from export) |
+| iMessage/SMS | `conversations/imessage-<E164-phone-no-plus>` |
+| WhatsApp | `conversations/whatsapp-<normalized-phone>` or `whatsapp-<group-hash>` |
+| Discord | `conversations/discord-<channel-id>` |
+| Signal | `conversations/signal-<uuid>` |
+| Teams | `conversations/teams-<thread-id>` |
+| IRC/Matrix/other | `conversations/<platform>-<stable-channel-id>` |
 
-3. **Set the `id:` field.** Use `$id_key` (the slug WITHOUT the
-   `conversations/` prefix, including any period suffix):
-   - Primary page: `id: telegram-123456789`
-   - Period sub-page: `id: telegram-123456789-2026-q2`
+Add a `-<period>` suffix (e.g. `-2026-q2`) for oversized dialogs split into sub-pages (use when a single dialog exceeds ~2 MB raw or ~10,000 messages). The primary page (no period suffix) still exists as the canonical stub/index entry; sub-pages carry the full content for their period. Sidecar path: `.raw/${id_key}.json.gz` (use `$id_key`, NOT `$page_path`).
 
-   The `id:` must be unique per page. `put_page` / import skips writes
-   when `frontmatter.id` collides with an existing page — so if every
-   sub-page shared `id: telegram-123456789`, only the first sub-page
-   would ever be written. If you need to express the parent thread, add
-   a `thread_id: telegram-123456789` body metadata line (plain prose,
-   not frontmatter — keeps it out of the dedup key).
+**Set `id:` frontmatter.** Use `$id_key` (slug without `conversations/` prefix, including any period suffix). Each sub-page must have a unique `id:` — a shared id causes the dedup write to skip all but the first. Express the parent thread via a body metadata line `thread_id: <parent-id_key>` (plain prose, not frontmatter).
 
-4. **Idempotency check.**
-   ```bash
-   gbrain get conversations/<slug> --source default
-   gbrain search "<peer-name> <platform>" --source default
-   ```
-   - If a page already exists for this peer + platform and has a full
-     transcript body: **update in place** (see Phase 3 — re-ingest posture).
-     Do NOT create a second page.
-   - If only a thin stub exists: reconcile (fill missing fields, never
-     clobber a richer existing page).
-   - If no page exists: proceed to Phase 1.
+**Idempotency check.**
+```bash
+gbrain get conversations/<slug> --source default
+gbrain search "<peer-name> <platform>" --source default
+```
+- Page with full transcript body → **update in place** (Phase 3 re-ingest posture).
+- Thin stub → reconcile, fill missing fields, do not clobber.
+- No page → proceed to Phase 1.
 
-### Phase 1: Normalize the export
+---
 
-GBrain's conversation parser (`src/core/conversation-parser/builtins.ts`)
-recognizes 14 built-in format patterns. Ensure the export is in a
-recognized shape before passing it to the parser, or pre-process it into
-the canonical inline-date format:
+## Phase 1: Normalize the export
+
+The gbrain parser recognizes 14 built-in formats. If the export is not in the table below, pre-process to the canonical `imessage-slack` shape (inline dates remove date-ambiguity for multi-day threads):
 
 ```
 **Speaker Name** (YYYY-MM-DD HH:MM AM/PM): message text
 ```
 
-(This is the `imessage-slack` pattern — the most explicit format, preferred
-for pre-processed output because inline dates anchor each line to its exact
-date even in multi-day threads.)
+| Platform | Built-in pattern |
+|---|---|
+| Telegram (bracket style) | `telegram-bracket` | `[Alice] (2026-06-01 10:15:00) hello` |
+| Telegram (text export) | `telegram-text-export` | `Alice, [01.06.2026 10:15]` then message on next line |
+| iMessage (canonical) | `imessage-slack` |
+| WhatsApp (ISO locale) | `whatsapp-iso` |
+| WhatsApp (US locale) | `whatsapp-us` |
+| Discord (export tool) | `discord-export` |
+| Discord (in-app copy) | `discord-classic` |
+| Signal | `signal-export` |
+| Teams | `teams-export` |
+| Matrix/Element | `matrix-element` |
+| IRC (irssi/weechat) | `irc-classic` / `irc-weechat` |
+| Meeting-recorder formats (`bold-paren-time`, `bold-name-no-time`) | → route to meeting-ingestion |
 
-**Platform-specific notes:**
+---
 
-| Platform | Built-in pattern id | Common export path |
-|---|---|---|
-| Telegram (bracket style) | `telegram-bracket` | Settings → Advanced → Export Telegram Data → JSON or TXT |
-| Telegram (text export) | `telegram-text-export` | Same export, plain text variant |
-| iMessage (gbrain canonical) | `imessage-slack` | Use iExporter / Bulk Media Exporter; reformat to bold-paren-date |
-| WhatsApp (ISO locale) | `whatsapp-iso` | Chat → Export Chat → Without Media |
-| WhatsApp (US locale) | `whatsapp-us` | Same, locale-dependent format |
-| Discord (export tool) | `discord-export` | DiscordChatExporter TXT output |
-| Discord (in-app copy) | `discord-classic` | In-app message copy |
-| Signal | `signal-export` | signal-cli JSON-to-text render |
-| Teams | `teams-export` | Teams chat export (web/desktop) |
-| Matrix / Element | `matrix-element` | matrix-archive script |
-| IRC (irssi/weechat) | `irc-classic` / `irc-weechat` | Native log files |
-| Circleback / Granola / Zoom (elapsed-time format) | `bold-paren-time` | `**Speaker** (HH:MM): text` — ROUTE TO meeting-ingestion instead |
-| Circleback / Granola / Zoom (no-timestamp format) | `bold-name-no-time` | `**Speaker:** text` — ROUTE TO meeting-ingestion instead |
+## Phase 2: Neutralize live edge tokens (fail-closed)
 
-**Note on meeting-tool formats:** `bold-paren-time` and `bold-name-no-time`
-are included in the parser's built-in set for completeness (they appear in
-Circleback/Granola reformatted exports). If the transcript came from a
-meeting recorder, route it to `skills/meeting-ingestion/SKILL.md` before
-reaching this step — the parser recognizing the format does not mean
-this skill is the right one to ingest it.
-
-If the export format is not in the table, pre-process it to `imessage-slack`
-shape before import (the inline date removes the "what day was this?" ambiguity
-for multi-day threads).
-
-### Phase 2: Safety check — neutralize live edge tokens
-
-**Before writing any page**, scan the raw transcript for two classes of
-tokens that gbrain's link extractor treats as graph edges:
+**Before writing any page**, scan for tokens that gbrain's link extractor treats as graph edges:
 
 ```bash
-# 1. Wikilinks: [[slug]] or [[dir/slug]] tokens (rg preferred over grep -P on macOS)
+# Wikilinks
 rg '\[\[(?!.*#)([^\]]+)\]\]' <export-file> | head -20
 
-# 2. Bare slug paths: prose like `people/alice`, `companies/acme`,
-#    `meetings/2026-07-01-foo` — FS-path extraction can mint edges from these
+# Bare slug paths (FS-path extraction mints edges from these)
 rg '\b(people|companies|meetings|contracts|concepts|ideas|projects|notes|conversations)/[a-z0-9-]+' \
   <export-file> | head -20
 ```
 
-If either grep returns hits:
+If either returns hits:
 - **Refuse to import** the transcript as-is.
-- For wikilinks: replace `[[` with `\[\[` (or convert to plain text).
-- For bare slug paths in prose: replace with display names
-  (e.g. `people/alice` → `Alice`).
-- Log the count of neutralized tokens in the ingest report.
+- Wikilinks: replace `[[` with `\[\[` or convert to plain text.
+- Bare slug paths: replace with display names (`people/alice` → `Alice`).
+- Log the count of neutralized tokens in the ingest receipt.
 
-Why: `mentions-only` link inference means prose body text is generally safe,
-but a raw chat transcript can contain literal `[[wikilink]]` strings (e.g.
-someone shared an Obsidian link) OR bare path strings (bots, note references).
-Both are recognized by FS-path extraction and would create false typed edges.
-The fail-closed rule here (refuse, fix, then import) prevents the class of
-mistyping errors documented in the memory file
-`telegram-rebuild-and-extract-linktype-bug.md`.
+---
 
-### Phase 3: Determine posture and build the page
+## Phase 3: Determine posture and build the page
 
-Choose between two postures based on dialog size:
+### Inline posture (< 450 KB raw transcript)
 
-#### Inline posture (small / active threads, < 450 KB raw transcript)
-
-Full transcript lives below a `---` separator in the page file. Matches
-the two-layer meeting-page standard. Use for active threads where the
-full conversation text is search-relevant.
+Full transcript lives below a `---` separator. Use for active threads where the full text is search-relevant.
 
 ```markdown
 ---
 title: "Conversation with <Peer Name>"
 type: conversation
-id: <platform>-<peer-id>[-<period>]   # matches $id_key; include period suffix for sub-pages
+id: <id_key>
 date: YYYY-MM-DD
-# Optional — add for time-only patterns (telegram-bracket, discord-classic,
-# matrix-element, irc-*) to avoid UTC-assumed warnings from the parser.
-# timezone: America/Los_Angeles
+# timezone: America/Los_Angeles  # add for time-only formats (telegram-bracket, discord-classic, matrix-element, irc-*)
 tags:
   - <platform>
   - conversation
 participants:
-  - <peer-display-name>
-  # NOTE: `participants:` is plain inert metadata (display names, no slugs).
-  # The conversation type has no frontmatter_links rule for participants,
-  # so this field creates NO graph edges. Use it for human readability only.
+  - <peer-display-name>   # plain metadata, no graph edges — conversation type has no frontmatter_links for participants
 ---
 
 # Conversation with <Peer Name>
 
-**Platform:** <telegram | imessage | whatsapp | ...>
+**Platform:** <platform>
 **Participants:** <display names, plain prose — no wikilinks>
 **Date range:** YYYY-MM-DD to YYYY-MM-DD
 **Message count:** <N>
 
 ## Summary
-<Derive from the transcript: what the conversation is about, what was
-decided or exchanged, and why it matters. Cite only what is evidenced
-in the text; mark uncertain inferences explicitly (e.g. "appears to be",
-"unclear from context"). Do not fabricate details not present in the
-transcript.>
+<What the conversation is about, what was decided or exchanged, why it matters. Cite only evidenced facts; mark uncertainty explicitly.>
 
 ## Relationship
-<How the owner knows this person, what the thread represents.>
+<How the owner knows this person; what the thread represents.>
 
 ## Highlights
-<3-5 notable moments, decisions, or signals worth surfacing in search.>
+<3–5 notable moments, decisions, or signals worth surfacing in search.>
 
 ---
 
@@ -277,229 +189,119 @@ transcript.>
 <full diarized transcript>
 ```
 
-#### Sidecar posture (bulk / archive history, >= 450 KB raw transcript)
+### Sidecar posture (>= 450 KB raw transcript)
 
-Summary stays in the page file (indexed, searchable). Raw transcript lives
-in a gzipped sidecar at `.raw/<slug>.json.gz` — outside the search index
-by construction. Use for archive ingestion where bulk transcripts would
-otherwise dominate the chunk index.
+Summary in-page (indexed). Raw transcript in `.raw/<id_key>.json.gz` — out of index by construction. Page is identical to inline posture above the `---` separator, minus the Transcript section; add one metadata line:
 
-> **Why sidecar?** When the 2026-07-02 conversation-transcript rollout
-> moved 859 conversation pages to summary-in-page + sidecar, the indexed
-> chunk count dropped from 12,979 → 987 (conversation chunks) — from 77%
-> of the whole index to a negligible share. Recall was preserved and
-> precision improved. (See memory: `conversation-transcript-sidecar-rollout`.)
-
-Page file is identical to the inline posture ABOVE the `---` separator,
-minus the transcript section. Frontmatter is the same (including the
-optional `timezone:` key for time-only formats):
-
-```markdown
----
-title: "Conversation with <Peer Name>"
-type: conversation
-id: <platform>-<peer-id>[-<period>]   # matches $id_key; include period suffix for sub-pages
-date: YYYY-MM-DD
-# timezone: America/Los_Angeles  # add for time-only patterns
-tags:
-  - <platform>
-  - conversation
-participants:
-  - <peer-display-name>  # plain metadata, no graph edges
----
-
-# Conversation with <Peer Name>
-
-**Platform:** <telegram | imessage | whatsapp | ...>
-**Participants:** <display names>
-**Date range:** YYYY-MM-DD to YYYY-MM-DD
-**Message count:** <N>
-**Raw transcript:** `.raw/<slug>.json.gz` (out of index by construction)
-
-## Summary
-<Derive from the transcript: what the conversation covers, what was
-exchanged, why it matters. Cite only evidenced facts; mark uncertainty.>
-
-## Relationship
-<How the owner knows this person, what the thread represents.>
-
-## Highlights
-<3-5 notable moments.>
+```
+**Raw transcript:** `.raw/<id_key>.json.gz` (out of index by construction)
 ```
 
-Sidecar write — use `gbrain files upload-raw` as the primary method
-(preferred by `_brain-filing-rules.md`; handles size routing and leaves
-a `.redirect.yaml` pointer in the brain repo):
+Write sidecar (preferred — routes and records the file):
 ```bash
-# Preferred: let gbrain route and record the file
-gbrain files upload-raw <raw-export-file> \
-  --page "$page_path" --type transcript
+gbrain files upload-raw <raw-export-file> --page "$page_path" --type transcript
 ```
 
-Direct write as fallback (use `$id_key`, NOT `$page_path`, to avoid
-writing to `.raw/conversations/telegram-.../...`):
+Direct fallback:
 ```bash
-# Resolve brain root first
 BRAIN_ROOT=$(gbrain sources get default --json | jq -r '.local_path')
-SIDECAR_PATH="${BRAIN_ROOT}/.raw/${id_key}.json.gz"
-gzip -c <raw-export-file> > "$SIDECAR_PATH"
+gzip -c <raw-export-file> > "${BRAIN_ROOT}/.raw/${id_key}.json.gz"
 ```
 
-#### Re-ingest posture (existing page, grown dialog)
+### Re-ingest posture (existing page, grown dialog)
 
-When a dialog grows between ingests (new messages since last run):
-1. Read the existing page: `gbrain get conversations/<slug>`.
-2. Determine the new message range (last ingested date → now).
-3. Update **in place**: rewrite the Summary/Highlights sections; append
-   new lines to the inline transcript OR re-gzip the sidecar. Do NOT
-   create a new page.
-4. Bump `date:` frontmatter to the latest message date.
-5. Use `gbrain put conversations/<slug>` to overwrite.
+1. `gbrain get conversations/<slug>` — read the existing page.
+2. Determine new message range (last ingested date → now).
+3. Update in place: rewrite Summary/Highlights; append to inline transcript or re-gzip sidecar.
+4. Bump `date:` to the latest message date.
+5. `gbrain put conversations/<slug> --source default` to overwrite.
 
-### Phase 4: Write and sync
+---
+
+## Phase 4: Write and sync
 
 ```bash
-# Write the page and capture the JSON response (auto_links is in the PUT response, not GET)
 gbrain put conversations/<slug> --source default --json > /tmp/conv-put-receipt.json
 cat /tmp/conv-put-receipt.json | jq '.auto_links'
-
-# Index immediately
 gbrain sync --no-pull --no-embed
 ```
 
-**Source routing (apply to ALL commands in this skill):** When running
-from `/Users/jarvis/gbrain` (the gbrain source repo), `--source default`
-is required on every `get`, `search`, `query`, and `put` call to target
-the brain's default source. Omitting it routes to the `gbrain-code`
-source (the code index), not the prose brain. Verify with
-`gbrain sources list` if uncertain. Note: `gbrain sync` does NOT accept
-a `--source` flag — it operates across all sources; the `--no-pull
---no-embed` flags are the correct form.
+**Source routing:** When running from the gbrain source repo, `--source default` is required on every `get`, `search`, `query`, and `put` call to target the brain's prose source. Omitting it routes to `gbrain-code`. `gbrain sync` does not accept `--source`.
 
-**auto_links check:** The `put_page` JSON response carries
-`auto_links: { created, removed, errors, unresolved }`. Expect
-`created=0` or only `mentions`-type edges from a conversation page at
-write time. To verify no typed graph edges were created, inspect via
-`gbrain backlinks conversations/<slug> --source default` — the result
-should be empty at ingest time (mentions edges are not traversable
-back-links). If unexpected back-links appear, a live edge token survived
-Phase 2 neutralization. Fix the page and re-write.
+**auto_links check:** Expect `created=0` or only `mentions`-type edges. Verify via `gbrain backlinks conversations/<slug> --source default` — result should be empty at ingest time. Unexpected back-links mean a live edge token survived Phase 2; fix and rewrite.
 
-### Phase 5: Retrieval smoke (MANDATORY)
+---
 
-Two-stage gate. Stage 1 (lexical) must pass immediately after Phase 4 sync.
-Stage 2 (semantic) requires embeddings and may need `gbrain embed --stale` first.
+## Phase 5: Retrieval smoke (MANDATORY)
 
-**Stage 1 — Lexical (must pass immediately after sync):**
+Two-stage gate.
+
+**Stage 1 — Lexical (pass immediately after Phase 4 sync):**
 ```bash
 gbrain search "<peer-display-name>" --source default
 ```
-The conversation page must appear in results. If not:
-- Check that `gbrain sync` in Phase 4 completed without error.
-- Verify `type: conversation` in the frontmatter (wrong type = mis-shelved).
+The conversation page must appear in results. If not: verify `gbrain sync` completed without error; check `type: conversation` in frontmatter.
 
-**Stage 2 — Semantic (pass after embeddings are generated):**
+**Stage 2 — Semantic (pass after embeddings):**
 ```bash
-# If the page is newly created, generate its embeddings first
 gbrain embed --stale
-# Then verify topic-level retrieval
 gbrain query "what have I discussed with <peer-name> about <topic>" --source default
 ```
-Both stages must show the conversation page in top results before the dialog
-is considered done. Record `PASS` or `FAIL` with a note in the ingest receipt.
 
-### Phase 6: Typed-edge enrichment hand-off (STANDARD — execute for every substantive dialog)
+Record `PASS` or `FAIL` with a note in the ingest receipt before proceeding.
 
-Raw conversation pages are **edge-free at write time**. Phase 6 is not optional:
-after the Phase 5 retrieval smoke passes, execute this sequence for every dialog.
-The PRIMARY counterparty of a curated dialog always gets a page (Tier 1, step
-6.0) — the upstream attendee rule applied to conversations. Log an explicit skip
-(step 6.0) for anything tiered out — silence is not an acceptable substitute.
+---
 
-**Pilot verdict (2026-07-03):** The eval-gated typed-edge pilot concluded with a net
-improvement verdict (see `reports/2026-07-03-conversation-pilot-verdict`). Phase 6 is
-now a standard ingest phase, not a config-gated experiment.
+## Phase 6: Typed-edge enrichment (STANDARD — execute for every substantive dialog)
 
-#### Step 6.0 — Classify: primary counterparty vs discussed entities vs skip
+Raw pages are edge-free at write time. Phase 6 is not optional. Execute the following steps for every dialog after Phase 5 passes.
 
-This mirrors upstream meeting-ingestion's tiers (its Phase 3 makes attendee page
-creation "mandatory, not optional"; its Phase 4 creates materially-discussed
-entities as-needed). The conversation analog:
+### Step 6.0 — THREE-TIER classification
 
-**Tier 1 — PRIMARY COUNTERPARTY (page creation MANDATORY):** the person (or
-persons, for a group) the dialog is *with*. A curated dialog's counterparty is
-the attendee-analog — if no `people/` (or `companies/`) page exists, CREATE the
-stub (step 6b). The operator's curation of the export IS the substance gate;
-do not second-guess it for the primary counterparty. Only exception: bots,
-automated systems, and service accounts with no real-world identity.
+**Tier 1 — PRIMARY COUNTERPARTY (page creation MANDATORY).** The person or persons the dialog is *with*. The operator's choice to export/curate this dialog is the substance gate — do not second-guess it for the primary counterparty. Only exceptions: bots, automated systems, service accounts with no real-world identity.
 
-**Tier 2 — MATERIALLY DISCUSSED entities (create as-needed):** people/companies
-the dialog substantively discusses (deals, roles, relationships — not passing
-name-drops). Create a stub when the dialog carries real substance about them;
-otherwise log the skip.
+**Tier 2 — MATERIALLY DISCUSSED entities (create as-needed).** People or companies the dialog substantively discusses (deals, roles, relationships) — not passing name-drops.
 
-**Tier 3 — SKIP (log the reason):** bots/service accounts; passing third-party
-name-drops with no substance; exchanges that are purely transactional noise
-(< 5 messages, no content) — and for such noise dialogs, Tier 1 does not apply
-either.
+**Tier 3 — SKIP (log the reason).** Bots/service accounts; passing name-drops with no substance; purely transactional noise (< 5 substantive messages — greetings, delivery confirmations, and one-liners that convey no relational or informational content do not count) — Tier 1 does not apply to noise dialogs either.
 
-Log skips in the ingest receipt (see Output Format) with a one-line reason.
-A missing Phase 6 receipt entry (neither executed nor logged skip) is an
-incomplete ingest.
+Log every skip in the ingest receipt with a one-line reason. A missing Phase 6 receipt entry (neither executed nor logged skip) is an incomplete ingest.
 
-**Group conversations:** List every human participant. Apply steps 6a–6f to
-each participant that clears the substantive threshold individually. Do NOT
-create `associate_of` edges between all co-participants by default — only write
-an edge when the dialog provides specific evidence of a direct relationship.
-Avoid N² blanket-edge inflation.
+**Group conversations:** Apply steps 6a–6f individually to each participant that clears the substantive threshold. Do NOT create `associate_of` edges between all co-participants by default — write an edge only when the dialog provides specific evidence of a direct relationship.
 
-If the dialog is substantive for at least one participant, proceed to step 6a.
+### Step 6a — Resolve the counterparty (brain-first, fail-closed, RECEIPTED)
 
-#### Step 6a — Resolve the counterparty (brain-first)
-
-Search by name AND known aliases before creating anything new. This step is
-FAIL-CLOSED and RECEIPTED — a stub created without a recorded resolution
-attempt is a defect (the 2026-07-03 stub-wave produced duplicate `linn`/
-`crypto-linn` and `wenmoon`/`0xwenmoon` pages by skipping exactly this):
+Before creating anything, search by name AND all known aliases:
 
 ```bash
 gbrain search "<counterparty name>" --source default
-gbrain search "<handle / @handle / 0x-prefixed / display-name variants>" --source default
+gbrain search "<handle / @handle / 0x-prefix / display-name variants>" --source default
 gbrain query "who is <counterparty name>" --source default
 ```
 
-Try the obvious variant forms: with/without `0x`, `crypto-`/platform prefixes,
-handle vs display name, first-name-only. **Record in the ingest receipt: the
-searches run, the top 3 hits of each, and — if creating — an explicit one-line
-justification of why NONE of them is this person.** If ANY hit is a plausible
-match (shared handle fragment, same deals/companies, same platform id), treat
-it as the match: add the new name to that page's `aliases:` and proceed with
-the EXISTING slug — never create a parallel page on uncertainty.
+Try obvious variants: with/without `0x`, `crypto-`/platform prefixes, handle vs display name, first-name-only. **Record in the ingest receipt: searches run, top-3 hits of each, and — if creating — an explicit one-line justification that none of them is this person.**
 
-**Identity gaps are data gaps.** If the counterparty genuinely cannot be
-resolved to an existing brain page, proceed to 6b to create a stub. If the operator later
-reveals an alternate identity (e.g. "Alice is actually listed as A. Smith"),
-merge the pages and add the alias to `aliases:` frontmatter — do not leave a
-parallel stub. An unresolved identity at ingest time is NOT a blocking error:
-log it in the ingest receipt, create a thin stub with the known display name,
-and mark `aliases: []` as open for later enrichment.
+If ANY hit is a plausible match (shared handle fragment, same company/deal, same platform id) → treat it as the match: add the new name to `aliases:` and use the EXISTING slug. Never create a parallel page on uncertainty.
 
-#### Step 6b — Create entity stubs for substantive counterparties
+If genuinely unresolvable → create a stub (step 6b), log the open identity in the receipt.
 
-A counterparty warrants a stub if the dialog reveals real substance about them
-(their role, company, projects, context). Skip stub creation for trivial or
-one-off contacts and log the skip (step 6.0).
+**Resolution receipt block (write for every entity, whether matched or created):**
+```
+resolution:
+  entity: "<display name>"
+  searches_run:
+    - query: "<counterparty name>"   top_hits: ["<slug1>", "<slug2>", "<slug3>"]
+    - query: "<handle variant>"      top_hits: []
+  outcome: matched_existing | created_stub | deferred
+  matched_slug: <slug or null>
+  create_justification: "<one-line: why no existing hit is this person>"
+```
 
-**Path and type MUST come from the active schema pack — never hardcode.**
-Before creating a stub, consult `skills/brain-taxonomist/SKILL.md` with:
-> "I need to file a new [person | company | …] page for <name> — what
-> path and type does the active pack assign?"
+### Step 6b — Create entity stubs (taxonomist-routed, THIN)
 
-Do NOT assume `people/<slug>` or `type: person` — use whatever path and
-type the taxonomist returns. If the pack has no suitable type for this
-entity, log that and defer to a future enrichment pass.
+**Path and type from the active schema pack — never hardcode.** Consult `skills/brain-taxonomist/SKILL.md`:
+> "I need to file a new [person | company | …] page for <name> — what path and type does the active pack assign?"
 
-Follow `skills/enrich/SKILL.md` stub conventions for the page body:
+Page shape (follow `skills/enrich/SKILL.md` stub conventions):
 
 ```markdown
 ---
@@ -507,14 +309,13 @@ title: "<Full Name>"
 type: <pack-assigned-type>
 aliases:
   - "<alternate name or handle, if known>"
-date: YYYY-MM-DD          # stub creation date
+date: YYYY-MM-DD
 status: stub
 ---
 
 # <Full Name>
 
-**Exec summary:** <ONE sentence: role/relationship, from the dialog>. *[Stub
-from conversation ingest; enrichment pending.]*
+**Exec summary:** <ONE sentence: role/relationship, sourced from the dialog>. *[Stub from conversation ingest; enrichment pending.]*
 
 **State**
 - Role: <one line, or [No data yet]>
@@ -527,89 +328,49 @@ from conversation ingest; enrichment pending.]*
 - **YYYY-MM-DD** | <one grounded event line> → [[conversations/<slug>]]
 ```
 
-**A STUB IS A STUB.** No `## Compiled Truth` section, no synthesis, no
-narrative — and NEVER copy conversation content onto the entity page. The
-stub carries identity + relationship + one timeline row + the pointer back
-to its source; everything richer is the enrich skill's job, later. (This is
-the contract-ingestion convention verbatim — "thin entity stubs… delegates
-entity enrichment to the enrich skill"; `people/diego` is the exemplar shape.)
+A stub carries: identity + relationship + one timeline row + pointer to source. No `## Compiled Truth`, no synthesis, no narrative, no conversation content copied over. Richer content is the enrich skill's job later.
 
-Write with `gbrain put <pack-assigned-path> --source default` and sync immediately.
+Write: `gbrain put <pack-assigned-path> --source default` then `gbrain sync --no-pull --no-embed`.
 
-#### Step 6c — Write typed edges via structure only
+### Step 6c — Write typed edges (structure only, pack-validated)
 
-Typed edges come ONLY from pack `frontmatter_links` fields or explicit
-`gbrain link` commands. Never infer edges from prose mentions.
+Typed edges come ONLY from pack `frontmatter_links` fields or explicit `gbrain link` commands — never inferred from prose.
 
-**Before writing ANY edge, verify the edge type is declared in the active
-pack:**
+Before writing any edge, verify the type is declared in the active pack:
 ```bash
 gbrain pack show --json | jq '.frontmatter_links[] | select(.type == "<edge-type>")'
 ```
-If the edge type is not declared, do NOT write it. Log the gap and propose
-the edge type as a pack evolution candidate. This is fail-closed: an
-undeclared edge type may be silently dropped or misclassified.
+If the command fails or returns no output: halt Phase 6c entirely and log `phase_6c: blocked — pack unavailable or edge type not declared`. Do not fall back to guessing edge types; proceed to step 6d (provenance edge) only if `relevant_to` is a confirmed pack type.
 
-Every edge must also be grounded in evidence from the dialog. If you cannot
-point to a specific message or passage that establishes the relationship, do
-not write the edge.
-
-Common edge patterns (check against active pack before use):
+Every edge must be grounded in a specific message or passage. Common patterns (verify against active pack before use):
 
 ```bash
-# works_at: counterparty is employed at a company mentioned in the dialog
 gbrain link <entity-path> works_at <company-path> \
-  --source default \
-  --note "stated in conversations/<dialog-slug> on YYYY-MM-DD"
+  --source default --note "stated in conversations/<slug> on YYYY-MM-DD"
 
-# associate_of: ongoing DIRECT relationship (not merely co-participants)
 gbrain link <entity-path> associate_of <other-entity-path> \
-  --source default \
-  --note "direct relationship evidenced in conversations/<dialog-slug>"
-
-# relevant_to: entity was a major subject of this conversation (see 6d)
+  --source default --note "direct relationship evidenced in conversations/<slug>"
 ```
 
-Alternatively, write edges via the entity page's frontmatter (preferred when
-the pack defines `frontmatter_links` rules for the field):
+Alternatively, write via frontmatter fields when the pack defines `frontmatter_links` rules for them; sync after: `gbrain sync --no-pull --no-embed`.
 
-```yaml
-works_at: "[[<company-path>]]"
-associate_of:
-  - "[[<other-entity-path>]]"
-```
+### Step 6d — Add `relevant_to` provenance edge
 
-After editing frontmatter, sync: `gbrain sync --no-pull --no-embed`.
+For each entity meaningfully sourced from this dialog, write a directional `relevant_to` edge (entity → conversation).
 
-#### Step 6d — Add `relevant_to` provenance edge
-
-For every entity whose page was meaningfully sourced from this dialog,
-write a `relevant_to` edge pointing entity → conversation. The edge is
-**directional** (entity is the source, conversation is the target); traversal
-from conversation → entity requires following back-links, not the edge
-directly.
-
-**Idempotency:** Before writing, check whether the edge already exists to
-avoid duplicates on re-ingest:
+Check idempotency first:
 ```bash
 gbrain backlinks "$page_path" --source default | grep "<entity-slug>"
 ```
-If the edge exists, skip. If not, write it:
+If it exists, skip. If not:
 ```bash
 gbrain link <entity-path> relevant_to "$page_path" \
-  --source default \
-  --note "dialog is a primary source for this entity's compiled-truth"
+  --source default --note "dialog is a primary source for this entity"
 ```
 
-Write this edge for any entity where the conversation provides non-trivial
-biographical, relational, or contextual facts. Skip for entities where the
-conversation is only a passing mention.
+### Step 6e — Add one timeline row per entity per meaningful event
 
-#### Step 6e — Add one timeline row per entity per meaningful event
-
-On each entity's page, under a `## Timeline` section, add exactly ONE row
-per meaningful dateable event surfaced by this dialog. Use bold+pipe format
-(the only format `extract timeline` parses):
+Bold+pipe format is the only format `extract timeline` parses:
 
 ```markdown
 ## Timeline
@@ -617,97 +378,58 @@ per meaningful dateable event surfaced by this dialog. Use bold+pipe format
 ```
 
 **Merge protocol (mandatory — do not clobber existing rows):**
-1. Re-fetch the entity page fresh: `gbrain get <entity-path> --source default`
-2. Locate or create the `## Timeline` section.
-3. For each candidate row, check whether a row for the same date AND
-   same conversation slug already exists. If yes, skip (idempotent on
-   re-ingest). If no, insert in chronological order.
-4. Preserve all existing rows exactly — do not reorder, summarize, or
-   remove existing timeline entries.
-5. Overwrite with `gbrain put <entity-path> --source default`.
-6. Re-sync: `gbrain sync --no-pull --no-embed`.
+1. Re-fetch fresh: `gbrain get <entity-path> --source default`
+2. For each candidate row, check for an existing row with the same date AND conversation slug. If yes, skip. If no, insert chronologically.
+3. Preserve all existing rows exactly — do not reorder, summarize, or remove entries.
+4. Overwrite: `gbrain put <entity-path> --source default` → `gbrain sync --no-pull --no-embed`.
 
 Additional rules:
-- **Bold+pipe ONLY.** `- **YYYY-MM-DD** | ...` is the required format.
-  Any other format is silently skipped by `extract timeline`.
-- **One row per distinct event.** Do not write a row for every mention —
-  only for events that would be historically meaningful (first contact,
-  a funding announcement, a role change, a decision made together).
-- **OWNER EXCEPTION:** Never add per-dialog timeline rows to the brain
-  owner's page. The owner's timeline would otherwise accumulate hundreds
-  of rows from ordinary messaging history, burying genuinely significant
-  events. Owner rows are filed manually for major milestones only.
+- One row per distinct meaningful event (first contact, funding announcement, role change, joint decision) — not one row per mention.
+- **OWNER EXCEPTION:** Never add per-dialog timeline rows to the brain owner's page. Owner timeline rows are for major milestones only, filed manually.
 
-#### Step 6f — Re-compile entity compiled-truth (never stack)
+### Step 6f — Re-compile entity compiled-truth (never stack)
 
-The compiled-truth section heading is **`## Compiled Truth`** (match exactly;
-the enrich skill uses this heading as its rewrite target). Before rewriting,
-re-fetch the entity page fresh:
+Applies only to pre-existing entity pages that already have a `## Compiled Truth` section. Stubs from step 6b are exempt (they get compiled truth from the enrich skill, not here).
 
-```bash
-gbrain get <entity-path> --source default
-```
+1. Re-fetch fresh: `gbrain get <entity-path> --source default`
+2. Rewrite the `## Compiled Truth` section as a single coherent synthesis incorporating prior compiled-truth + new facts from this dialog.
+3. Overwrite: `gbrain put <entity-path> --source default`
 
-Then rewrite ONLY the `## Compiled Truth` section as a single coherent synthesis
-incorporating everything now known (prior compiled-truth + new facts from this
-dialog). Do NOT append a new synthesis paragraph below the existing one —
-stacking produces contradictions and makes later passes progressively harder.
-Re-compile the whole section as a single paragraph, then overwrite with:
+Do NOT append a new paragraph below the existing section — stacking creates contradictions and makes future passes harder.
 
-```bash
-gbrain put <entity-path> --source default
-```
+### Facts arm (PARKED — do not run)
 
-**Fresh stubs created in step 6b are EXEMPT from this step** — stubs carry no
-`## Compiled Truth` at all (a stub is a stub). This step applies ONLY to
-pre-existing entity pages that already have a compiled-truth section. Stubs
-get their compiled truth later, from the enrich skill, never at ingest time.
+`extract-conversation-facts` and `conversation_facts_backfill` are parked pending upstream fixes: facts are written with `visibility='private'` (invisible to hybrid retrieval by construction), and the extractor resolves entity slugs by heuristic rather than brain-first lookup. Running either command wastes budget without improving search. The typed-edge workflow in steps 6a–6f is the operative enrichment path.
 
-#### Arm A — Facts extraction (PARKED — do not run)
-
-`extract-conversation-facts` / `conversation_facts_backfill` are PARKED pending
-upstream fixes. Structural finding from the 2026-07-03 pilot:
-
-- Facts are written with `visibility='private'`, which strips them from
-  search chunks — they are **invisible to hybrid retrieval** by construction.
-- The extractor resolves entity slugs by heuristic, not brain-first lookup —
-  extracted facts accumulate against unresolved or wrong entity slugs.
-- These are upstream-class issues. Running `extract-conversation-facts` or
-  enabling `cycle.conversation_facts_backfill` in config will consume budget
-  and produce facts that do not surface in search.
-
-**Do not run `extract-conversation-facts` or `conversation_facts_backfill`
-until upstream fixes land.** Track at the brain's canonical state page.
-The typed-edge workflow in steps 6a–6f is the operative enrichment path.
+---
 
 ## Output Format
 
-After each dialog ingested, report:
+After each dialog ingested:
 
 ```
 INGESTED: conversations/<slug>
 ================================
 Posture:       <inline | sidecar | re-ingest update>
-Platform:      <telegram | imessage | whatsapp | ...>
+Platform:      <platform>
 Date range:    YYYY-MM-DD → YYYY-MM-DD
 Messages:      <N>
-Sidecar:       <path to .raw/*.json.gz | n/a>
+Sidecar:       <path | n/a>
 Edge tokens neutralized: <N>
 auto_links:    created=<N>, removed=<N>, errors=<N>, unresolved=<N>
-               (expect errors=0, unresolved=0; created should be only mention-type if any)
-back-links:    <N> (expect 0 at ingest time — typed edges come from enrichment only)
-Retrieval smoke: <PASS | FAIL — see note>
+back-links:    <N> (expect 0 at ingest time)
+Retrieval smoke: <PASS | FAIL — note>
 
 Phase 6 enrichment:
-  Entities resolved:  <N> (existing brain pages matched)
+  Entities resolved:    <N> (existing pages matched)
   Entity stubs created: <N> (list slugs)
-  Typed edges created: <N> (list: <source> --<type>--> <target>)
-  relevant_to edges:  <N>
-  Timeline rows added: <N> (list: <entity-slug> +N rows)
-  Phase 6 skipped:   <yes — reason | no>
+  Typed edges created:  <N> (list: <source> --<type>--> <target>)
+  relevant_to edges:    <N>
+  Timeline rows added:  <N> (list: <entity-slug> +N rows)
+  Phase 6 skipped:      <yes — reason | no>
 ```
 
-For bulk archive runs, report a batch summary after all dialogs:
+For bulk archive runs, append a batch summary after all dialogs:
 
 ```
 BATCH COMPLETE
@@ -716,83 +438,46 @@ Dialogs ingested:  <N>
 Pages created:     <N>
 Pages updated:     <N>
 Pages skipped (already ingested): <N>
-Index chunk delta: <before> → <after> (net <+/- N>)
 Retrieval smokes:  <N> PASS / <N> FAIL
-Phase 6 enrichment:
+Phase 6:
   Total entities resolved:   <N>
   Total stubs created:       <N>
   Total typed edges created: <N>
   Total timeline rows added: <N>
-  Dialogs skipped (Phase 6): <N> (trivial/one-off contacts)
+  Dialogs skipped (Phase 6): <N>
 ```
+
+---
 
 ## Anti-Patterns
 
-- **Title-based slugs.** `conversations/alice-johnson` breaks when Alice
-  renames herself or changes her display name. Use the stable platform ID
-  (`telegram-<peer_id>`, `imessage-<phone>`). A renamed dialog + title slug
-  = new slug + same `id:` = `findDuplicatePage` SILENTLY SKIPS the write —
-  the page is never updated, never surfaced as a conflict.
+- ❌ **Title-based slugs.** `conversations/alice-johnson` breaks on rename — use stable platform IDs (`telegram-<peer_id>`, `imessage-<phone>`).
+- ❌ **Indexing bulk transcripts inline.** Conversation transcripts are dense and repetitive; archived at scale they dominate the chunk index. Use sidecar for archives.
+- ❌ **Skipping Phase 2 on "clean" exports.** Bot messages and shared links can contain literal `[[slug]]` tokens. Always grep before importing.
+- ❌ **Creating an entity page without a recorded resolution attempt.** Name variants (`0x-`, platform prefixes, handles) routinely hide existing pages. The receipted resolution (searches + top-3 hits + justification) is mandatory before any create.
+- ❌ **Creating a parallel page on uncertainty.** A plausible match → add alias to existing page. Uncertainty is never a reason to create a second page.
+- ❌ **Stubs with compiled truth, narrative, or copied conversation content.** A stub carries identity + relationship + one timeline row + source pointer. Everything richer is the enrich skill's job.
+- ❌ **Writing typed edges from prose mentions.** All typed edges — including `relevant_to` — come from explicit structure (frontmatter fields or `gbrain link`), never from inference.
+- ❌ **Stacking compiled-truth sections.** Re-compile as a single coherent section; do not append a new paragraph below the old one.
+- ❌ **Running facts extraction (Arm A) despite the PARKED status.** Output is invisible to hybrid retrieval. See Phase 6 facts arm.
+- ❌ **Skipping Phase 6 without logging.** Silence after Phase 5 is not an accepted state. Every dialog requires either Phase 6 execution or an explicit logged skip with a reason.
+- ❌ **Using `gbrain timeline-add` for person-conversation back-links.** That command writes a DB-only row, not a traversable graph edge, and does not appear in the page file. Write a `## Timeline` wikilink entry in the person's page file instead.
+- ❌ **Clobbering a richer existing page on re-ingest.** Always re-fetch before overwriting; a page enriched by a prior pass is richer than a raw re-import.
 
-- **Importing transcripts wholesale into the search index.** Conversation
-  transcripts are dense, repetitive, and high-volume. Indexing them
-  verbatim dominates the chunk index (observed: 77% of all chunks from
-  conversations before sidecar rollout). Use the sidecar posture for
-  archives. Keep the inline posture for small, search-relevant threads only.
-
-- **Trusting prose link inference for typed edges.** `mentions-only` mode
-  means prose body wikilinks → `mentions` edges by design, but the fail-
-  closed rule in Phase 2 exists because raw export text can contain literal
-  `[[slug]]` tokens (Obsidian links, bot output, structured references) that
-  FS-path extraction interprets as real typed edges. The mistyping class in
-  `telegram-rebuild-and-extract-linktype-bug.md` is exactly this.
-
-- **Bulk `put_page` clobbering richer existing pages.** Before overwriting,
-  always read the existing page. A conversation page enriched by a prior
-  pass (with synthesized insights, extracted entities, or typed edges) is
-  richer than the raw re-import. Merge, don't replace.
-
-- **Running facts extraction (Arm A) despite the PARKED status.** Arm A
-  (`extract-conversation-facts`, `conversation_facts_backfill`) produces facts
-  with `visibility='private'` that are invisible to hybrid retrieval. Running
-  it wastes budget without improving search. See Phase 6 Arm A for the
-  upstream issues that must be resolved before enabling it.
-
-- **Using `gbrain timeline-add` for person-conversation back-links.** That
-  command writes a DB-only row — it does NOT create the traversable graph
-  edge and does NOT appear in the page file. Write a `## Timeline` wikilink
-  entry in the person's page file instead (same rule as meeting-ingestion).
-
-- **Skipping Phase 2 on "clean" exports.** Bot messages, automated
-  notifications, and shared links in chat can contain `[[slug]]` tokens.
-  Always grep before importing.
-
-- **Skipping Phase 6 without logging.** Silence after Phase 5 is not an
-  accepted state. Every dialog requires either Phase 6 execution or an
-  explicit logged skip with a reason. A dialog that has never compounded
-  via typed edges is not compounding with the brain — it is a dead-end page.
-
-- **Stacking compiled-truth sections.** When re-compiling an entity page
-  after Phase 6, always rewrite the compiled-truth as a single section.
-  Appending a new synthesis below the old one creates contradictions and
-  makes the page harder to read and harder to re-enrich. Re-compile, then
-  overwrite.
-
-- **Creating typed edges from prose mentions.** The `relevant_to` edge
-  in step 6d is written via `gbrain link`, not inferred from wikilinks.
-  Even in Phase 6, all typed edges come from explicit structure — never from
-  the prose body of the conversation page.
+---
 
 ## Tools Used
 
-- `gbrain get <slug>` — check if page exists (idempotency) or re-fetch entity before rewrite
-- `gbrain search "<query>"` — find existing conversation or entity pages
-- `gbrain query "<question>"` — brain-first counterparty resolution (Phase 6a)
-- `gbrain put <slug> --source default` — write conversation page or entity stub/update
-- `gbrain link <source> <type> <target> --source default` — write typed edge (Phase 6c, 6d)
+- `gbrain get <slug> --source default` — idempotency check; re-fetch entity before rewrite
+- `gbrain search "<query>" --source default` — find existing pages (resolution step 6a)
+- `gbrain query "<question>" --source default` — brain-first counterparty resolution
+- `gbrain put <slug> --source default --json` — write conversation page or entity stub/update
+- `gbrain link <source> <type> <target> --source default` — write typed edge (phases 6c, 6d)
+- `gbrain backlinks <slug> --source default` — verify no unexpected typed edges at ingest time
 - `gbrain sync --no-pull --no-embed` — index new/changed files immediately
 - `gbrain embed --stale` — generate embeddings for new pages (batch)
+- `gbrain files upload-raw` — write sidecar (preferred method)
 - `gbrain sources list` — verify source routing
-- `gbrain backlinks <slug> --source default` — verify no unexpected typed edges at ingest time
-- `skills/enrich/SKILL.md` — stub conventions and compiled-truth rewrite protocol (Phase 6b, 6f)
-- `extract-conversation-facts` / `conversation_facts_backfill` — PARKED, do not run (Phase 6 Arm A)
+- `gbrain pack show --json` — validate edge types against active pack before writing
+- `skills/brain-taxonomist/SKILL.md` — path + type for new entity stubs
+- `skills/enrich/SKILL.md` — stub conventions and compiled-truth rewrite protocol
