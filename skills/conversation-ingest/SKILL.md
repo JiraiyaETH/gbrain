@@ -1,6 +1,6 @@
 ---
 name: conversation-ingest
-version: 1.1.0
+version: 1.1.1
 description: |
   Ingest chat and dialog history (Telegram, iMessage, WhatsApp, Discord, Signal,
   Teams, IRC, Matrix) into the brain as `conversation`-type pages that compound
@@ -411,24 +411,37 @@ is considered done. Record `PASS` or `FAIL` with a note in the ingest receipt.
 ### Phase 6: Typed-edge enrichment hand-off (STANDARD — execute for every substantive dialog)
 
 Raw conversation pages are **edge-free at write time**. Phase 6 is not optional:
-after the Phase 5 retrieval smoke passes, execute this sequence for every dialog
-with a substantive counterparty. Log an explicit skip (step 6.0) for trivial or
-one-off contacts — silence is not an acceptable substitute.
+after the Phase 5 retrieval smoke passes, execute this sequence for every dialog.
+The PRIMARY counterparty of a curated dialog always gets a page (Tier 1, step
+6.0) — the upstream attendee rule applied to conversations. Log an explicit skip
+(step 6.0) for anything tiered out — silence is not an acceptable substitute.
 
 **Pilot verdict (2026-07-03):** The eval-gated typed-edge pilot concluded with a net
 improvement verdict (see `reports/2026-07-03-conversation-pilot-verdict`). Phase 6 is
 now a standard ingest phase, not a config-gated experiment.
 
-#### Step 6.0 — Classify: substantive or skip?
+#### Step 6.0 — Classify: primary counterparty vs discussed entities vs skip
 
-Before doing any work, classify the dialog:
+This mirrors upstream meeting-ingestion's tiers (its Phase 3 makes attendee page
+creation "mandatory, not optional"; its Phase 4 creates materially-discussed
+entities as-needed). The conversation analog:
 
-**Skip (log the reason) if ALL of the following hold:**
-- The counterparty is a bot, automated system, or service account with no
-  real-world identity, OR the exchange is purely transactional (< 5 messages,
-  no substantive content).
-- AND all human counterparties are already fully enriched entities AND no new
-  facts or edges emerge from this dialog.
+**Tier 1 — PRIMARY COUNTERPARTY (page creation MANDATORY):** the person (or
+persons, for a group) the dialog is *with*. A curated dialog's counterparty is
+the attendee-analog — if no `people/` (or `companies/`) page exists, CREATE the
+stub (step 6b). The operator's curation of the export IS the substance gate;
+do not second-guess it for the primary counterparty. Only exception: bots,
+automated systems, and service accounts with no real-world identity.
+
+**Tier 2 — MATERIALLY DISCUSSED entities (create as-needed):** people/companies
+the dialog substantively discusses (deals, roles, relationships — not passing
+name-drops). Create a stub when the dialog carries real substance about them;
+otherwise log the skip.
+
+**Tier 3 — SKIP (log the reason):** bots/service accounts; passing third-party
+name-drops with no substance; exchanges that are purely transactional noise
+(< 5 messages, no content) — and for such noise dialogs, Tier 1 does not apply
+either.
 
 Log skips in the ingest receipt (see Output Format) with a one-line reason.
 A missing Phase 6 receipt entry (neither executed nor logged skip) is an
