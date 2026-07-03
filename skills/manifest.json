@@ -87,7 +87,7 @@
     {
       "name": "conversation-ingest",
       "path": "conversation-ingest/SKILL.md",
-      "description": "Ingest chat and dialog history (Telegram, iMessage, WhatsApp, Discord, Signal, Teams, IRC, Matrix) as conversation-type pages with peer-slug discipline, sidecar posture for archives, and gated enrichment hand-off."
+      "description": "Ingest chat and dialog history (Telegram, iMessage, WhatsApp, Discord, Signal, Teams, IRC, Matrix) as conversation-type pages with peer-slug discipline, sidecar posture for archives, and standard typed-edge enrichment hand-off (Phase 6) for every substantive dialog."
     },
     {
       "name": "citation-fixer",
