@@ -1,6 +1,6 @@
 ---
 name: conversation-ingest
-version: 1.1.1
+version: 1.1.2
 description: |
   Ingest chat and dialog history (Telegram, iMessage, WhatsApp, Discord, Signal,
   Teams, IRC, Matrix) into the brain as `conversation`-type pages that compound
@@ -457,16 +457,27 @@ If the dialog is substantive for at least one participant, proceed to step 6a.
 
 #### Step 6a — Resolve the counterparty (brain-first)
 
-Search by name AND known aliases before creating anything new:
+Search by name AND known aliases before creating anything new. This step is
+FAIL-CLOSED and RECEIPTED — a stub created without a recorded resolution
+attempt is a defect (the 2026-07-03 stub-wave produced duplicate `linn`/
+`crypto-linn` and `wenmoon`/`0xwenmoon` pages by skipping exactly this):
 
 ```bash
 gbrain search "<counterparty name>" --source default
-gbrain search "<alias or alternate name>" --source default
+gbrain search "<handle / @handle / 0x-prefixed / display-name variants>" --source default
 gbrain query "who is <counterparty name>" --source default
 ```
 
-**Identity gaps are data gaps.** If the counterparty cannot be resolved to an
-existing brain page, proceed to 6b to create a stub. If the operator later
+Try the obvious variant forms: with/without `0x`, `crypto-`/platform prefixes,
+handle vs display name, first-name-only. **Record in the ingest receipt: the
+searches run, the top 3 hits of each, and — if creating — an explicit one-line
+justification of why NONE of them is this person.** If ANY hit is a plausible
+match (shared handle fragment, same deals/companies, same platform id), treat
+it as the match: add the new name to that page's `aliases:` and proceed with
+the EXISTING slug — never create a parallel page on uncertainty.
+
+**Identity gaps are data gaps.** If the counterparty genuinely cannot be
+resolved to an existing brain page, proceed to 6b to create a stub. If the operator later
 reveals an alternate identity (e.g. "Alice is actually listed as A. Smith"),
 merge the pages and add the alias to `aliases:` frontmatter — do not leave a
 parallel stub. An unresolved identity at ingest time is NOT a blocking error:
@@ -502,16 +513,26 @@ status: stub
 
 # <Full Name>
 
-**Source:** Inferred from [[conversations/<slug>]] — stub pending enrichment.
+**Exec summary:** <ONE sentence: role/relationship, from the dialog>. *[Stub
+from conversation ingest; enrichment pending.]*
 
-<2-3 sentence summary of what is known from the dialog: role, affiliation,
-context. No speculation beyond what the conversation establishes.>
+**State**
+- Role: <one line, or [No data yet]>
+- Relationship: <one line, or [No data yet]>
 
-## Compiled Truth
+**Contact**
+- Handle: <if known, else [No data yet]>
 
-<Same 2-3 sentences as above, formatted as a compiled-truth paragraph.
-This section is the rewrite target for future enrichment passes — see step 6f.>
+## Timeline
+- **YYYY-MM-DD** | <one grounded event line> → [[conversations/<slug>]]
 ```
+
+**A STUB IS A STUB.** No `## Compiled Truth` section, no synthesis, no
+narrative — and NEVER copy conversation content onto the entity page. The
+stub carries identity + relationship + one timeline row + the pointer back
+to its source; everything richer is the enrich skill's job, later. (This is
+the contract-ingestion convention verbatim — "thin entity stubs… delegates
+entity enrichment to the enrich skill"; `people/diego` is the exemplar shape.)
 
 Write with `gbrain put <pack-assigned-path> --source default` and sync immediately.
 
@@ -637,9 +658,10 @@ Re-compile the whole section as a single paragraph, then overwrite with:
 gbrain put <entity-path> --source default
 ```
 
-For new stubs created in step 6b (which already have a minimal `## Compiled Truth`),
-this step is satisfied by the stub write itself — no separate re-fetch needed
-unless other steps in this Phase 6 pass added new facts after stub creation.
+**Fresh stubs created in step 6b are EXEMPT from this step** — stubs carry no
+`## Compiled Truth` at all (a stub is a stub). This step applies ONLY to
+pre-existing entity pages that already have a compiled-truth section. Stubs
+get their compiled truth later, from the enrich skill, never at ingest time.
 
 #### Arm A — Facts extraction (PARKED — do not run)
 
