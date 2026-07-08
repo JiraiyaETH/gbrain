@@ -130,6 +130,21 @@ export function shouldSpawnAutopilotWorker(args: string[]): boolean {
   return !args.includes('--no-worker');
 }
 
+export function shouldDispatchFullCycle(opts: {
+  score: number;
+  planLength: number;
+  estTotalSeconds: number;
+  minutesSinceLastFull: number;
+  fullCycleFloorMin: number;
+  hasStaleCycleSources: boolean;
+}): boolean {
+  return opts.hasStaleCycleSources ||
+    (opts.score >= 95 && opts.planLength === 0 && opts.minutesSinceLastFull >= opts.fullCycleFloorMin) ||
+    opts.planLength > 3 ||
+    opts.estTotalSeconds >= 300 ||
+    opts.score < 70;
+}
+
 // ── Self-upgrade silent channel (v0.42; opt-in, supervisor-relaunch) ─────────
 
 /**
@@ -640,6 +655,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
           dispatchPerSource,
           dispatchGlobalMaintenance,
           healthOptsForAutopilotUniverse,
+          isSourceStale,
           loadAutopilotSourceUniverse,
           resolveEffectiveFanoutMax,
         } = await import('./autopilot-fanout.ts');
@@ -871,12 +887,18 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
         // Track time since last full cycle for the 60-min floor.
         const FULL_CYCLE_FLOOR_MIN = 60;
         const minutesSinceLastFull = (Date.now() - lastFullCycleAt) / 60000;
+        const hasStaleCycleSources =
+          !sourceUniverse.legacyFallback &&
+          sourceUniverse.eligibleSources.some((src) => isSourceStale(src, Date.now(), FULL_CYCLE_FLOOR_MIN));
 
-        const shouldFullCycle =
-          (score >= 95 && plan.length === 0 && minutesSinceLastFull >= FULL_CYCLE_FLOOR_MIN) ||
-          plan.length > 3 ||
-          estTotal >= 300 ||
-          score < 70;
+        const shouldFullCycle = shouldDispatchFullCycle({
+          score,
+          planLength: plan.length,
+          estTotalSeconds: estTotal,
+          minutesSinceLastFull,
+          fullCycleFloorMin: FULL_CYCLE_FLOOR_MIN,
+          hasStaleCycleSources,
+        });
 
         const shouldSleep = score >= 95 && plan.length === 0 && minutesSinceLastFull < FULL_CYCLE_FLOOR_MIN;
 
