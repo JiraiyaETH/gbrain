@@ -75,6 +75,32 @@ describe('BudgetTracker.reserve', () => {
     expect(audit[0].schema_version).toBe(1);
   });
 
+  test('canonical non-Anthropic chat pricing: deepseek reserve succeeds under cap and records cost', () => {
+    const t = new BudgetTracker({ maxCostUsd: 0.01, label: 'test', auditPath });
+    expect(() =>
+      t.reserve({
+        modelId: 'deepseek:deepseek-v4-pro',
+        estimatedInputTokens: 1000,
+        maxOutputTokens: 1000,
+        kind: 'chat',
+      }),
+    ).not.toThrow();
+    t.record({
+      modelId: 'deepseek:deepseek-v4-pro',
+      inputTokens: 1000,
+      outputTokens: 1000,
+      kind: 'chat',
+    });
+
+    const expected = (1000 / 1_000_000) * 0.435 + (1000 / 1_000_000) * 0.87;
+    expect(t.totalSpent).toBeCloseTo(expected, 8);
+    const audit = readAudit();
+    expect(audit[0].event).toBe('reserve');
+    expect(audit[0].projected_cost_usd).toBeCloseTo(expected, 8);
+    expect(audit[1].event).toBe('record');
+    expect(audit[1].actual_cost_usd).toBeCloseTo(expected, 8);
+  });
+
   test('throws BudgetExhausted (reason: cost) when projected > cap', () => {
     const t = new BudgetTracker({ maxCostUsd: 0.001, label: 'test', auditPath });
     let caught: unknown = null;
@@ -119,8 +145,8 @@ describe('BudgetTracker.reserve', () => {
     expect((caught as BudgetExhausted).reason).toBe('runtime');
   });
 
-  test('TX2: throws BudgetExhausted (reason: no_pricing) when cap set + model unknown', () => {
-    const t = new BudgetTracker({ maxCostUsd: 1.0, label: 'test', auditPath });
+  test('TX2: throws BudgetExhausted (reason: no_pricing) and audits when cap set + model unknown', () => {
+    const t = new BudgetTracker({ maxCostUsd: 1.0, label: 'enrich_thin', auditPath });
     let caught: unknown = null;
     try {
       t.reserve({
@@ -128,6 +154,7 @@ describe('BudgetTracker.reserve', () => {
         estimatedInputTokens: 100,
         maxOutputTokens: 100,
         kind: 'chat',
+        label: 'enrich_thin.candidate',
       });
     } catch (err) {
       caught = err;
@@ -135,7 +162,18 @@ describe('BudgetTracker.reserve', () => {
     expect(caught).toBeInstanceOf(BudgetExhausted);
     expect((caught as BudgetExhausted).reason).toBe('no_pricing');
     expect((caught as BudgetExhausted).modelId).toBe('mystery:some-unreleased-model');
-    expect((caught as Error).message).toMatch(/anthropic-pricing\.ts/);
+    expect((caught as Error).message).toMatch(/model-pricing\.ts/);
+    const audit = readAudit();
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      event: 'reserve_denied',
+      reason: 'no_pricing',
+      model: 'mystery:some-unreleased-model',
+      modelId: 'mystery:some-unreleased-model',
+      kind: 'chat',
+      label: 'enrich_thin',
+      sub_label: 'enrich_thin.candidate',
+    });
   });
 
   test('v0.41.20.0: slash-prefix anthropic/claude-* under --max-cost does NOT no_pricing throw (THE FIX)', () => {

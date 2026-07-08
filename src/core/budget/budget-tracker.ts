@@ -30,10 +30,10 @@
 
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { gbrainPath } from '../config.ts';
 import { ANTHROPIC_PRICING, type ModelPricing } from '../anthropic-pricing.ts';
 import { EMBEDDING_PRICING, lookupEmbeddingPrice } from '../embedding-pricing.ts';
 import { splitProviderModelId } from '../model-id.ts';
+import { canonicalLookup } from '../model-pricing.ts';
 import { isoWeekFilename, resolveAuditDir } from '../audit-week-file.ts';
 
 export type BudgetKind = 'chat' | 'embed' | 'rerank';
@@ -161,14 +161,15 @@ const FREE_LOCAL_EMBED_PROVIDERS: ReadonlySet<string> = new Set([
  *
  * Strategy:
  *   - Chat: try the bare model id in ANTHROPIC_PRICING first (legacy keys
- *     are bare claude-* ids). Fall back to the provider-prefixed key.
+ *     are bare claude-* ids), then fall back to CANONICAL_PRICING.
  *   - Embed: lookupEmbeddingPrice handles the provider:model form; on a miss,
  *     local-inference providers (FREE_LOCAL_EMBED_PROVIDERS) price at $0 so
  *     `--max-cost` callers don't hard-fail.
  *   - Rerank: try ANTHROPIC_PRICING (legacy path for any Claude-priced
- *     rerank); else if the provider half is in FREE_LOCAL_RERANK_PROVIDERS,
- *     return zero pricing so `--max-cost` callers don't TX2 hard-fail on
- *     local inference recipes (electricity, not tokens); else unknown.
+ *     rerank), then CANONICAL_PRICING; else if the provider half is in
+ *     FREE_LOCAL_RERANK_PROVIDERS, return zero pricing so `--max-cost`
+ *     callers don't TX2 hard-fail on local inference recipes (electricity,
+ *     not tokens); else unknown.
  */
 function lookupPricing(modelId: string, kind: BudgetKind): ModelPricing | null {
   if (kind === 'embed') {
@@ -194,6 +195,8 @@ function lookupPricing(modelId: string, kind: BudgetKind): ModelPricing | null {
     const tailHit = ANTHROPIC_PRICING[modelTail];
     if (tailHit) return tailHit;
   }
+  const canonicalHit = canonicalLookup(modelId);
+  if (canonicalHit) return canonicalHit;
   // v0.40.6.1: zero-price local-inference rerank providers so the budget
   // tracker's TX2 hard-fail doesn't trip on `llama-server-reranker:<model>`
   // under `--max-cost`. Only the rerank kind — chat/embed already have
@@ -274,8 +277,23 @@ export class BudgetTracker {
         // TX2: hard-fail when a cap is set but pricing is missing — without
         // pricing we can't enforce the cap, and silently ignoring it would
         // void the contract.
+        appendAuditLine(this.auditPath, {
+          schema_version: 1,
+          ts: new Date().toISOString(),
+          event: 'reserve_denied',
+          reason: 'no_pricing',
+          label: this.opts.label,
+          kind: estimate.kind,
+          model: estimate.modelId,
+          modelId: estimate.modelId,
+          sub_label: estimate.label,
+          estimated_input_tokens: estimate.estimatedInputTokens,
+          max_output_tokens: estimate.maxOutputTokens,
+          cumulative_cost_usd: this.cumulativeUsd,
+          max_cost_usd: this.opts.maxCostUsd,
+        });
         const msg = `${this.opts.label}: no pricing entry for model "${estimate.modelId}" (kind=${estimate.kind}). ` +
-          `Add it to src/core/${estimate.kind === 'embed' ? 'embedding-pricing.ts' : 'anthropic-pricing.ts'} or drop --max-cost.`;
+          `Add it to src/core/${estimate.kind === 'embed' ? 'embedding-pricing.ts' : 'model-pricing.ts'} or drop --max-cost.`;
         this.fireExhausted();
         throw new BudgetExhausted(msg, {
           reason: 'no_pricing',
