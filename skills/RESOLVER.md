@@ -51,6 +51,8 @@ This is the dispatcher. Skills are the implementation. **Read the skill file bef
 > These skills come from GStack. If GStack is installed, the agent reads them directly.
 > If not, brain-only mode still works (brain skills function without thinking skills).
 
+| "steal this design", "extract the design from <url>", "design-heist", "make a design playbook from this site", "capture this site's design language", "replicate this website's style" | `skills/design-heist/SKILL.md` |
+
 ## Operational
 
 | Trigger | Skill |
