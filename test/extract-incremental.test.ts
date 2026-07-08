@@ -43,7 +43,18 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-async function seedPage(slug: string, body: string): Promise<void> {
+async function ensureSource(sourceId: string): Promise<void> {
+  if (sourceId === 'default') return;
+  await engine.executeRaw(
+    `INSERT INTO sources (id, name, config)
+     VALUES ($1, $1, '{}'::jsonb)
+     ON CONFLICT (id) DO NOTHING`,
+    [sourceId],
+  );
+}
+
+async function seedPage(slug: string, body: string, sourceId = 'default'): Promise<void> {
+  await ensureSource(sourceId);
   const [type, name] = slug.split('/');
   await engine.putPage(slug, {
     type: type as 'person' | 'company',
@@ -52,7 +63,7 @@ async function seedPage(slug: string, body: string): Promise<void> {
     timeline: '',
     frontmatter: {},
     content_hash: 'h',
-  });
+  }, { sourceId });
   // Also write to disk so walkMarkdownFiles can find it
   const filePath = join(tempDir, slug + '.md');
   mkdirSync(join(tempDir, type), { recursive: true });
@@ -189,5 +200,81 @@ describe('runExtractCore — incremental cycle path (#417)', () => {
     expect(result.pages_processed).toBe(1);
     // Link from alice to bob was extracted successfully via the full allSlugs set
     expect(result.links_created).toBeGreaterThan(0);
+  });
+
+  test('9. sourceId qualifies incremental link and timeline rows', async () => {
+    const body = [
+      '# alice',
+      '',
+      'See [bob](bob-example.md).',
+      '',
+      '- **2026-01-02** | lab — Started actuator calibration',
+    ].join('\n');
+    await seedPage('people/alice-example', body, 'default');
+    await seedPage('people/bob-example', '# bob', 'default');
+    await seedPage('people/alice-example', body, 'robotics');
+    await seedPage('people/bob-example', '# bob', 'robotics');
+
+    const result = await runExtractCore(engine as unknown as BrainEngine, {
+      mode: 'all',
+      dir: tempDir,
+      slugs: ['people/alice-example'],
+      sourceId: 'robotics',
+    });
+
+    expect(result.links_created).toBeGreaterThan(0);
+    expect(result.timeline_entries_created).toBeGreaterThan(0);
+    const linkRows = await engine.executeRaw<{ from_source_id: string; to_source_id: string }>(
+      `SELECT pf.source_id AS from_source_id, pt.source_id AS to_source_id
+         FROM links l
+         JOIN pages pf ON pf.id = l.from_page_id
+         JOIN pages pt ON pt.id = l.to_page_id`,
+    );
+    expect(linkRows).toHaveLength(1);
+    expect(linkRows[0]).toEqual({ from_source_id: 'robotics', to_source_id: 'robotics' });
+
+    const timelineRows = await engine.executeRaw<{ source_id: string; summary: string }>(
+      `SELECT p.source_id, t.summary
+         FROM timeline_entries t
+         JOIN pages p ON p.id = t.page_id`,
+    );
+    expect(timelineRows).toHaveLength(1);
+    expect(timelineRows[0].source_id).toBe('robotics');
+    expect(timelineRows[0].summary).toBe('Started actuator calibration');
+  });
+
+  test('10. omitted sourceId keeps filesystem extract rows on default source', async () => {
+    const body = [
+      '# alice',
+      '',
+      'See [bob](bob-example.md).',
+      '',
+      '- **2026-01-03** | lab — Default-source milestone',
+    ].join('\n');
+    await seedPage('people/alice-example', body);
+    await seedPage('people/bob-example', '# bob');
+
+    const result = await runExtractCore(engine as unknown as BrainEngine, {
+      mode: 'all',
+      dir: tempDir,
+      slugs: ['people/alice-example'],
+    });
+
+    expect(result.links_created).toBeGreaterThan(0);
+    expect(result.timeline_entries_created).toBeGreaterThan(0);
+    const linkRows = await engine.executeRaw<{ from_source_id: string; to_source_id: string }>(
+      `SELECT pf.source_id AS from_source_id, pt.source_id AS to_source_id
+         FROM links l
+         JOIN pages pf ON pf.id = l.from_page_id
+         JOIN pages pt ON pt.id = l.to_page_id`,
+    );
+    expect(linkRows).toEqual([{ from_source_id: 'default', to_source_id: 'default' }]);
+
+    const timelineRows = await engine.executeRaw<{ source_id: string; summary: string }>(
+      `SELECT p.source_id, t.summary
+         FROM timeline_entries t
+         JOIN pages p ON p.id = t.page_id`,
+    );
+    expect(timelineRows).toEqual([{ source_id: 'default', summary: 'Default-source milestone' }]);
   });
 });

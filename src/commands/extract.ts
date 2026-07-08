@@ -614,7 +614,7 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
       // Nothing changed — skip entirely.
       return result;
     }
-    const r = await extractForSlugs(engine, opts.dir, opts.slugs, opts.mode, dryRun, jsonMode, workers, opts.signal, opts.sourceId);
+    const r = await extractForSlugs(engine, opts.dir, opts.slugs, opts.mode, dryRun, jsonMode, workers, opts.signal, opts.sourceId ?? 'default');
     result.links_created = r.links_created;
     result.timeline_entries_created = r.timeline_created;
     result.pages_processed = r.pages;
@@ -623,12 +623,12 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
 
   // Full walk path: CLI `gbrain extract` or first-run.
   if (opts.mode === 'links' || opts.mode === 'all') {
-    const r = await extractLinksFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.signal, opts.sourceId);
+    const r = await extractLinksFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.signal, opts.sourceId ?? 'default');
     result.links_created = r.created;
     result.pages_processed = r.pages;
   }
   if (opts.mode === 'timeline' || opts.mode === 'all') {
-    const r = await extractTimelineFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.signal, opts.sourceId);
+    const r = await extractTimelineFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.signal, opts.sourceId ?? 'default');
     result.timeline_entries_created = r.created;
     result.pages_processed = Math.max(result.pages_processed, r.pages);
   }
@@ -1004,7 +1004,7 @@ async function extractForSlugs(
   workers: number = 1,
   signal?: AbortSignal,
   // #1747/#1503: stamp resolved brain source id on batch rows (see ExtractOpts.sourceId).
-  sourceId?: string,
+  sourceId = 'default',
 ): Promise<{ links_created: number; timeline_created: number; pages: number }> {
   // Build the full slug set for link resolution (fast: just readdir, no file reads)
   const allFiles = walkMarkdownFiles(brainDir);
@@ -1089,9 +1089,12 @@ async function extractForSlugs(
               if (!jsonMode) console.log(`  ${link.from_slug} → ${link.to_slug} (${link.link_type})`);
               linksCreated++;
             } else {
-              linkBatch.push(sourceId
-                ? { ...link, from_source_id: sourceId, to_source_id: sourceId, origin_source_id: sourceId }
-                : link);
+              linkBatch.push({
+                ...link,
+                from_source_id: sourceId,
+                to_source_id: sourceId,
+                origin_source_id: sourceId,
+              });
               if (linkBatch.length >= BATCH_SIZE) await flushLinks();
             }
           }
@@ -1104,7 +1107,14 @@ async function extractForSlugs(
               if (!jsonMode) console.log(`  ${entry.slug}: ${entry.date} — ${entry.summary}`);
               timelineCreated++;
             } else {
-              timelineBatch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail, ...(sourceId ? { source_id: sourceId } : {}) });
+              timelineBatch.push({
+                slug: entry.slug,
+                date: entry.date,
+                source: entry.source,
+                summary: entry.summary,
+                detail: entry.detail,
+                source_id: sourceId,
+              });
               if (timelineBatch.length >= BATCH_SIZE) await flushTimeline();
             }
           }
@@ -1135,7 +1145,7 @@ async function extractLinksFromDir(
   signal?: AbortSignal,
   // #1747/#1503: stamp resolved brain source id on batch rows so the
   // addLinksBatch JOIN matches non-'default' source pages.
-  sourceId?: string,
+  sourceId = 'default',
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
   const allSlugs = new Set(files.map(f => pathToSlug(f.relPath)));
@@ -1196,9 +1206,12 @@ async function extractLinksFromDir(
             if (!jsonMode) console.log(`  ${link.from_slug} → ${link.to_slug} (${link.link_type})`);
             created++;
           } else {
-            batch.push(sourceId
-              ? { ...link, from_source_id: sourceId, to_source_id: sourceId, origin_source_id: sourceId }
-              : link);
+            batch.push({
+              ...link,
+              from_source_id: sourceId,
+              to_source_id: sourceId,
+              origin_source_id: sourceId,
+            });
             if (batch.length >= BATCH_SIZE) await flush();
           }
         }
@@ -1223,7 +1236,7 @@ async function extractTimelineFromDir(
   signal?: AbortSignal,
   // #1747/#1503: stamp resolved brain source id so addTimelineEntriesBatch
   // matches non-'default' source pages.
-  sourceId?: string,
+  sourceId = 'default',
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
 
@@ -1270,7 +1283,14 @@ async function extractTimelineFromDir(
             if (!jsonMode) console.log(`  ${entry.slug}: ${entry.date} — ${entry.summary}`);
             created++;
           } else {
-            batch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail, ...(sourceId ? { source_id: sourceId } : {}) });
+            batch.push({
+              slug: entry.slug,
+              date: entry.date,
+              source: entry.source,
+              summary: entry.summary,
+              detail: entry.detail,
+              source_id: sourceId,
+            });
             if (batch.length >= BATCH_SIZE) await flush();
           }
         }

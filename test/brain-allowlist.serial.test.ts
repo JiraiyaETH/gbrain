@@ -135,6 +135,28 @@ describe('buildBrainTools', () => {
     expect(res).toBeTruthy();
   });
 
+  test('execute() threads sourceId into put_page operation context', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, config)
+       VALUES ('robotics', 'robotics', '{}'::jsonb)
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    const tools = buildBrainTools({ subagentId: 42, engine, config, sourceId: 'robotics' });
+    const putPage = tools.find(t => t.name === 'brain_put_page');
+    const ctx: ToolCtx = { engine, jobId: 1, remote: true };
+    const slug = 'wiki/agents/42/source-scope';
+
+    await putPage!.execute(
+      { slug, content: '---\ntitle: Source Scope\n---\nrobotics body' },
+      ctx,
+    );
+
+    const scoped = await engine.getPage(slug, { sourceId: 'robotics' });
+    const defaultPage = await engine.getPage(slug, { sourceId: 'default' });
+    expect(scoped?.source_id).toBe('robotics');
+    expect(defaultPage).toBeNull();
+  });
+
   test('execute() on put_page with out-of-namespace slug throws permission_denied', async () => {
     const tools = buildBrainTools({ subagentId: 42, engine, config });
     const putPage = tools.find(t => t.name === 'brain_put_page');

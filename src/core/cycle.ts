@@ -1681,6 +1681,7 @@ export async function runCycle(
           date: opts.synthDate,
           from: opts.synthFrom,
           to: opts.synthTo,
+          ...(cycleSourceId ? { sourceId: cycleSourceId } : {}),
           bypassDreamGuard: opts.synthBypassDreamGuard,
           // #1586: scope synthesized writes to the cycle's resolved source
           // (explicit --source wins, else derived from the checkout dir).
@@ -1887,6 +1888,7 @@ export async function runCycle(
         const { result, duration_ms } = await timePhase(() => runPhasePatterns(engine, {
           brainDir,
           dryRun,
+          ...(cycleSourceId ? { sourceId: cycleSourceId } : {}),
           yieldDuringPhase: opts.yieldDuringPhase,
         }));
         result.duration_ms = duration_ms;
