@@ -1,6 +1,6 @@
 ---
 name: maintain
-version: 1.0.0
+version: 1.0.1
 description: |
   Brain health checks: back-link enforcement, citation audit, filing validation,
   stale info detection, orphan pages, and benchmarks. Use when asked to check
@@ -231,6 +231,17 @@ Check that the back-linking iron law is being followed:
 - A mention without a back-link is a broken brain
 - Fix: add the missing back-link to the entity's Timeline or See Also section
 - Format: `- **YYYY-MM-DD** | Referenced in [page title](path) -- brief context`
+
+Tooling: `gbrain check-backlinks check` is the AUDIT tool. `check-backlinks fix`
+is a LEGACY materializer — do NOT run it brain-wide: it writes ingestion-dated,
+context-free "Referenced in" lines into `## Timeline` sections, breaking
+event-date anchoring and reverse-chron order. Upstream itself demoted it: the
+autopilot cycle (`src/core/cycle.ts` runPhaseBacklinks) runs audit-only, and the
+graph auto-link/mentions path is the canonical link store — so a missing
+MARKDOWN back-link is usually cosmetic, not a graph defect. Fix missing
+back-links per-page with judgment: event date (never ingestion date),
+`-- brief context`, the materiality gate, and the owner/central-node exception
+(see `skills/conventions/quality.md` and the enrich skill's owner handling).
 
 ### Filing rule violations
 Check for common misfiling patterns (see `skills/_brain-filing-rules.md`):
