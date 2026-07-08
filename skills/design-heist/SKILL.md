@@ -44,6 +44,24 @@ radii on every paper surface).
 The book must transfer to OTHER applications (websites, apps, decks): capture
 parameters and principles, not markup.
 
+## Intake schema
+Invocations resolve to this record (ask only for fields the request leaves blank):
+```json
+{ "url": "https://…",            // required — the reference
+  "slug": "kebab-book-name",     // required — books/<slug>/
+  "focus": ["whole"|"typography"|"motion"|"3d"|"color"|"components"…],
+  "target_mediums": ["web"],     // what the book must transfer to (web/app/deck)
+  "constraints": "free fonts only, no paid assets"  // default
+}
+```
+Outputs are exactly the four Contract artifact paths, reported in the summary.
+
+## Taste-gate rubric
+Score each re-creation 1–10 against reference frames; gate at ≥8. Deduct for:
+composition (prop cropped / bad air) −2, motion physics missing (overshoot, dip,
+conveyor, decode) −2 each, dead idle state −1, off-token color/type −2, easing
+defaults where the book specifies tokens −1. Operator score overrides agent score.
+
 ## Phases
 
 ### 0 — Intake
@@ -121,6 +139,19 @@ their verdicts get encoded back into the book. Close substantial work with EIIRP
 Four artifacts per the Contract, plus a chat summary: what was extracted, what was
 re-created, gate verdicts, and what remains un-recreated (never imply completeness
 — list the gaps explicitly).
+
+## Provenance & evidence conventions
+Every claim in a book must trace to evidence. Cite in-file:
+- Source-CSS facts as `(verified from source CSS: <rule>)` — e.g. the rounded-corner
+  correction in dither-punk `DESIGN.md` cites `border-radius:1.6666666667vw`.
+- Motion physics as `(observed frame-by-frame, <recording/date>)`.
+- Re-creation verdicts land in `REVIEW-LOG.md` with date, builder, fixes, and gate result.
+Reference run (worked example for this skill): scrib3.co → dither-punk book,
+2026-07-08 — see `~/Projects/design-library/books/dither-punk/{SITE-BREAKDOWN.md,
+DESIGN.md}` and `REVIEW-LOG.md` entries of that date; e2e smoke
+(`e2e/smoke.sh`) asserts that run's artifacts. Tool claims (SwiftShader/WebGL
+limits, codex stdin hang) originate from that run's logs — re-verify on new hosts
+rather than trusting them as universal.
 
 ## Division of labor
 Extraction analysis, spec-writing, taste gating: orchestrating agent (taste-critical
