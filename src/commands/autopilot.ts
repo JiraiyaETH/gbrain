@@ -38,6 +38,7 @@ import { logSelfUpgrade } from '../core/audit/self-upgrade-audit.ts';
 import { detectInstallMethod } from './upgrade.ts';
 import { evaluateQuietHours } from '../core/minions/quiet-hours.ts';
 import { inspectLock } from '../core/db-lock.ts';
+import { isCodeStrategyConfig } from '../core/source-health.ts';
 
 /**
  * v0.37.7.0 #1162 — classify autopilot reconnect-loop errors.
@@ -143,6 +144,13 @@ export function shouldDispatchFullCycle(opts: {
     opts.planLength > 3 ||
     opts.estTotalSeconds >= 300 ||
     opts.score < 70;
+}
+
+export function shouldDispatchSyncFreshnessForSource(source: {
+  local_path?: string | null;
+  config?: unknown;
+}): boolean {
+  return !!source.local_path && !isCodeStrategyConfig(source.config);
 }
 
 // ── Self-upgrade silent channel (v0.42; opt-in, supervisor-relaunch) ─────────
@@ -682,7 +690,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
             const intervalMs = baseInterval * 1000;
             const now = Date.now();
             for (const src of sources) {
-              if (!src.local_path) continue;
+              if (!shouldDispatchSyncFreshnessForSource(src)) continue;
               const lastSyncMs = src.last_sync_at ? new Date(src.last_sync_at).getTime() : 0;
               const ageMs = now - lastSyncMs;
               if (ageMs < intervalMs) continue; // fresh enough

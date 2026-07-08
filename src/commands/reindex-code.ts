@@ -37,6 +37,8 @@ import { withBudgetTracker } from '../core/ai/gateway.ts';
 // auto-aborts via the worker-pool's D13 bypass.
 import { runSlidingPool } from '../core/worker-pool.ts';
 import { parseWorkers, resolveWorkersWithClamp } from '../core/sync-concurrency.ts';
+import { currentGitHeadSha, isCodeStrategyConfig } from '../core/source-health.ts';
+import { loadAllSources } from '../core/sources-load.ts';
 
 export interface ReindexCodeOpts {
   sourceId?: string;
@@ -151,6 +153,36 @@ async function countCodePages(engine: BrainEngine, sourceId: string | undefined)
   if (rows.length === 0) return 0;
   const raw = rows[0]!.n;
   return typeof raw === 'string' ? parseInt(raw, 10) : raw;
+}
+
+async function stampCodeIndexFreshness(
+  engine: BrainEngine,
+  opts: { sourceId?: string; codePages: number; nowIso?: string },
+): Promise<void> {
+  try {
+    const sources = (await loadAllSources(engine))
+      .filter((src) => src.local_path && isCodeStrategyConfig(src.config))
+      .filter((src) => !opts.sourceId || src.id === opts.sourceId);
+    const nowIso = opts.nowIso ?? new Date().toISOString();
+    for (const src of sources) {
+      const head = currentGitHeadSha(src.local_path);
+      if (!head) continue;
+      const codePages = opts.sourceId
+        ? opts.codePages
+        : await countCodePages(engine, src.id);
+      await engine.updateSourceConfig(src.id, {
+        code_index: {
+          last_reindex_at: nowIso,
+          reindexed_head_sha: head,
+          code_pages: codePages,
+        },
+      });
+    }
+  } catch (err) {
+    process.stderr.write(
+      `[reindex-code] warning: failed to stamp code index freshness: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
 }
 
 /**
@@ -361,6 +393,10 @@ export async function runReindexCode(
         ...(failures.length > 0 ? failures : []),
       ],
     };
+  }
+
+  if (failed === 0) {
+    await stampCodeIndexFreshness(engine, { sourceId: opts.sourceId, codePages: totalPages });
   }
 
   return {

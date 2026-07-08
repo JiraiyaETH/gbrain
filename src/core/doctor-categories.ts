@@ -58,6 +58,7 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   'brain_score',
   'calibration_freshness',
   'child_table_orphans',
+  'code_index_freshness',
   'content_sanity_audit_recent',
   'contextual_retrieval_coverage',
   'contradictions',

@@ -41,7 +41,12 @@ import {
 import { isSourceUnchangedSinceSync } from '../core/git-head.ts';
 // v0.41.32.0: remote staleness reads the stored newest_content_at column via
 // this pure comparator (no git subprocess on the HTTP MCP doctor path).
-import { lagFromContentMs } from '../core/source-health.ts';
+import {
+  currentGitHeadSha,
+  isCodeStrategyConfig,
+  lagFromContentMs,
+  readCodeIndexMarker,
+} from '../core/source-health.ts';
 import { CHUNKER_VERSION } from '../core/chunkers/code.ts';
 import { LINK_EXTRACTOR_VERSION_TS } from '../core/link-extraction.ts';
 import { isUndefinedColumnError } from '../core/utils.ts';
@@ -722,6 +727,7 @@ export async function doctorReportRemote(engine: BrainEngine): Promise<DoctorRep
 
   // 6. Sync freshness check
   checks.push(await checkSyncFreshness(engine));
+  checks.push(await checkCodeIndexFreshness(engine));
 
   // v0.41.19.0 (Issue 5): sync --all consolidation nudge for multi-source brains.
   checks.push(await checkSyncConsolidation(engine));
@@ -3378,7 +3384,7 @@ export async function checkSyncFreshness(
     // `gbrain sync`'s up-to-date predicate at sync.ts:1057+1075 checks.
     // Columns existed pre-v0.41 (writeSyncAnchor / writeChunkerVersion);
     // no schema migration needed.
-    const sources = await engine.executeRaw<{
+    const allSources = await engine.executeRaw<{
       id: string;
       name: string;
       local_path: string | null;
@@ -3386,18 +3392,25 @@ export async function checkSyncFreshness(
       last_commit: string | null;
       chunker_version: string | null;
       newest_content_at: Date | null;
+      config: Record<string, unknown> | string | null;
     }>(
       // v0.41.32.0: newest_content_at feeds the REMOTE (non-localOnly) lag so
       // doctorReportRemote never shells out to git on a DB-supplied local_path.
-      `SELECT id, name, local_path, last_sync_at, last_commit, chunker_version, newest_content_at FROM sources WHERE local_path IS NOT NULL`,
+      `SELECT id, name, local_path, last_sync_at, last_commit, chunker_version, newest_content_at, config FROM sources WHERE local_path IS NOT NULL`,
     );
+    const codeSkippedCount = allSources.filter((source) => isCodeStrategyConfig(source.config)).length;
+    const sources = allSources.filter((source) => !isCodeStrategyConfig(source.config));
 
     if (sources.length === 0) {
       return {
         name: 'sync_freshness',
         status: 'ok',
-        message: 'No federated sources to sync',
-        details: { unchanged_count: 0, synced_recently_count: 0, stale_count: 0 },
+        message: codeSkippedCount > 0
+          ? `No sync-managed sources to sync (${codeSkippedCount} code-strategy source(s) checked by code_index_freshness)`
+          : 'No federated sources to sync',
+        details: codeSkippedCount > 0
+          ? { unchanged_count: 0, synced_recently_count: 0, stale_count: 0, code_skipped_count: codeSkippedCount }
+          : { unchanged_count: 0, synced_recently_count: 0, stale_count: 0 },
       };
     }
 
@@ -3574,7 +3587,9 @@ export async function checkSyncFreshness(
     }
 
     // D6 invariant: every source incremented exactly one bucket.
-    const details = { unchanged_count, synced_recently_count, stale_count };
+    const details = codeSkippedCount > 0
+      ? { unchanged_count, synced_recently_count, stale_count, code_skipped_count: codeSkippedCount }
+      : { unchanged_count, synced_recently_count, stale_count };
     // BUG 4: append in-progress context when any source is actively syncing.
     // Empty otherwise, so steady-state messages are byte-for-byte unchanged.
     const inProgressNote = inProgress.length ? `. ${inProgress.join('; ')}` : '';
@@ -3625,6 +3640,135 @@ export async function checkSyncFreshness(
       name: 'sync_freshness',
       status: 'warn',
       message: `Could not check sync freshness: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
+
+export async function checkCodeIndexFreshness(
+  engine: BrainEngine,
+  opts?: { nowMs?: number; localOnly?: boolean },
+): Promise<Check> {
+  try {
+    const sources = (await engine.executeRaw<{
+      id: string;
+      name: string;
+      local_path: string | null;
+      config: Record<string, unknown> | string | null;
+    }>(
+      `SELECT id, name, local_path, config FROM sources WHERE local_path IS NOT NULL`,
+    )).filter((source) => isCodeStrategyConfig(source.config));
+
+    if (sources.length === 0) {
+      return {
+        name: 'code_index_freshness',
+        status: 'ok',
+        message: 'No code-strategy sources to check',
+        details: { code_source_count: 0, fresh_count: 0, stale_count: 0, head_mismatch_count: 0 },
+      };
+    }
+
+    const warnHours = _resolveSyncFreshnessHours('GBRAIN_CODE_INDEX_FRESHNESS_WARN_HOURS', 24);
+    const failHours = _resolveSyncFreshnessHours('GBRAIN_CODE_INDEX_FRESHNESS_FAIL_HOURS', 72);
+    const warnMs = warnHours * 60 * 60 * 1000;
+    const failMs = failHours * 60 * 60 * 1000;
+    const now = opts?.nowMs ?? Date.now();
+    const localOnly = opts?.localOnly === true;
+
+    const issues: string[] = [];
+    let fresh_count = 0;
+    let stale_count = 0;
+    let head_mismatch_count = 0;
+    let hasWarnings = false;
+    let hasFailures = false;
+
+    for (const source of sources) {
+      const display = source.name && source.name !== source.id
+        ? `'${source.id}' (${source.name})`
+        : `'${source.id}'`;
+      const marker = readCodeIndexMarker(source.config);
+      if (!marker) {
+        issues.push(`Source ${display} has never completed code reindex`);
+        hasFailures = true;
+        stale_count++;
+        continue;
+      }
+      const last = new Date(marker.last_reindex_at).getTime();
+      if (!Number.isFinite(last)) {
+        issues.push(`Source ${display} has unparseable code_index.last_reindex_at: ${marker.last_reindex_at}`);
+        hasWarnings = true;
+        stale_count++;
+        continue;
+      }
+      const ageMs = now - last;
+      if (ageMs < 0) {
+        issues.push(`Source ${display} has future code_index.last_reindex_at — clock skew`);
+        hasWarnings = true;
+        stale_count++;
+        continue;
+      }
+
+      if (localOnly) {
+        const head = currentGitHeadSha(source.local_path);
+        if (!head) {
+          issues.push(`Source ${display} code index HEAD proof could not be verified`);
+          hasWarnings = true;
+          stale_count++;
+          continue;
+        }
+        if (head !== marker.reindexed_head_sha) {
+          issues.push(
+            `Source ${display} code index is for ${marker.reindexed_head_sha.slice(0, 12)} but repo HEAD is ${head.slice(0, 12)}`,
+          );
+          hasFailures = true;
+          stale_count++;
+          head_mismatch_count++;
+          continue;
+        }
+      }
+
+      const ageHours = Math.floor(ageMs / (1000 * 60 * 60));
+      const ageDays = Math.floor(ageHours / 24);
+      if (ageMs > failMs) {
+        issues.push(`Source ${display} code index last reindexed ${ageDays}d ago`);
+        hasFailures = true;
+        stale_count++;
+      } else if (ageMs > warnMs) {
+        issues.push(`Source ${display} code index last reindexed ${ageHours}h ago`);
+        hasWarnings = true;
+        stale_count++;
+      } else {
+        fresh_count++;
+      }
+    }
+
+    const details = { code_source_count: sources.length, fresh_count, stale_count, head_mismatch_count };
+    if (hasFailures) {
+      return {
+        name: 'code_index_freshness',
+        status: 'fail',
+        message: `${issues.join('; ')}. Run \`gbrain reindex --code --source <id> --yes\` for each stale code source`,
+        details,
+      };
+    }
+    if (hasWarnings) {
+      return {
+        name: 'code_index_freshness',
+        status: 'warn',
+        message: `${issues.join('; ')}. Run \`gbrain reindex --code --source <id> --yes\` to refresh`,
+        details,
+      };
+    }
+    return {
+      name: 'code_index_freshness',
+      status: 'ok',
+      message: `All ${sources.length} code-strategy source(s) reindexed recently with matching HEAD proof`,
+      details,
+    };
+  } catch (e) {
+    return {
+      name: 'code_index_freshness',
+      status: 'warn',
+      message: `Could not check code index freshness: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
 }
@@ -7201,6 +7345,8 @@ export async function buildChecks(
     // default (false) — that's the trust-boundary preservation Codex
     // P0-1 flagged.
     checks.push(await checkSyncFreshness(engine, { localOnly: true }));
+    progress.heartbeat('code_index_freshness');
+    checks.push(await checkCodeIndexFreshness(engine, { localOnly: true }));
     // v0.41.19.0 (Issue 5): sync --all consolidation nudge.
     progress.heartbeat('sync_consolidation');
     checks.push(await checkSyncConsolidation(engine));

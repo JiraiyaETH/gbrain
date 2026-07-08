@@ -583,6 +583,116 @@ describe('v0.32.4 — sync_freshness check', () => {
     // must include the id so the CLI command actually works.
     expect(result.message).toContain(`'wiki-id'`);
   });
+
+  test('code-strategy sources are skipped by sync_freshness', async () => {
+    const { checkSyncFreshness } = await import('../src/commands/doctor.ts');
+    const nowMs = Date.now();
+    const result = await checkSyncFreshness(makeStubEngine([
+      {
+        id: 'gbrain-code',
+        name: '',
+        local_path: '/tmp/gbrain-code',
+        last_sync_at: new Date(nowMs - 5 * 24 * 60 * 60 * 1000),
+        config: { strategy: 'code' },
+      },
+      {
+        id: 'wiki',
+        name: '',
+        local_path: '/tmp/wiki',
+        last_sync_at: new Date(nowMs - 60 * 1000),
+        config: { federated: true },
+      },
+    ]), { nowMs });
+
+    expect(result.status).toBe('ok');
+    expect(result.message).not.toContain('gbrain-code');
+    expect(result.details?.code_skipped_count).toBe(1);
+    expect(result.details?.stale_count).toBe(0);
+  });
+});
+
+describe('code_index_freshness check', () => {
+  function makeStubEngine(rows: any[]): any {
+    return { executeRaw: async () => rows };
+  }
+
+  test('no code-strategy sources → ok', async () => {
+    const { checkCodeIndexFreshness } = await import('../src/commands/doctor.ts');
+    const result = await checkCodeIndexFreshness(makeStubEngine([]));
+    expect(result.name).toBe('code_index_freshness');
+    expect(result.status).toBe('ok');
+  });
+
+  test('missing marker fails with reindex hint', async () => {
+    const { checkCodeIndexFreshness } = await import('../src/commands/doctor.ts');
+    const result = await checkCodeIndexFreshness(makeStubEngine([
+      { id: 'code', name: '', local_path: '/tmp/code', config: { strategy: 'code' } },
+    ]));
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('never completed code reindex');
+    expect(result.message).toContain('gbrain reindex --code --source <id> --yes');
+  });
+
+  test('recent marker on remote path is ok without git probing', async () => {
+    const { checkCodeIndexFreshness } = await import('../src/commands/doctor.ts');
+    const nowMs = Date.now();
+    const result = await checkCodeIndexFreshness(makeStubEngine([
+      {
+        id: 'code',
+        name: '',
+        local_path: '/tmp/not-a-real-repo',
+        config: {
+          strategy: 'code',
+          code_index: {
+            last_reindex_at: new Date(nowMs - 60 * 1000).toISOString(),
+            reindexed_head_sha: 'a'.repeat(40),
+          },
+        },
+      },
+    ]), { nowMs });
+    expect(result.status).toBe('ok');
+    expect(result.details?.fresh_count).toBe(1);
+  });
+
+  test('local HEAD mismatch fails', async () => {
+    const { checkCodeIndexFreshness } = await import('../src/commands/doctor.ts');
+    const { mkdtempSync, rmSync, writeFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const { execFileSync } = await import('child_process');
+    const dir = mkdtempSync(join(tmpdir(), 'gbrain-code-fresh-'));
+    try {
+      const env = {
+        ...process.env,
+        GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
+        GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
+      };
+      execFileSync('git', ['-C', dir, 'init', '-q'], { env });
+      writeFileSync(join(dir, 'a.ts'), 'export const a = 1;\n');
+      execFileSync('git', ['-C', dir, 'add', '-A'], { env });
+      execFileSync('git', ['-C', dir, 'commit', '-q', '-m', 'seed'], { env });
+
+      const result = await checkCodeIndexFreshness(makeStubEngine([
+        {
+          id: 'code',
+          name: '',
+          local_path: dir,
+          config: {
+            strategy: 'code',
+            code_index: {
+              last_reindex_at: new Date().toISOString(),
+              reindexed_head_sha: 'b'.repeat(40),
+            },
+          },
+        },
+      ]), { localOnly: true });
+      expect(result.status).toBe('fail');
+      expect(result.message).toContain('repo HEAD');
+      expect(result.details?.head_mismatch_count).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ============================================================================

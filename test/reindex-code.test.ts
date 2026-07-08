@@ -15,6 +15,10 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { runReindexCode } from '../src/commands/reindex-code.ts';
 import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
+import { execFileSync } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 describe('Layer 13 E2 — runReindexCode', () => {
   let engine: PGLiteEngine;
@@ -128,4 +132,49 @@ describe('Layer 13 E2 — runReindexCode', () => {
     });
     expect(result.codePages).toBe(3);
   });
+
+  test('successful source-scoped reindex stamps code_index freshness marker', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'gbrain-reindex-code-'));
+    const isolated = new PGLiteEngine();
+    try {
+      const env = {
+        ...process.env,
+        GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
+        GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
+      };
+      execFileSync('git', ['-C', repo, 'init', '-q'], { env });
+      writeFileSync(join(repo, 'foo.ts'), 'export const foo = 1;\n');
+      execFileSync('git', ['-C', repo, 'add', '-A'], { env });
+      execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'seed'], { env });
+      const head = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+
+      await isolated.connect({});
+      await isolated.initSchema();
+      await isolated.executeRaw(
+        `INSERT INTO sources (id, name, local_path, config)
+         VALUES ('code-src', 'code-src', $1, '{"strategy":"code","federated":true}'::jsonb)`,
+        [repo],
+      );
+      await isolated.putPage('foo-ts', {
+        type: 'code',
+        page_kind: 'code',
+        title: 'foo.ts',
+        compiled_truth: 'export const foo = 1;\n',
+        timeline: '',
+        frontmatter: { language: 'typescript', file: 'foo.ts' },
+      }, { sourceId: 'code-src' });
+
+      const result = await runReindexCode(isolated, { sourceId: 'code-src', noEmbed: true });
+      expect(result.failed).toBe(0);
+
+      const sources = await isolated.listAllSources({ localPathOnly: true });
+      const marker = sources.find((s) => s.id === 'code-src')!.config.code_index as Record<string, unknown>;
+      expect(marker.reindexed_head_sha).toBe(head);
+      expect(typeof marker.last_reindex_at).toBe('string');
+      expect(marker.code_pages).toBe(1);
+    } finally {
+      await isolated.disconnect().catch(() => {});
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
