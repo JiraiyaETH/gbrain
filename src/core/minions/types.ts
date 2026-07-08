@@ -450,6 +450,12 @@ export interface SubagentHandlerData {
    */
   allowed_slug_prefixes?: string[];
   /**
+   * Source id for subagent brain-tool writes/reads. Dream cycle children set
+   * this so put_page targets the cycle's source; omitted jobs keep the legacy
+   * default-source behavior.
+   */
+  source_id?: string;
+  /**
    * v0.41 Approach C: opt out of the auto-generated tool-usage preamble
    * that `buildSystemPrompt()` splices into `system`. Default behavior
    * (omitted or false) prepends a deterministic preamble listing each

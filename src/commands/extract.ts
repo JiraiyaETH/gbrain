@@ -510,6 +510,11 @@ export interface ExtractOpts {
    */
   slugs?: string[];
   /**
+   * Source id for filesystem-derived batch rows. Omitted callers preserve
+   * the historic default-source behavior.
+   */
+  sourceId?: string;
+  /**
    * v0.41.15.0 (D9): in-process parallel file workers for the fs-walk
    * loops. Default 1. PGLite engines clamp to 1 (single-writer; though
    * extract is mostly CPU-bound, the DB batch flush still hits the
@@ -568,7 +573,7 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
       // Nothing changed — skip entirely.
       return result;
     }
-    const r = await extractForSlugs(engine, opts.dir, opts.slugs, opts.mode, dryRun, jsonMode, workers, opts.signal);
+    const r = await extractForSlugs(engine, opts.dir, opts.slugs, opts.mode, dryRun, jsonMode, workers, opts.sourceId ?? 'default', opts.signal);
     result.links_created = r.links_created;
     result.timeline_entries_created = r.timeline_created;
     result.pages_processed = r.pages;
@@ -577,12 +582,12 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
 
   // Full walk path: CLI `gbrain extract` or first-run.
   if (opts.mode === 'links' || opts.mode === 'all') {
-    const r = await extractLinksFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.signal);
+    const r = await extractLinksFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.sourceId ?? 'default', opts.signal);
     result.links_created = r.created;
     result.pages_processed = r.pages;
   }
   if (opts.mode === 'timeline' || opts.mode === 'all') {
-    const r = await extractTimelineFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.signal);
+    const r = await extractTimelineFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.sourceId ?? 'default', opts.signal);
     result.timeline_entries_created = r.created;
     result.pages_processed = Math.max(result.pages_processed, r.pages);
   }
@@ -908,6 +913,7 @@ Status (v0.42):
         dir: brainDir,
         dryRun,
         jsonMode,
+        ...(sourceIdFilter ? { sourceId: sourceIdFilter } : {}),
         workers,
       });
     }
@@ -946,6 +952,7 @@ async function extractForSlugs(
   // shared flush primitive; JS single-threaded event loop makes the
   // shared counter increments atomic.
   workers: number = 1,
+  sourceId = 'default',
   signal?: AbortSignal,
 ): Promise<{ links_created: number; timeline_created: number; pages: number }> {
   // Build the full slug set for link resolution (fast: just readdir, no file reads)
@@ -1031,7 +1038,12 @@ async function extractForSlugs(
               if (!jsonMode) console.log(`  ${link.from_slug} → ${link.to_slug} (${link.link_type})`);
               linksCreated++;
             } else {
-              linkBatch.push(link);
+              linkBatch.push({
+                ...link,
+                from_source_id: sourceId,
+                to_source_id: sourceId,
+                origin_source_id: sourceId,
+              });
               if (linkBatch.length >= BATCH_SIZE) await flushLinks();
             }
           }
@@ -1044,7 +1056,14 @@ async function extractForSlugs(
               if (!jsonMode) console.log(`  ${entry.slug}: ${entry.date} — ${entry.summary}`);
               timelineCreated++;
             } else {
-              timelineBatch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail });
+              timelineBatch.push({
+                slug: entry.slug,
+                date: entry.date,
+                source: entry.source,
+                summary: entry.summary,
+                detail: entry.detail,
+                source_id: sourceId,
+              });
               if (timelineBatch.length >= BATCH_SIZE) await flushTimeline();
             }
           }
@@ -1072,6 +1091,7 @@ async function extractLinksFromDir(
   engine: BrainEngine, brainDir: string, dryRun: boolean, jsonMode: boolean,
   // v0.41.15.0 (T7): in-process worker count. Default 1.
   workers: number = 1,
+  sourceId = 'default',
   signal?: AbortSignal,
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
@@ -1133,7 +1153,12 @@ async function extractLinksFromDir(
             if (!jsonMode) console.log(`  ${link.from_slug} → ${link.to_slug} (${link.link_type})`);
             created++;
           } else {
-            batch.push(link);
+            batch.push({
+              ...link,
+              from_source_id: sourceId,
+              to_source_id: sourceId,
+              origin_source_id: sourceId,
+            });
             if (batch.length >= BATCH_SIZE) await flush();
           }
         }
@@ -1155,6 +1180,7 @@ async function extractTimelineFromDir(
   engine: BrainEngine, brainDir: string, dryRun: boolean, jsonMode: boolean,
   // v0.41.15.0 (T7): in-process worker count. Default 1.
   workers: number = 1,
+  sourceId = 'default',
   signal?: AbortSignal,
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
@@ -1202,7 +1228,14 @@ async function extractTimelineFromDir(
             if (!jsonMode) console.log(`  ${entry.slug}: ${entry.date} — ${entry.summary}`);
             created++;
           } else {
-            batch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail });
+            batch.push({
+              slug: entry.slug,
+              date: entry.date,
+              source: entry.source,
+              summary: entry.summary,
+              detail: entry.detail,
+              source_id: sourceId,
+            });
             if (batch.length >= BATCH_SIZE) await flush();
           }
         }
