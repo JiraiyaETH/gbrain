@@ -151,7 +151,7 @@ export async function runPageToAliasCore(
   const apply = opts.apply === true;
   const limit = Math.max(1, Math.min(50000, opts.perRuleLimit ?? 10000));
   const effectiveSourceId = opts.sourceId ?? 'default';
-  const pack = await loadActivePackBestEffort(ctx);
+  const pack = await loadActivePackBestEffort({ ...ctx, sourceId: effectiveSourceId } as OperationContext);
 
   const per_rule: PerPageToAliasResult[] = [];
   let total_would_alias = 0;

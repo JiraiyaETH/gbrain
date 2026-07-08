@@ -245,12 +245,12 @@ export async function resolvePack(
   const sha8 = await computeManifestSha8(manifest);
   const id = packIdentity(manifest, sha8);
 
-  // Reference-equality fast path: if a previous resolvePack(manifest, ...)
-  // produced the SAME identity, return the cached resolved object. This
-  // preserves the v0.38 contract that two calls with the same manifest
-  // bytes return the same JS object reference.
+  // Reference-equality fast path for leaf packs: if a previous
+  // resolvePack(manifest, ...) produced the SAME identity, return the
+  // cached resolved object. Packs with `extends` must walk parents first
+  // so parent changes are reflected in the effective manifest.
   const existing = _byName.get(manifest.name);
-  if (existing && existing.resolved.identity === id) {
+  if (!manifest.extends && existing && existing.resolved.identity === id) {
     return existing.resolved;
   }
 
@@ -258,6 +258,7 @@ export async function resolvePack(
   // cache snapshot (codex C6 — child cache entry must remember every
   // parent so invalidatePackCache(parentName) can cascade).
   const chain: string[] = [manifest.name];
+  const manifests: SchemaPackManifest[] = [manifest];
   let cursor: SchemaPackManifest | null = manifest;
   while (cursor?.extends) {
     const parentName = cursor.extends;
@@ -272,15 +273,15 @@ export async function resolvePack(
       opts.onDepthWarn?.(chain.length, chain);
     }
     cursor = await loadByName(parentName);
+    manifests.push(cursor);
   }
 
-  // For v0.38 skeleton: closure is computed on the manifest itself.
-  // Full extends-merging (child-wins) is the v0.41+ T20 follow-up.
-  const alias_graph = buildAliasGraph(manifest);
-  const alias_closure_hash = await computeAliasClosureHash(manifest);
+  const effectiveManifest = mergeExtendsChain(manifests);
+  const alias_graph = buildAliasGraph(effectiveManifest);
+  const alias_closure_hash = await computeAliasClosureHash(effectiveManifest);
 
   const resolved: ResolvedPack = {
-    manifest,
+    manifest: effectiveManifest,
     identity: id,
     manifest_sha8: sha8,
     alias_closure_hash,
@@ -305,6 +306,59 @@ export async function resolvePack(
     lastStatMs: Date.now(),
   });
   return resolved;
+}
+
+function mergeExtendsChain(chain: SchemaPackManifest[]): SchemaPackManifest {
+  let effective = chain[chain.length - 1]!;
+  for (let i = chain.length - 2; i >= 0; i--) {
+    effective = mergeParentChild(effective, chain[i]);
+  }
+  return effective;
+}
+
+function mergeParentChild(parent: SchemaPackManifest, child: SchemaPackManifest): SchemaPackManifest {
+  return {
+    ...parent,
+    ...child,
+    borrow_from: mergeByKey(parent.borrow_from, child.borrow_from, (x) => x.pack),
+    page_types: mergeByKey(parent.page_types, child.page_types, (x) => x.name),
+    link_types: mergeByKey(parent.link_types, child.link_types, (x) => x.name),
+    frontmatter_links: mergeByKey(
+      parent.frontmatter_links,
+      child.frontmatter_links,
+      (x) => `${x.page_type}\0${x.link_type}\0${x.fields.join('\0')}`,
+    ),
+    takes_kinds: uniqueStrings([...parent.takes_kinds, ...child.takes_kinds]),
+    enrichable_types: mergeByKey(parent.enrichable_types, child.enrichable_types, (x) => x.type),
+    filing_rules: mergeByKey(parent.filing_rules, child.filing_rules, (x) => x.kind),
+    // Phases are local control-flow participation, not inherited.
+    phases: child.phases,
+    calibration_domains: mergeOptionalByKey(parent.calibration_domains, child.calibration_domains, (x) => x.name),
+    mapping_rules: child.mapping_rules ?? parent.mapping_rules,
+    migration_from: child.migration_from ?? parent.migration_from,
+  };
+}
+
+function mergeByKey<T>(
+  parent: ReadonlyArray<T>,
+  child: ReadonlyArray<T>,
+  keyOf: (item: T) => string,
+): T[] {
+  const childKeys = new Set(child.map(keyOf));
+  return [...child, ...parent.filter((item) => !childKeys.has(keyOf(item)))];
+}
+
+function mergeOptionalByKey<T>(
+  parent: ReadonlyArray<T> | undefined,
+  child: ReadonlyArray<T> | undefined,
+  keyOf: (item: T) => string,
+): T[] | undefined {
+  const merged = mergeByKey(parent ?? [], child ?? [], keyOf);
+  return merged.length > 0 ? merged : undefined;
+}
+
+function uniqueStrings(values: ReadonlyArray<string>): string[] {
+  return [...new Set(values)];
 }
 
 /**

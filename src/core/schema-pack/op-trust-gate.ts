@@ -14,7 +14,7 @@
 // F7b — anything not strictly false is treated as untrusted).
 
 import type { OperationContext } from '../operations.ts';
-import { loadActivePack, type LoadActivePackInput } from './load-active.ts';
+import { resolveActivePackForSource, type LoadActivePackInput } from './load-active.ts';
 import { sourceScopeOpts } from '../operations.ts';
 import type { ResolvedPack } from './registry.ts';
 import { loadConfig } from '../config.ts';
@@ -96,17 +96,16 @@ export async function loadActivePackForOp(
       // source. If they all agree, use the first; if they diverge, fail
       // closed with a permission_denied to surface the drift instead of
       // arbitrary pack selection.
-      const { resolveActivePackName } = await import('./registry.ts');
       const cfg = loadConfig();
       const packNames = new Set<string>();
       for (const sid of scope.sourceIds) {
-        const res = resolveActivePackName({
+        const { pack } = await resolveActivePackForSource({
+          engine: ctx.engine,
+          cfg,
           remote: ctx.remote ?? true,
-          envVar: process.env.GBRAIN_SCHEMA_PACK?.trim() || undefined,
           sourceId: sid,
-          homeConfig: cfg?.schema_pack?.trim() || undefined,
         });
-        packNames.add(res.pack_name);
+        packNames.add(pack.manifest.name);
       }
       if (packNames.size > 1) {
         throw new SchemaPackTrustGateError(
@@ -126,5 +125,9 @@ export async function loadActivePackForOp(
     perCall,
     sourceId,
   };
-  return await loadActivePack(input);
+  const { pack } = await resolveActivePackForSource({
+    ...input,
+    engine: ctx.engine,
+  });
+  return pack;
 }
