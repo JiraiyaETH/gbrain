@@ -1,6 +1,6 @@
 ---
 name: enrich
-version: 1.0.1
+version: 1.0.2
 description: |
   Enrich brain pages with tiered enrichment protocol. Creates and updates
   person/company pages with compiled truth, timeline, and cross-links.
@@ -96,6 +96,16 @@ rehashes. Gold standard: `people/tory-green` (~1 citation per prose bullet, ~0.6
   ~everywhere, do NOT dump every meeting into the Timeline (reach them via backlinks; Timeline =
   non-meeting milestones). Frame "Assessment" as an **Operating Profile** (how they work), not an
   external judgment.
+  - **Subject-assignment test.** An owner-timeline entry must be an event whose PRIMARY SUBJECT is
+    the owner personally — he signed it, said it, decided it, was appointed. An event whose primary
+    subject is a company/project/other person — even one the owner founded or owns — goes on THAT
+    entity's timeline ONLY; the owner reaches it via graph traversal (backlinks/typed edges), never
+    by duplication.
+  - **Anchor to the EVENT date.** Never date an entry to ingestion/processing ("became brain
+    context", "was ingested", "reconciled") — those are not world events and get no timeline entry
+    on ANY page.
+  - This subject-assignment test applies to ALL entity timelines, not just the owner's — but the
+    owner page is where violations concentrate, because the owner is mentioned everywhere.
 
 ## When To Enrich
 

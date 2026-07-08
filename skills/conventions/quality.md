@@ -52,6 +52,11 @@ co-mention with no durable relationship.
 Format for intentional back-links:
 `- **YYYY-MM-DD** | Referenced in [page title](path) -- context`
 
+Timeline entries anchor to the EVENT date — never the ingestion/processing date
+(ingestion is not a world event and gets no timeline entry). An event lives on
+the timeline of its PRIMARY SUBJECT only; other entities reach it via graph
+traversal, not duplication.
+
 A missing back-link for a material relationship is a broken brain. A dense set
 of incidental backlinks is also a broken graph.
 

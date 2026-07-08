@@ -1,6 +1,6 @@
 ---
 name: skillpack-check
-version: 1.0.0
+version: 1.0.1
 description: |
   Run `gbrain skillpack-check` to produce an agent-readable JSON health report
   for the gbrain install. Wraps `gbrain doctor` + `gbrain apply-migrations
@@ -69,7 +69,11 @@ Common `actions[]` entries and what they mean:
   non-builtin cron handlers that need plugin registration — follow
   `skills/migrations/v0.11.0.md`.
 - `gbrain embed --stale` — Embeddings are stale.
-- `gbrain check-backlinks --fix` — Dead links or missing back-links.
+- `gbrain check-backlinks check` — Dead links or missing back-links. Audit
+  only; do NOT run `check-backlinks fix` brain-wide (legacy materializer that
+  writes ingestion-dated "Referenced in" lines into timelines). Fix flagged
+  pages individually with judgment — see the maintain skill's back-link
+  enforcement section.
 - Free-text action (no `Run:` prefix in the source message) — agent judgment
   needed. Quote it in the report for the user.
 
