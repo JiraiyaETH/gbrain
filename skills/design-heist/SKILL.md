@@ -66,6 +66,11 @@ defaults where the book specifies tokens −1. Operator score overrides agent sc
 
 ### 0 — Intake
 Confirm: reference URL, which elements matter (often "the whole thing"), book slug.
+**If the deliverable is a redesign of a REAL brand:** extract that brand's existing
+palette/type from its live site FIRST — the book supplies structure and motion, the
+brand supplies color. Inventing a palette for a real brand is a proven 0/10
+(Tailored round 4, 2026-07-08: cobalt-on-grey vs the brand's actual
+champagne-gold-on-charcoal).
 Create `books/<slug>/`. Read the library `README.md` + `PICKER.md` conventions.
 Brain-first: `gbrain search "<site/company>"` for prior context; cite what you use.
 
