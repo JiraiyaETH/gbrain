@@ -104,7 +104,11 @@ export async function extractNerLinks(
   const dryRun = opts.dryRun ?? false;
 
   // Pack best-effort: no pack → no inference → nothing to do.
-  const pack = await loadActivePackBestEffort({ engine } as never);
+  const pack = await loadActivePackBestEffort({
+    engine,
+    remote: false,
+    sourceId: opts.sourceIdFilter,
+  } as never);
   if (!pack || !pack.manifest?.link_types || pack.manifest.link_types.length === 0) {
     return { pages: 0, created: 0, pack_unavailable: true };
   }

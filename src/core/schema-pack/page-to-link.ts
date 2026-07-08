@@ -121,7 +121,7 @@ export async function runPageToLinkCore(
   const apply = opts.apply === true;
   const limit = Math.max(1, Math.min(50000, opts.perRuleLimit ?? 5000));
   const sourceId = opts.sourceId;
-  const pack = await loadActivePackBestEffort(ctx);
+  const pack = await loadActivePackBestEffort({ ...ctx, sourceId } as OperationContext);
 
   const per_rule: PerPageToLinkResult[] = [];
   let total_would_convert = 0;

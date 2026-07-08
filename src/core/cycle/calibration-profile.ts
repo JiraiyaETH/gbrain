@@ -325,11 +325,16 @@ class CalibrationProfilePhase extends BaseCyclePhase {
     // JSONB stays {} (byte-identical to v0.36.1.0 — R1 IRON RULE).
     let domainScorecards: DomainScorecards = {};
     try {
-      const { loadActivePack } = await import('../schema-pack/load-active.ts');
+      const { resolveActivePackForSource } = await import('../schema-pack/load-active.ts');
       const { loadConfig } = await import('../config.ts');
       const cfg = loadConfig();
-      const resolved = await loadActivePack({ cfg, remote: false });
-      const domains = resolved.manifest.calibration_domains ?? [];
+      const resolved = await resolveActivePackForSource({
+        engine,
+        cfg,
+        remote: false,
+        sourceId,
+      });
+      const domains = resolved.pack.manifest.calibration_domains ?? [];
       if (domains.length > 0) {
         domainScorecards = await aggregateDomainScorecards(
           engine,

@@ -962,7 +962,9 @@ export async function importFromFile(
   // is not modified. Use `gbrain frontmatter generate --fix` to write back.
   if (opts.inferFrontmatter !== false) {
     const { applyInference } = await import('./frontmatter-inference.ts');
-    const { content: inferred, inferred: meta } = applyInference(relativePath, content);
+    const { content: inferred, inferred: meta } = applyInference(relativePath, content, {
+      activePack: opts.activePack,
+    });
     if (!meta.skipped) {
       content = inferred;
     }

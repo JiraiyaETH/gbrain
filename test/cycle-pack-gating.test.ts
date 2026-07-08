@@ -97,15 +97,15 @@ describe('v0.41 T9 R-GATE: NEEDS_LOCK_PHASES contract (source-shape)', () => {
 
 describe('v0.41 T9 R-GATE: orchestrator dispatch wires the pack-gate', () => {
   // Source-shape regression: the dispatch for each new phase MUST
-  // consult packDeclaresPhase(engine, '<phase>') before invoking the
+  // consult packDeclaresPhase(engine, '<phase>', sourceId) before invoking the
   // phase. Future refactors that accidentally drop the gate would still
   // pass happy-path runtime tests; this assertion catches the drop.
   test('cycle.ts dispatch for extract_atoms calls packDeclaresPhase', () => {
-    expect(cycleTsSrc).toContain("packDeclaresPhase(engine, 'extract_atoms')");
+    expect(cycleTsSrc).toContain("packDeclaresPhase(engine, 'extract_atoms',");
   });
 
   test('cycle.ts dispatch for synthesize_concepts calls packDeclaresPhase', () => {
-    expect(cycleTsSrc).toContain("packDeclaresPhase(engine, 'synthesize_concepts')");
+    expect(cycleTsSrc).toContain("packDeclaresPhase(engine, 'synthesize_concepts',");
   });
 
   test('packDeclaresPhase helper function exists in cycle.ts', () => {
@@ -113,12 +113,12 @@ describe('v0.41 T9 R-GATE: orchestrator dispatch wires the pack-gate', () => {
   });
 
   test('packDeclaresPhase reads phases from active pack manifest (NOT extends chain)', () => {
-    // Source-pin: the helper reads `resolved.manifest.phases` — D4-B
+    // Source-pin: the helper reads `resolved.pack.manifest.phases` — D4-B
     // says phases are local to the declaring manifest. Future drift
     // that adds extends-chain merging would silently change semantics
     // for users who extend gbrain-creator expecting inheritance; this
     // assertion catches it.
-    expect(cycleTsSrc).toContain('resolved.manifest.phases');
+    expect(cycleTsSrc).toContain('resolved.pack.manifest.phases');
   });
 
   test('packDeclaresPhase fail-open: returns false on catch (no thrown exceptions)', () => {
@@ -141,9 +141,9 @@ describe('v0.41 T9 R-GATE: pre-existing 17 core phases always run', () => {
   // assertion: only the 2 new lens-pack phases reference packDeclaresPhase
   // in the dispatch.
   test('only extract_atoms + synthesize_concepts dispatch sites reference packDeclaresPhase', () => {
-    const matches = cycleTsSrc.match(/packDeclaresPhase\(engine, '[^']+'\)/g) ?? [];
+    const matches = cycleTsSrc.match(/packDeclaresPhase\(engine, '[^']+'/g) ?? [];
     const phaseNames = matches.map((m) => {
-      const inner = /packDeclaresPhase\(engine, '([^']+)'\)/.exec(m);
+      const inner = /packDeclaresPhase\(engine, '([^']+)'/.exec(m);
       return inner ? inner[1] : '';
     });
     // Should be EXACTLY two phases gated.

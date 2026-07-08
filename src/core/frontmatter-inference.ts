@@ -59,6 +59,7 @@
  */
 
 import { basename, dirname, relative } from 'path';
+import { matchTypeFromPack } from './markdown.ts';
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -87,6 +88,10 @@ export interface DirectoryRule {
   datePattern?: 'filename' | 'dirname' | 'none';
   /** How to extract title. Default: 'filename'. */
   titleStrategy?: 'filename' | 'heading' | 'filename-full';
+}
+
+export interface FrontmatterInferenceOpts {
+  activePack?: { page_types: ReadonlyArray<{ name: string; path_prefixes: ReadonlyArray<string> }> };
 }
 
 // ─── Directory Rules ─────────────────────────────────────────────────
@@ -321,7 +326,11 @@ export function extractTitleFromHeading(content: string): string | null {
  * @param content - File content (may be empty)
  * @returns Inferred frontmatter fields
  */
-export function inferFrontmatter(relativePath: string, content: string): InferredFrontmatter {
+export function inferFrontmatter(
+  relativePath: string,
+  content: string,
+  opts: FrontmatterInferenceOpts = {},
+): InferredFrontmatter {
   // Check if file already has frontmatter
   const firstNonEmpty = content.split('\n').find(l => l.trim().length > 0);
   if (firstNonEmpty?.trim() === '---') {
@@ -374,9 +383,13 @@ export function inferFrontmatter(relativePath: string, content: string): Inferre
     }
   }
 
+  const packMatchedType = opts.activePack
+    ? matchTypeFromPack(relativePath, opts.activePack)
+    : null;
+
   return {
     title,
-    type: matchedRule.type,
+    type: packMatchedType ?? matchedRule.type,
     date,
     source: matchedRule.source,
     tags: tags.length > 0 ? tags : undefined,
@@ -423,8 +436,12 @@ export function serializeFrontmatter(fm: InferredFrontmatter): string {
  * Apply frontmatter inference to file content.
  * Returns the content with frontmatter prepended, or the original content if it already has frontmatter.
  */
-export function applyInference(relativePath: string, content: string): { content: string; inferred: InferredFrontmatter } {
-  const inferred = inferFrontmatter(relativePath, content);
+export function applyInference(
+  relativePath: string,
+  content: string,
+  opts: FrontmatterInferenceOpts = {},
+): { content: string; inferred: InferredFrontmatter } {
+  const inferred = inferFrontmatter(relativePath, content, opts);
   if (inferred.skipped) {
     return { content, inferred };
   }

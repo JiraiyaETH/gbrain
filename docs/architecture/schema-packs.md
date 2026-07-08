@@ -78,7 +78,7 @@ this chain top-down. First match wins.
 |------|--------|-------|
 | 1 | Per-call `schema_pack` opt | CLI only (`ctx.remote === false`); MCP rejected. |
 | 2 | `GBRAIN_SCHEMA_PACK` env | Process-scope override. |
-| 3 | Per-source DB config key `schema_pack:source:<id>` | New in v0.38. |
+| 3 | Per-source DB config key `schema_pack.source.<id>` | New in v0.38. |
 | 4 | Brain-wide DB config key `schema_pack` | |
 | 5 | `gbrain.yml schema:` section | Repo-checked. |
 | 6 | `~/.gbrain/config.json` `schema_pack` field | What `gbrain schema use` writes. |

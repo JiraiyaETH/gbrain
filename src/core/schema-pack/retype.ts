@@ -295,7 +295,7 @@ export async function runRetypeCore(
   const batchSize = Math.max(1, Math.min(10000, opts.batchSize ?? 1000));
   const sourceId = opts.sourceId;
 
-  const pack = await loadActivePackBestEffort(ctx);
+  const pack = await loadActivePackBestEffort({ ...ctx, sourceId } as OperationContext);
 
   const per_rule: PerRuleResult[] = [];
   let total_would_apply = 0;

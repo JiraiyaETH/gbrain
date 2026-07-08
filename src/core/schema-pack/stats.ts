@@ -229,7 +229,7 @@ export async function runStatsCore(
   // Pack identity + dead-prefix scan — best-effort.
   let pack_identity: string | null = null;
   let dead_prefixes: DeadPrefixHint[] = [];
-  const pack = await loadActivePackBestEffort(ctx);
+  const pack = await loadActivePackBestEffort({ ...ctx, sourceId: opts.sourceId ?? ctx.sourceId } as OperationContext);
   if (pack) {
     pack_identity = pack.identity;
     dead_prefixes = await detectDeadPrefixes(ctx.engine, pack, opts);
