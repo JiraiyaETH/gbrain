@@ -29,16 +29,22 @@ beforeEach(async () => {
 const NOW = Date.parse('2026-05-22T12:00:00.000Z');
 const agoH = (h: number) => new Date(NOW - h * 3600_000).toISOString();
 
-async function seed(id: string, lastFullCycleAt?: string, opts: { local_path?: string | null } = {}): Promise<void> {
-  const config = lastFullCycleAt
-    ? JSON.stringify({ last_full_cycle_at: lastFullCycleAt })
-    : '{}';
+async function seed(
+  id: string,
+  lastFullCycleAt?: string,
+  opts: { local_path?: string | null; config?: Record<string, unknown> } = {},
+): Promise<void> {
+  const config = {
+    federated: true,
+    ...(lastFullCycleAt ? { last_full_cycle_at: lastFullCycleAt } : {}),
+    ...(opts.config ?? {}),
+  };
   const localPath = opts.local_path === undefined ? `/tmp/${id}` : opts.local_path;
   await engine.executeRaw(
     `INSERT INTO sources (id, name, local_path, config, archived, created_at)
      VALUES ($1, $2, $3, $4::jsonb, false, NOW())
      ON CONFLICT (id) DO UPDATE SET local_path = EXCLUDED.local_path, config = EXCLUDED.config`,
-    [id, id, localPath, config],
+    [id, id, localPath, JSON.stringify(config)],
   );
 }
 
@@ -120,5 +126,13 @@ describe('doctor checkCycleFreshness', () => {
     const result = await checkCycleFreshness(engine, { nowMs: NOW });
     expect(result.status).toBe('ok');
     expect(result.message).toMatch(/No federated sources/);
+  });
+
+  test('code-strategy sources are skipped because autopilot fan-out does not cycle them', async () => {
+    await engine.executeRaw(`UPDATE sources SET local_path = NULL WHERE id = 'default'`);
+    await seed('gbrain-code', undefined, { config: { strategy: 'code' } });
+    const result = await checkCycleFreshness(engine, { nowMs: NOW });
+    expect(result.status).toBe('ok');
+    expect(result.message).toMatch(/code source/);
   });
 });

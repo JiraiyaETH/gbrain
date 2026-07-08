@@ -3854,12 +3854,17 @@ export async function checkCycleFreshness(
   opts?: { nowMs?: number },
 ): Promise<Check> {
   try {
-    const sources = await engine.listAllSources({ localPathOnly: true });
+    const allSources = await engine.listAllSources({ localPathOnly: true });
+    const { partitionAutopilotSources } = await import('./autopilot-fanout.ts');
+    const partition = partitionAutopilotSources(allSources);
+    const sources = partition.eligibleSources;
     if (sources.length === 0) {
       return {
         name: 'cycle_freshness',
         status: 'ok',
-        message: 'No federated sources to cycle',
+        message: partition.skippedCodeSource.length > 0 || partition.skippedIsolatedSource.length > 0
+          ? `No autopilot-serviced sources to cycle (${partition.skippedCodeSource.length} code source(s), ${partition.skippedIsolatedSource.length} isolated source(s) skipped)`
+          : 'No federated sources to cycle',
       };
     }
 
@@ -3922,7 +3927,7 @@ export async function checkCycleFreshness(
     return {
       name: 'cycle_freshness',
       status: 'ok',
-      message: `All ${sources.length} federated source(s) cycled recently`,
+      message: `All ${sources.length} autopilot-serviced source(s) cycled recently`,
     };
   } catch (e) {
     return {
