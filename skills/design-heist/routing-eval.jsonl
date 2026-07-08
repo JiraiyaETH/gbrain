@@ -1,0 +1,5 @@
+{"input":"steal this design https://scrib3.co","expect":"design-heist"}
+{"input":"extract the design language from linear.app and make a playbook","expect":"design-heist"}
+{"input":"design-heist https://stripe.com","expect":"design-heist"}
+{"input":"I love this site's animations, capture the style so we can reuse it","expect":"design-heist"}
+{"input":"replicate this website's aesthetic for our library","expect":"design-heist"}
