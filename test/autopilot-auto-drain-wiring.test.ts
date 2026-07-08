@@ -30,7 +30,7 @@ describe('autopilot auto-drain wiring', () => {
   });
 
   test('gates on pack NOT declaring extract_atoms (the silent-backlog condition)', () => {
-    expect(SRC).toContain("packDeclaresPhase(engine, 'extract_atoms')");
+    expect(SRC).toContain("packDeclaresPhase(engine, 'extract_atoms', src.id)");
   });
 
   test('gates on the enabled flag and a daily spend cap (DECISION 3C)', () => {

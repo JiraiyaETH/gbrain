@@ -23,6 +23,7 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { BrainEngine } from '../engine.ts';
 import type { GBrainConfig } from '../config.ts';
 import { gbrainPath } from '../config.ts';
 import type { SchemaPackManifest } from './manifest-v1.ts';
@@ -58,6 +59,30 @@ export interface LoadActivePackInput {
   gbrainYml?: string;
   /** Tier-4 brain-wide DB config (overrides tier 6 file-plane). */
   dbConfig?: string;
+}
+
+export interface SourceAwareActivePackInput extends LoadActivePackInput {
+  /**
+   * Engine used only to read trusted DB config (`schema_pack.source.<id>`
+   * and `schema_pack`). Optional so tests and filesystem-only commands can
+   * keep using the same helper without a DB.
+   */
+  engine?: Pick<BrainEngine, 'getConfig'> | null;
+  /**
+   * Optional warning sink for per-source fallback. Defaults to console.warn.
+   * Tests pass a collector to avoid noisy stderr.
+   */
+  warn?: (message: string) => void;
+}
+
+export interface SourceAwareActivePack {
+  pack: ResolvedPack;
+  resolution: ResolutionResult;
+  fallback?: {
+    sourceId: string;
+    packName: string;
+    reason: string;
+  };
 }
 
 /**
@@ -152,6 +177,53 @@ export async function loadActivePack(input: LoadActivePackInput): Promise<Resolv
 }
 
 /**
+ * Source-aware active-pack boundary.
+ *
+ * `resolveActivePackName` already knows how to honor tier 3
+ * (`schema_pack.source.<id>`), but the hot paths historically never fetched
+ * that DB config and therefore always resolved the global pack. This helper
+ * is the single place that reads the DB config and passes it into the
+ * existing resolver.
+ *
+ * Fail-safe posture: if a per-source override resolves but that pack cannot
+ * be loaded, log once for this call and retry without the per-source tier,
+ * leaving the global pack / bundle fallback behavior intact.
+ */
+export async function resolveActivePackForSource(
+  input: SourceAwareActivePackInput,
+): Promise<SourceAwareActivePack> {
+  const enriched = await withDbConfig(input);
+  const resolution = resolveActivePackNameOnly(enriched);
+  try {
+    const pack = await loadActivePack(enriched);
+    return { pack, resolution };
+  } catch (err) {
+    if (resolution.source !== 'per-source-db' || !input.sourceId) throw err;
+    const reason = err instanceof Error ? err.message : String(err);
+    const warn = input.warn ?? ((message: string) => console.warn(message));
+    warn(
+      `[gbrain] source "${input.sourceId}" schema pack "${resolution.pack_name}" could not be loaded (${reason}); ` +
+      `falling back to the global active schema pack.`,
+    );
+    const fallbackInput: LoadActivePackInput = {
+      ...enriched,
+      perSourceDb: undefined,
+    };
+    const fallbackResolution = resolveActivePackNameOnly(fallbackInput);
+    const pack = await loadActivePack(fallbackInput);
+    return {
+      pack,
+      resolution: fallbackResolution,
+      fallback: {
+        sourceId: input.sourceId,
+        packName: resolution.pack_name,
+        reason,
+      },
+    };
+  }
+}
+
+/**
  * Return the resolved pack NAME and source tier WITHOUT loading the
  * manifest from disk. Used by `gbrain schema active` to surface
  * provenance ("active pack: garry — source: gbrain.yml") without
@@ -159,6 +231,33 @@ export async function loadActivePack(input: LoadActivePackInput): Promise<Resolv
  */
 export function resolveActivePackNameOnly(input: LoadActivePackInput): ResolutionResult {
   return resolveActivePackName(buildResolutionInput(input));
+}
+
+async function withDbConfig(input: SourceAwareActivePackInput): Promise<LoadActivePackInput> {
+  const out: LoadActivePackInput = { ...input };
+  if (!input.engine) return out;
+  if (input.sourceId && out.perSourceDb === undefined) {
+    const value = await readDbConfig(input.engine, `schema_pack.source.${input.sourceId}`);
+    if (value) out.perSourceDb = new Map([[input.sourceId, value]]);
+  }
+  if (out.dbConfig === undefined) {
+    const value = await readDbConfig(input.engine, 'schema_pack');
+    if (value) out.dbConfig = value;
+  }
+  return out;
+}
+
+async function readDbConfig(
+  engine: Pick<BrainEngine, 'getConfig'>,
+  key: string,
+): Promise<string | undefined> {
+  try {
+    const value = await engine.getConfig(key);
+    const trimmed = value?.trim();
+    return trimmed || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

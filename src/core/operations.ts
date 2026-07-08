@@ -852,14 +852,15 @@ const put_page: Operation = {
     // (parity gate preserved). Federated-read closure correction is T19's scope.
     let activePack: { page_types: ReadonlyArray<{ name: string; path_prefixes: ReadonlyArray<string> }> } | undefined;
     try {
-      const { loadActivePack } = await import('./schema-pack/load-active.ts');
+      const { resolveActivePackForSource } = await import('./schema-pack/load-active.ts');
       const { loadConfig } = await import('./config.ts');
-      const resolved = await loadActivePack({
+      const resolved = await resolveActivePackForSource({
+        engine: ctx.engine,
         cfg: loadConfig(),
         remote: ctx.remote === false ? false : true,
         sourceId: ctx.sourceId,
       });
-      activePack = { page_types: resolved.manifest.page_types };
+      activePack = { page_types: resolved.pack.manifest.page_types };
     } catch {
       // Pack load failed; fall through to legacy inferType behavior.
       activePack = undefined;
@@ -1006,6 +1007,7 @@ const put_page: Operation = {
               date: e.date,
               summary: e.summary,
               detail: e.detail || '',
+              ...(ctx.sourceId ? { source_id: ctx.sourceId } : {}),
             }));
             // v0.41.18.0: engine self-retries on Supavisor circuit-breaker
             // recovery. auditSite label routes the audit JSONL emission so
@@ -4497,13 +4499,16 @@ const get_active_schema_pack: Operation = {
   params: {},
   scope: 'read',
   handler: async (ctx) => {
-    const { loadActivePack, resolveActivePackNameOnly } = await import('./schema-pack/load-active.ts');
+    const { resolveActivePackForSource } = await import('./schema-pack/load-active.ts');
     const { loadConfig } = await import('./config.ts');
     const cfg = loadConfig();
-    const sourceOpts: Record<string, unknown> = {};
-    if (ctx.sourceId) sourceOpts.sourceId = ctx.sourceId;
-    const resolution = resolveActivePackNameOnly({ cfg, remote: ctx.remote ?? true, ...sourceOpts });
-    const pack = await loadActivePack({ cfg, remote: ctx.remote ?? true, ...sourceOpts });
+    const resolved = await resolveActivePackForSource({
+      engine: ctx.engine,
+      cfg,
+      remote: ctx.remote ?? true,
+      sourceId: ctx.sourceId,
+    });
+    const { pack, resolution } = resolved;
     const primitiveSummary: Record<string, number> = {};
     for (const t of pack.manifest.page_types) {
       primitiveSummary[t.primitive] = (primitiveSummary[t.primitive] ?? 0) + 1;
@@ -4569,7 +4574,7 @@ const schema_lint: Operation = {
   scope: 'read',
   handler: async (ctx, p) => {
     const { runAllLintRules } = await import('./schema-pack/lint-rules.ts');
-    const { loadActivePack } = await import('./schema-pack/load-active.ts');
+    const { resolveActivePackForSource } = await import('./schema-pack/load-active.ts');
     const { loadConfig, gbrainPath } = await import('./config.ts');
     const { existsSync } = await import('node:fs');
     const { join } = await import('node:path');
@@ -4589,8 +4594,13 @@ const schema_lint: Operation = {
       const { loadPackFromFile: loader } = await import('./schema-pack/loader.ts');
       manifest = loader(path);
     } else {
-      const resolved = await loadActivePack({ cfg, remote: ctx.remote ?? true, sourceId: ctx.sourceId });
-      manifest = resolved.manifest;
+      const resolved = await resolveActivePackForSource({
+        engine: ctx.engine,
+        cfg,
+        remote: ctx.remote ?? true,
+        sourceId: ctx.sourceId,
+      });
+      manifest = resolved.pack.manifest;
     }
     // File-plane only over MCP; the engine-aware --with-db opt-in is
     // CLI-only (Phase 5 wiring). MCP callers get the 9 file-plane rules.
@@ -4604,10 +4614,15 @@ const schema_graph: Operation = {
   params: {},
   scope: 'read',
   handler: async (ctx) => {
-    const { loadActivePack } = await import('./schema-pack/load-active.ts');
+    const { resolveActivePackForSource } = await import('./schema-pack/load-active.ts');
     const { loadConfig } = await import('./config.ts');
     const cfg = loadConfig();
-    const pack = await loadActivePack({ cfg, remote: ctx.remote ?? true, sourceId: ctx.sourceId });
+    const { pack } = await resolveActivePackForSource({
+      engine: ctx.engine,
+      cfg,
+      remote: ctx.remote ?? true,
+      sourceId: ctx.sourceId,
+    });
     const nodes = pack.manifest.page_types.map((t) => ({ name: t.name, primitive: t.primitive }));
     const edges: Array<{ from: string; verb: string; to: string }> = [];
     for (const lt of pack.manifest.link_types) {
@@ -4634,10 +4649,15 @@ const schema_explain_type: Operation = {
   },
   scope: 'read',
   handler: async (ctx, p) => {
-    const { loadActivePack } = await import('./schema-pack/load-active.ts');
+    const { resolveActivePackForSource } = await import('./schema-pack/load-active.ts');
     const { loadConfig } = await import('./config.ts');
     const cfg = loadConfig();
-    const pack = await loadActivePack({ cfg, remote: ctx.remote ?? true, sourceId: ctx.sourceId });
+    const { pack } = await resolveActivePackForSource({
+      engine: ctx.engine,
+      cfg,
+      remote: ctx.remote ?? true,
+      sourceId: ctx.sourceId,
+    });
     const found = pack.manifest.page_types.find((t) => t.name === p.type);
     if (!found) return { error: 'type_not_found', type: p.type as string, pack: pack.manifest.name };
     return { schema_version: 1, pack: pack.manifest.name, type: found };

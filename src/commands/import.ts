@@ -90,14 +90,15 @@ export async function runImport(
   // per-file importFile call below. Codex perf finding #7 — never per-file.
   let importActivePack: { page_types: ReadonlyArray<{ name: string; path_prefixes: ReadonlyArray<string> }> } | undefined;
   try {
-    const { loadActivePack } = await import('../core/schema-pack/load-active.ts');
+    const { resolveActivePackForSource } = await import('../core/schema-pack/load-active.ts');
     const { loadConfig } = await import('../core/config.ts');
-    const resolved = await loadActivePack({
+    const resolved = await resolveActivePackForSource({
+      engine,
       cfg: loadConfig(),
       remote: false, // CLI import is trusted
       sourceId: opts.sourceId,
     });
-    importActivePack = { page_types: resolved.manifest.page_types };
+    importActivePack = { page_types: resolved.pack.manifest.page_types };
   } catch {
     importActivePack = undefined;
   }

@@ -496,6 +496,14 @@ export function inferTypeFromPack(
   if (pack.page_types.length === 0) {
     return inferTypeWithPrefixes(filePath, GBRAIN_BASE_PATH_PREFIXES);
   }
+  return matchTypeFromPack(filePath, pack) ?? 'concept';
+}
+
+export function matchTypeFromPack(
+  filePath: string | undefined,
+  pack: { page_types: ReadonlyArray<{ name: string; path_prefixes: ReadonlyArray<string> }> },
+): PageType | null {
+  if (!filePath || pack.page_types.length === 0) return null;
   const lower = ('/' + filePath).toLowerCase();
   for (const pt of pack.page_types) {
     for (const prefix of pt.path_prefixes) {
@@ -505,7 +513,7 @@ export function inferTypeFromPack(
       }
     }
   }
-  return 'concept';
+  return null;
 }
 
 /**

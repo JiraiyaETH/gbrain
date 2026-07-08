@@ -8073,9 +8073,13 @@ function parseFloatFlag(args: string[], flag: string): number | null {
 
 async function checkSchemaPackActive(engine: BrainEngine): Promise<Check> {
   try {
-    const { loadActivePack } = await import('../core/schema-pack/load-active.ts');
+    const { resolveActivePackForSource } = await import('../core/schema-pack/load-active.ts');
     const { loadConfig } = await import('../core/config.ts');
-    const pack = await loadActivePack({ cfg: loadConfig(), remote: false });
+    const { pack } = await resolveActivePackForSource({
+      engine,
+      cfg: loadConfig(),
+      remote: false,
+    });
     return {
       name: 'schema_pack_active',
       status: 'ok',

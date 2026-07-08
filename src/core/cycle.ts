@@ -867,13 +867,19 @@ async function resolveSourceForDir(
 export async function packDeclaresPhase(
   engine: BrainEngine,
   phase: CyclePhase,
+  sourceId?: string,
 ): Promise<boolean> {
   try {
-    const { loadActivePack } = await import('./schema-pack/load-active.ts');
+    const { resolveActivePackForSource } = await import('./schema-pack/load-active.ts');
     const { loadConfig } = await import('./config.ts');
     const cfg = loadConfig();
-    const resolved = await loadActivePack({ cfg, remote: false });
-    const phases = resolved.manifest.phases ?? [];
+    const resolved = await resolveActivePackForSource({
+      engine,
+      cfg,
+      remote: false,
+      sourceId,
+    });
+    const phases = resolved.pack.manifest.phases ?? [];
     return phases.includes(phase);
   } catch {
     return false;
@@ -1788,7 +1794,7 @@ export async function runCycle(
           summary: 'no database connected',
           details: { reason: 'no_database' },
         });
-      } else if (!(await packDeclaresPhase(engine, 'extract_atoms'))) {
+      } else if (!(await packDeclaresPhase(engine, 'extract_atoms', cycleSourceId ?? 'default'))) {
         // issue #1678: the routine cycle skip stays cheap (no per-tick backlog
         // count), but the detail is greppable — `pack_gated: true` lets the
         // `extract_atoms_backlog` doctor check / log scrapers tell a
@@ -1904,7 +1910,7 @@ export async function runCycle(
           summary: 'no database connected',
           details: { reason: 'no_database' },
         });
-      } else if (!(await packDeclaresPhase(engine, 'synthesize_concepts'))) {
+      } else if (!(await packDeclaresPhase(engine, 'synthesize_concepts', cycleSourceId ?? 'default'))) {
         // issue #1678: same greppable marker as extract_atoms. (No doctor
         // backlog check for synthesize_concepts this wave — Codex #12: that
         // phase has no real eligibility predicate yet, so a check would be a
