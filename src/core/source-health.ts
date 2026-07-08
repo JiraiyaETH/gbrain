@@ -54,6 +54,12 @@ export interface SourceMetrics {
 
 export type PriorityLabel = 'high' | 'normal' | 'low';
 
+export interface CodeIndexMarker {
+  last_reindex_at: string;
+  reindexed_head_sha: string;
+  code_pages?: number;
+}
+
 /** Numeric priority used by MinionQueue.add({ priority }). Lower = sooner. */
 const PRIORITY_VALUE: Record<PriorityLabel, number> = {
   high: -10,
@@ -103,6 +109,41 @@ export function resolvePriorityLabel(
 /** Numeric priority for queue.add. */
 export function resolvePriority(sourceId: string, config: unknown): number {
   return PRIORITY_VALUE[resolvePriorityLabel(sourceId, config)];
+}
+
+export function isCodeStrategyConfig(config: unknown): boolean {
+  return parseSourceConfig(config).strategy === 'code';
+}
+
+export function readCodeIndexMarker(config: unknown): CodeIndexMarker | null {
+  const cfg = parseSourceConfig(config);
+  const marker = cfg.code_index;
+  if (!marker || typeof marker !== 'object' || Array.isArray(marker)) return null;
+  const raw = marker as Record<string, unknown>;
+  if (typeof raw.last_reindex_at !== 'string') return null;
+  if (typeof raw.reindexed_head_sha !== 'string' || !raw.reindexed_head_sha.trim()) return null;
+  const out: CodeIndexMarker = {
+    last_reindex_at: raw.last_reindex_at,
+    reindexed_head_sha: raw.reindexed_head_sha,
+  };
+  if (typeof raw.code_pages === 'number' && Number.isFinite(raw.code_pages)) {
+    out.code_pages = raw.code_pages;
+  }
+  return out;
+}
+
+export function currentGitHeadSha(localPath: string | null): string | null {
+  if (!localPath) return null;
+  try {
+    const out = execFileSync('git', ['-C', localPath, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { shouldDispatchFullCycle } from '../src/commands/autopilot.ts';
+import {
+  shouldDispatchFullCycle,
+  shouldDispatchSyncFreshnessForSource,
+} from '../src/commands/autopilot.ts';
 
 describe('autopilot full-cycle dispatch predicate', () => {
   test('stale per-source cycle freshness forces fan-out even when score plan is targeted-sized', () => {
@@ -21,6 +24,29 @@ describe('autopilot full-cycle dispatch predicate', () => {
       minutesSinceLastFull: 10,
       fullCycleFloorMin: 60,
       hasStaleCycleSources: false,
+    })).toBe(false);
+  });
+});
+
+describe('autopilot sync-freshness fan-out predicate', () => {
+  test('code-strategy sources are not sync freshness targets', () => {
+    expect(shouldDispatchSyncFreshnessForSource({
+      local_path: '/repo',
+      config: { strategy: 'code' },
+    })).toBe(false);
+  });
+
+  test('non-code local sources remain sync freshness targets', () => {
+    expect(shouldDispatchSyncFreshnessForSource({
+      local_path: '/repo',
+      config: { federated: true },
+    })).toBe(true);
+  });
+
+  test('sources without local_path are not sync freshness targets', () => {
+    expect(shouldDispatchSyncFreshnessForSource({
+      local_path: null,
+      config: { federated: true },
     })).toBe(false);
   });
 });
