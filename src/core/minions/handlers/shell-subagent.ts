@@ -96,6 +96,7 @@ export function makeShellSubagentHandler(deps: ShellSubagentDeps) {
       jobId: ctx.id,
       allowedSlugPrefixes: data.allowed_slug_prefixes,
       brainId: data.brain_id,
+      sourceId: typeof data.source_id === 'string' && data.source_id.length > 0 ? data.source_id : undefined,
     });
 
     for (const block of parsed.blocks) {
@@ -132,6 +133,7 @@ function buildPutPageContext(opts: {
   jobId: number;
   allowedSlugPrefixes?: string[];
   brainId?: string;
+  sourceId?: string;
 }): OperationContext {
   return {
     engine: opts.engine,
@@ -143,7 +145,7 @@ function buildPutPageContext(opts: {
     },
     dryRun: false,
     remote: true,
-    sourceId: 'default',
+    sourceId: opts.sourceId ?? 'default',
     jobId: opts.jobId,
     subagentId: opts.jobId,
     viaSubagent: true,

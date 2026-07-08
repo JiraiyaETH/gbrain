@@ -235,6 +235,7 @@ export interface SynthesizePhaseOpts {
   date?: string;
   from?: string;
   to?: string;
+  sourceId?: string;
   /**
    * Disable the self-consumption guard. Wired from the
    * `--unsafe-bypass-dream-guard` CLI flag. NOT auto-applied for `--input`
@@ -466,6 +467,7 @@ export async function runPhaseSynthesize(
           model: subagentModel,
           max_turns: 30,
           allowed_slug_prefixes: allowedSlugPrefixes,
+          ...(opts.sourceId && opts.sourceId !== 'default' ? { source_id: opts.sourceId } : {}),
         };
         // Idempotency key parity:
         //   - single-chunk → legacy `dream:synth:<filePath>:<hash16>` (byte-
@@ -525,7 +527,7 @@ export async function runPhaseSynthesize(
     // even if Sonnet drops the chunk suffix.
     // v0.32.8: refs carry source_id so reverseWriteRefs picks the correct
     // (source, slug) row (currently always 'default' from subagent put_page).
-    const writtenRefs = await collectChildPutPageSlugs(engine, childIds, chunkInfo);
+    const writtenRefs = await collectChildPutPageSlugs(engine, childIds, chunkInfo, opts.sourceId ?? 'default');
 
     // Dual-write: reverse-render each DB row → markdown file.
     const reverseWriteCount = await reverseWriteRefs(engine, opts.brainDir, writtenRefs);
@@ -1063,6 +1065,7 @@ async function collectChildPutPageSlugs(
   engine: BrainEngine,
   childIds: number[],
   chunkInfo: Map<number, { idx: number; hash6: string }>,
+  sourceId = 'default',
 ): Promise<Array<{ slug: string; source_id: string }>> {
   if (childIds.length === 0) return [];
   // Raw fetch — NO SELECT DISTINCT. Preserves per-child slug duplicates so
@@ -1071,11 +1074,9 @@ async function collectChildPutPageSlugs(
   // strings from pre-fix data ((input #>> '{}')::jsonb->>'slug').
   //
   // v0.32.8: returns Array<{slug, source_id}> instead of string[]. Subagent
-  // put_page tool schema doesn't expose source_id (subagents are scoped to
-  // a single source); default to 'default' for the current dream-cycle
-  // product behavior. Threading the source_id through reverseWriteRefs
-  // guarantees getPage targets the correct (source, slug) row instead of
-  // the first DB match.
+  // put_page tool schema doesn't expose source_id; the cycle scopes child
+  // jobs to one source via their OperationContext and threads that same
+  // source here so reverseWriteRefs targets the matching (source, slug) row.
   const rows = await engine.executeRaw<{ job_id: number; slug: string }>(
     `SELECT job_id,
             COALESCE(input->>'slug', (input #>> '{}')::jsonb->>'slug') AS slug
@@ -1112,7 +1113,7 @@ async function collectChildPutPageSlugs(
       rewritten.add(ci ? rewriteChunkedSlug(slug, ci.hash6, ci.idx) : slug);
     }
   }
-  return Array.from(rewritten).sort().map(slug => ({ slug, source_id: 'default' }));
+  return Array.from(rewritten).sort().map(slug => ({ slug, source_id: sourceId }));
 }
 
 /**
@@ -1315,6 +1316,7 @@ function makeError(cls: string, code: string, message: string, hint?: string): P
 // double-encoded jsonb regression). Not part of the runtime contract.
 export const __testing = {
   collectChildPutPageSlugs,
+  reverseWriteRefs,
   buildSynthesisPrompt,
   DEFAULT_DREAM_SYNTHESIZE_ROUTES,
   parseDreamSynthesizeRoutes,

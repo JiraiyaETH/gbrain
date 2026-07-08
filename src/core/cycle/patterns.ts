@@ -37,6 +37,7 @@ import {
 export interface PatternsPhaseOpts {
   brainDir: string;
   dryRun: boolean;
+  sourceId?: string;
   yieldDuringPhase?: () => Promise<void>;
 }
 
@@ -103,6 +104,7 @@ export async function runPhasePatterns(
       model: subagentModel,
       max_turns: 30,
       allowed_slug_prefixes: allowedSlugPrefixes,
+      ...(opts.sourceId && opts.sourceId !== 'default' ? { source_id: opts.sourceId } : {}),
     };
     const submitOpts: Partial<MinionJobInput> = {
       max_stalled: 3,
@@ -131,7 +133,7 @@ export async function runPhasePatterns(
     // Collect refs the subagent wrote (codex finding #2 — query tool exec rows).
     // v0.32.8: refs carry source_id so reverseWriteRefs targets the right
     // (source, slug) row instead of the first DB match.
-    const writtenRefs = await collectChildPutPageSlugs(engine, [job.id]);
+    const writtenRefs = await collectChildPutPageSlugs(engine, [job.id], opts.sourceId ?? 'default');
 
     // Reverse-write to fs.
     const reverseWriteCount = await reverseWriteRefs(engine, opts.brainDir, writtenRefs);
@@ -278,13 +280,12 @@ function displayPathFromLikePrefix(likePrefix: string): string {
 async function collectChildPutPageSlugs(
   engine: BrainEngine,
   childIds: number[],
+  sourceId = 'default',
 ): Promise<Array<{ slug: string; source_id: string }>> {
   if (childIds.length === 0) return [];
-  // v0.32.8: subagent put_page tool schema doesn't expose source_id (subagents
-  // are scoped to a single source). Default to 'default' here; multi-source
-  // dream cycles are a v0.33 follow-up. The point of threading source_id is
-  // so reverseWriteRefs can pass it through getPage and pick the correct
-  // (source_id, slug) row instead of whatever the DB happens to return.
+  // v0.32.8: refs carry source_id so reverseWriteRefs can pass it through
+  // getPage and pick the correct (source_id, slug) row. The child job's
+  // OperationContext is scoped to the same single source.
   const rows = await engine.executeRaw<{ slug: string }>(
     `SELECT DISTINCT
             COALESCE(input->>'slug', (input #>> '{}')::jsonb->>'slug') AS slug
@@ -326,7 +327,7 @@ async function collectChildPutPageSlugs(
   }
 
   return Array.from(slugs).sort()
-    .map(slug => ({ slug, source_id: 'default' }));
+    .map(slug => ({ slug, source_id: sourceId }));
 }
 
 // ── Reverse-write ────────────────────────────────────────────────────
@@ -413,7 +414,9 @@ function makeError(cls: string, code: string, message: string, hint?: string): P
 
 export const __testing = {
   buildPatternsPrompt,
+  collectChildPutPageSlugs,
   deriveDreamRouteLikePrefix,
   displayPathFromLikePrefix,
   gatherReflections,
+  reverseWriteRefs,
 };
