@@ -10,6 +10,7 @@ import { clampSearchLimit } from './engine.ts';
 import type { GBrainConfig } from './config.ts';
 import type { PageType } from './types.ts';
 import { importFromContent } from './import-file.ts';
+import { parseMarkdown } from './markdown.ts';
 import { writePageThrough } from './write-through.ts';
 import { hybridSearch, hybridSearchCached, stampContentFlags } from './search/hybrid.ts';
 import { expandQuery } from './search/expansion.ts';
@@ -813,11 +814,13 @@ const put_page: Operation = {
     source_kind: { type: 'string', required: false, description: 'Ingestion channel taxonomy (capture-cli | put_page | webhook | …). Remote callers: SERVER-STAMPED, client value ignored.' },
     source_uri: { type: 'string', required: false, description: 'Original URI/path/message-id the event carried. Remote callers: SERVER-STAMPED null.' },
     ingested_via: { type: 'string', required: false, description: 'Richer label paired with source_kind. Remote callers: SERVER-STAMPED.' },
+    allow_empty_overwrite: { type: 'boolean', required: false, description: 'Explicitly allow replacing a page that has non-empty compiled_truth with an empty parsed body.' },
   },
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
     const slug = p.slug as string;
+    const content = p.content as string;
 
     // v0.39.3.0 CV6 trust gate for provenance write-through (WARN-8).
     // Only trusted LOCAL callers (ctx.remote === false — capture CLI,
@@ -883,7 +886,26 @@ const put_page: Operation = {
       // Pack load failed; fall through to legacy inferType behavior.
       activePack = undefined;
     }
-    const result = await importFromContent(ctx.engine, slug, p.content as string, {
+
+    const incomingParsed = parseMarkdown(
+      content,
+      slug + '.md',
+      activePack ? { activePack } : undefined,
+    );
+    const incomingBodyEmpty =
+      incomingParsed.compiled_truth.trim().length === 0 &&
+      incomingParsed.timeline.trim().length === 0;
+    if (incomingBodyEmpty && p.allow_empty_overwrite !== true) {
+      const existing = await ctx.engine.getPage(slug, ctx.sourceId ? { sourceId: ctx.sourceId } : undefined);
+      if (existing && (existing.compiled_truth ?? '').trim().length > 0) {
+        throw new OperationError(
+          'invalid_params',
+          `Refusing to overwrite non-empty page '${slug}' with an empty parsed body. Pass allow_empty_overwrite: true to intentionally clear it.`,
+        );
+      }
+    }
+
+    const result = await importFromContent(ctx.engine, slug, content, {
       noEmbed,
       // v0.42 (#1699): untrusted callers can't smuggle gate-owned frontmatter
       // markers (quarantine/content_flag/embed_skip). Fail-closed — anything
