@@ -47,6 +47,15 @@ function fakeReverseWriteEngine(): BrainEngine {
   } as unknown as BrainEngine;
 }
 
+function fakeGatherEngine(calls: Array<{ sql: string; params: unknown[] }>): BrainEngine {
+  return {
+    executeRaw: async <T,>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      calls.push({ sql, params });
+      return [] as T[];
+    },
+  } as unknown as BrainEngine;
+}
+
 describe('cycle source-aware dream writes', () => {
   test('dream phases thread non-default source_id into child job payloads', () => {
     expect(synthesizeSrc).toContain("source_id: opts.sourceId");
@@ -93,6 +102,28 @@ describe('cycle source-aware dream writes', () => {
     expect(scopedRefs).toEqual([
       { slug: 'wiki/personal/reflections/2026-07-08-robotics-a1b2c3', source_id: 'robotics' },
     ]);
+  });
+
+  test('patterns gatherReflections filters by sourceId when the cycle is source-scoped', async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const engine = fakeGatherEngine(calls);
+
+    await patternsTesting.gatherReflections(engine, 30, 'personal/reflections/%', 'robotics');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).toContain('AND source_id = $3');
+    expect(calls[0].params[2]).toBe('robotics');
+  });
+
+  test('patterns gatherReflections keeps the legacy unscoped read when sourceId is omitted', async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const engine = fakeGatherEngine(calls);
+
+    await patternsTesting.gatherReflections(engine, 30, 'personal/reflections/%');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).not.toContain('source_id = $3');
+    expect(calls[0].params).toHaveLength(2);
   });
 
   test('synthesize reverseWriteRefs writes non-default sources under brainDir/.sources', async () => {
