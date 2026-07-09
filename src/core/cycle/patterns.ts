@@ -60,7 +60,7 @@ export async function runPhasePatterns(
     );
 
     // Gather reflections within lookback window.
-    const reflections = await gatherReflections(engine, config.lookbackDays, reflectionLikePrefix);
+    const reflections = await gatherReflections(engine, config.lookbackDays, reflectionLikePrefix, opts.sourceId);
     if (reflections.length < config.minEvidence) {
       return skipped(
         'insufficient_evidence',
@@ -198,16 +198,21 @@ async function gatherReflections(
   engine: BrainEngine,
   lookbackDays: number,
   reflectionLikePrefix: string,
+  sourceId?: string,
 ): Promise<ReflectionRef[]> {
   const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
+  const params: unknown[] = [since, reflectionLikePrefix];
+  const sourceClause = sourceId ? 'AND source_id = $3' : '';
+  if (sourceId) params.push(sourceId);
   const rows = await engine.executeRaw<{ slug: string; title: string | null; compiled_truth: string | null }>(
     `SELECT slug, title, compiled_truth
        FROM pages
       WHERE slug LIKE $2
         AND updated_at >= $1::timestamptz
+        ${sourceClause}
       ORDER BY updated_at DESC
       LIMIT 100`,
-    [since, reflectionLikePrefix],
+    params,
   );
   return rows.map(r => ({
     slug: r.slug,
