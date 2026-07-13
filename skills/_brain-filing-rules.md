@@ -21,27 +21,11 @@ pack. If the active pack changes, update the schema pack first via
 
 ## Current active file-backed shelves
 
-For `jiraiya-brain v0.3.3`, the file-backed shelves are:
-
-| Type | Directory |
-|---|---|
-| person | `people/` |
-| company | `companies/` |
-| meeting | `meetings/` |
-| contract | `contracts/` |
-| research | `research/` |
-| report | `reports/`, `dream-cycle-summaries/` |
-| log | `workout/`, `food/` |
-| concept | `concepts/` |
-| idea | `ideas/` |
-| project | `projects/` |
-| note | `notes/` |
-| writing | `writing/` |
-| source | `sources/` |
-| personal | `personal/` |
-| conversation | `conversations/` |
-
-`atom` is DB-only in this schema and has no file-backed directory.
+The canonical, always-current shelf table is the **ACTIVE schema pack** itself —
+read it via `gbrain schema show --json` (or consult `skills/brain-taxonomist/SKILL.md`,
+which reads the same pack as data), with the generated `_brain-filing-rules.json`
+sidecar as its machine-readable mirror. Do not hardcode a shelf table here: it drifts
+out of date as the pack evolves.
 
 ## The Rule
 
