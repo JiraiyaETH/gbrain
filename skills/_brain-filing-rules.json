@@ -3,7 +3,7 @@
   "companion": "_brain-filing-rules.md",
   "description": "Machine-readable brain filing rules for skill writes_to auditing. The active schema pack is canonical for page types; this sidecar mirrors its file-backed path prefixes so check-resolvable can detect skill/schema drift.",
   "generated_by": "regen-brain-filing-rules.sh",
-  "generated_at": "2026-07-06T06:23:19Z",
+  "generated_at": "2026-07-13T02:32:00Z",
   "pack": {
     "name": "jiraiya-brain",
     "version": "0.3.14"
@@ -66,12 +66,30 @@
     },
     {
       "kind": "report",
+      "directory": "reports/",
+      "examples": [
+        "dream cycle summaries",
+        "maintenance cycle indexes"
+      ],
+      "description": "Date-keyed summaries produced by the dream/maintenance cycle."
+    },
+    {
+      "kind": "report",
       "directory": "dream-cycle-summaries/",
       "examples": [
         "dream cycle summaries",
         "maintenance cycle indexes"
       ],
       "description": "Date-keyed summaries produced by the dream/maintenance cycle."
+    },
+    {
+      "kind": "log",
+      "directory": "workout/",
+      "examples": [
+        "food logs",
+        "nutrition entries"
+      ],
+      "description": "Health/nutrition log pages whose primary subject is a food entry."
     },
     {
       "kind": "log",
