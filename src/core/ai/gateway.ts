@@ -2490,6 +2490,39 @@ async function resolveChatProvider(modelStr: string): Promise<{ model: any; reci
   return { model, recipe, modelId: parsed.modelId };
 }
 
+/**
+ * Normalize an Anthropic base URL so the AI SDK always targets `/v1/messages`.
+ *
+ * The `@ai-sdk/anthropic` provider silently reads `process.env.ANTHROPIC_BASE_URL`
+ * when no explicit `baseURL` is passed, then appends `/messages`. A host or user
+ * that sets `ANTHROPIC_BASE_URL=https://api.anthropic.com` (no `/v1` — a natural
+ * value, and exactly what some host apps inject into the shell) makes every
+ * native-anthropic chat call hit `https://api.anthropic.com/messages` → HTTP 404,
+ * which `normalizeAIError` surfaces as an opaque `AIConfigError: ... Not Found`
+ * with no hint at the cause. The SDK's own default baseURL carries the `/v1`; we
+ * bring an env/config-provided host to the same shape instead of letting a
+ * path-less value silently 404 the dream verdict judge (and every other native
+ * chat).
+ *
+ * Rule: if the URL has no path (pathname empty or `/`), append `/v1`. A base URL
+ * that already carries a path — a custom proxy mount, or the correct `/v1` — is
+ * passed through untouched. Empty input returns undefined so the SDK default
+ * (`https://api.anthropic.com/v1`) applies and behavior is byte-identical to the
+ * pre-fix code when no base URL is configured.
+ */
+export function normalizeAnthropicBaseURL(raw?: string): string | undefined {
+  if (!raw || !raw.trim()) return undefined;
+  const trimmed = raw.trim().replace(/\/+$/, '');
+  try {
+    const u = new URL(trimmed);
+    if (u.pathname === '' || u.pathname === '/') return `${u.origin}/v1`;
+    return trimmed;
+  } catch {
+    // Not a parseable absolute URL — pass through untouched rather than guess.
+    return trimmed;
+  }
+}
+
 function instantiateChat(recipe: Recipe, modelId: string, cfg: AIGatewayConfig): any {
   switch (recipe.implementation) {
     case 'native-openai': {
@@ -2505,7 +2538,11 @@ function instantiateChat(recipe: Recipe, modelId: string, cfg: AIGatewayConfig):
     case 'native-anthropic': {
       const apiKey = cfg.env.ANTHROPIC_API_KEY;
       if (!apiKey) throw new AIConfigError(`Anthropic chat requires ANTHROPIC_API_KEY.`, recipe.setup_hint);
-      return createAnthropic({ apiKey }).languageModel(modelId);
+      // Pass baseURL explicitly (normalized) so a path-less env/config value
+      // can't 404. When none is set, `normalizeAnthropicBaseURL` returns
+      // undefined and this is identical to `createAnthropic({ apiKey })`.
+      const baseURL = normalizeAnthropicBaseURL(cfg.base_urls?.['anthropic'] ?? cfg.env.ANTHROPIC_BASE_URL);
+      return createAnthropic({ apiKey, ...(baseURL ? { baseURL } : {}) }).languageModel(modelId);
     }
     case 'openai-compatible': {
       // D12=A: unified auth via Recipe.resolveAuth (or default).
