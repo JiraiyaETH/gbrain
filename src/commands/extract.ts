@@ -384,7 +384,10 @@ export async function extractLinksFromFile(
     async resolve(name: string, dirHint?: string | string[]): Promise<string | null> {
       if (!name) return null;
       const trimmed = name.trim();
-      if (/^[a-z][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/.test(trimmed) && allSlugs.has(trimmed)) {
+      // Multi-segment slug shape (one OR MORE `/segment`s) → exact allSlugs
+      // hit, mirroring makeResolver Step 1. Keeps deep frontmatter targets
+      // (personal/reflections/foo) off the fuzzy fallback path.
+      if (/^[a-z][a-z0-9-]*(\/[a-z0-9][a-z0-9-]*)+$/.test(trimmed) && allSlugs.has(trimmed)) {
         return trimmed;
       }
       const hints = Array.isArray(dirHint) ? dirHint : (dirHint ? [dirHint] : []);

@@ -1119,8 +1119,11 @@ export function makeResolver(
 
       const hints = Array.isArray(dirHint) ? dirHint : (dirHint ? [dirHint] : []);
 
-      // Step 1: already a slug? (dir/name shape, lowercase, hyphenated)
-      if (/^[a-z][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/.test(trimmed)) {
+      // Step 1: already a slug? (dir/name shape, lowercase, hyphenated).
+      // Accepts one OR MORE trailing `/segment`s so multi-segment slugs
+      // (personal/reflections/foo, contracts/theo/bar) take the deterministic
+      // getPage fast-path instead of falling to fuzzy title matching.
+      if (/^[a-z][a-z0-9-]*(\/[a-z0-9][a-z0-9-]*)+$/.test(trimmed)) {
         const page = await engine.getPage(trimmed);
         if (page) {
           cache.set(cacheKey, trimmed);
