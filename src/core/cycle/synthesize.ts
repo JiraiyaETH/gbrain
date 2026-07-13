@@ -1138,6 +1138,27 @@ C. People mentions: search first; if a page exists, do not put_page over it (the
 
 D. If nothing in this transcript meets the bar (significance filter already passed but the content is still routine), return without writing anything.
 
+FRONTMATTER LINKS (typed edges — precision over recall)
+On every page you write, connect it to EXISTING brain pages by adding these YAML frontmatter fields (list form, exact slugs only). Your schema pack turns the valid ones into typed graph edges; unmatched fields stay inert, so target the right pages and let the pack decide what materializes.
+- relevant_to: 2-5 existing pages this output is genuinely ABOUT — projects, concepts, ideas, research, people, or companies. This is the primary connective tissue. A few precise links beat many loose ones.
+- derived_from: (Originals/ideas only) the 1-2 existing source pages this idea explicitly BUILDS ON — a source, research page, prior idea/concept, meeting, or contract. Use only when the idea clearly grew out of that page.
+- supersedes: ONLY when this page explicitly REPLACES a specific prior page (a correction that makes the old page wrong) — NOT lineage, and NOT the case where you update an existing page under its own slug. Omit otherwise.
+
+HARD RULES for these fields:
+- Reference ONLY slugs you have actually SEEN exist (in your search-tool results or the context above). If you are unsure a page exists, DO NOT list it in frontmatter — write it in the body as a [[wikilink]] instead (that becomes a harmless mention).
+- Never invent, guess, or construct a slug.
+- Maximum 2-5 relevant_to entries. Precision over recall.
+- Add NO frontmatter fields beyond these and the ones you already emit (type, title, and any you were already writing).
+
+Example frontmatter for a page you write:
+---
+type: personal
+title: ...
+relevant_to:
+  - projects/design-library
+  - concepts/adversarial-verification
+---
+
 TRANSCRIPT (${transcriptHeader})
 ---
 ${chunkText}

@@ -1,6 +1,6 @@
 ---
 name: meeting-ingestion
-version: 1.6.1
+version: 1.6.2
 description: |
   Ingest meeting transcripts into brain pages with attendee enrichment, entity
   propagation, and timeline merge. A meeting is NOT fully ingested until the
@@ -125,12 +125,25 @@ id: fireflies-{recording_id}  # deterministic dedup hook (engine-level, cross-sl
 attendees:
   - {Attendee Name}
   - {people/known-attendee-slug}
+relevant_to:
+  - {projects/existing-project-slug}
+  - {concepts/existing-concept-slug}
 ---
 ```
 `attendees:` is relationship-bearing frontmatter: the active schema pack maps it to
 `person --attended--> meeting`, matching Garry's v0.13 frontmatter edge contract.
-Keep it stable and intentional. Other volatile details (`duration_min`, `source`,
-`updated`, …) belong in body prose because they do not create meeting relationships.
+Keep it stable and intentional.
+
+`relevant_to:` is the SECOND relationship-bearing field to fill: list the topics
+genuinely discussed in this meeting — the **projects, concepts, ideas, and research
+pages** (and companies, where the active pack's `meeting` → `relevant_to` `dir_hint`
+allows them) that the conversation was actually ABOUT. **Existing pages only, 2-6
+entries, exact slugs.** These become `meeting --relevant_to--> topic` typed edges, so
+a topic query surfaces the meetings where it was discussed. Do NOT invent slugs — if
+unsure a page exists, reference it in the body prose instead (a harmless mention);
+and do NOT list attendees here (those go in `attendees:`). Other volatile details
+(`duration_min`, `source`, `updated`, …) belong in body prose because they do not
+create meeting relationships.
 
 Body:
 ```markdown
@@ -315,3 +328,12 @@ updated, {N} action items captured."
   meetings are reachable via `attended` back-links.
 - **Rewriting/clobbering an already-rich entity page on reconcile** — the autopilot
   enriches pages from other sources (e.g. DMs); insert one timeline line surgically.
+
+## Changelog
+
+### v1.6.2 — jiraiya-brain pack v0.4.0
+- Added `relevant_to:` to the minimal meeting frontmatter alongside `attendees:`.
+  Fill it with the topics genuinely discussed (existing projects/concepts/ideas/
+  research pages, 2-6 entries) so `meeting --relevant_to--> topic` typed edges
+  materialize and topic queries surface the meetings that covered them. Existing
+  pages only; never invent slugs; attendees stay in `attendees:`.

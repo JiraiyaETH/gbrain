@@ -1,6 +1,6 @@
 ---
 name: idea-ingest
-version: 1.0.0
+version: 1.1.0
 description: |
   Ingest links, articles, tweets, and ideas into the brain. Fetch content, save
   to brain with analysis, create author people page, and cross-link. Use when the
@@ -85,6 +85,21 @@ Format: `- **YYYY-MM-DD** | Referenced in [page title](path) — brief context`
    citation text. Strong typed edges (`advises`, `works_at`, `invested_in`, etc.)
    require clear local evidence, otherwise default to `mentions`.
 
+   **Connective frontmatter (when the pack declares it for this page type):**
+   - `relevant_to:` — 2-5 EXISTING brain pages this capture is genuinely ABOUT
+     (projects, concepts, ideas, research the idea concerns). These materialize
+     `--relevant_to-->` typed edges so a topic query surfaces this capture.
+   - `derived_from:` — the 1-2 EXISTING source/prior pages this idea explicitly
+     BUILDS ON (the article, tweet, prior concept, or research it grew out of).
+     Use only when the lineage is real, not for every co-mention.
+   HARD RULES: exact slugs only, and only pages you have actually SEEN exist
+   (via `search`); never invent or guess a slug — if unsure a page exists, drop
+   it to a body `[[wikilink]]` (a harmless mention) instead. Precision over
+   recall: a few right links beat many loose ones. Confirm the field + page type
+   is declared in the active pack's `frontmatter_links` before relying on it to
+   materialize (e.g. `idea`/`concept`/`source` carry `relevant_to`; `idea`/
+   `concept` also carry `derived_from`).
+
 5. **Analyze for the user.** Reply with analysis that connects the content to what the brain knows. Think about:
    - Active projects — is this relevant?
    - Contradictions — does this challenge existing brain knowledge?
@@ -132,3 +147,14 @@ Format: `- **YYYY-MM-DD** | Referenced in [page title](path) — brief context`
 - Skipping the author people page
 - Not cross-linking material entities and relationships
 - Ingesting without checking brain first for existing coverage
+
+## Changelog
+
+### v1.1.0 — jiraiya-brain pack v0.4.0
+- Made the connective-frontmatter guidance explicit in Phase 4: name
+  `relevant_to:` (2-5 existing topic pages the capture is about) and
+  `derived_from:` (the 1-2 existing source/prior pages it builds on) with the
+  same hard rules used by the dream-cycle writers — exact slugs, seen pages
+  only, never invent, precision over recall, and confirm the field is declared
+  for the page type in the active pack's `frontmatter_links`. Replaces the prior
+  vague "write relationship frontmatter per the pack" note.
