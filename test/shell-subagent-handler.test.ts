@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { join } from 'node:path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
-import { makeShellSubagentHandler } from '../src/core/minions/handlers/shell-subagent.ts';
+import { makeShellSubagentHandler, __testing } from '../src/core/minions/handlers/shell-subagent.ts';
 import { MinionQueue } from '../src/core/minions/queue.ts';
 import type { MinionJobContext } from '../src/core/minions/types.ts';
 import type { GBrainConfig } from '../src/core/config.ts';
@@ -85,5 +85,30 @@ describe('shell-subagent handler', () => {
 
     const disallowed = await engine.getPage('wiki/private/not-allowed');
     expect(disallowed).toBeNull();
+  });
+});
+
+describe('shell-subagent claude -p model wiring', () => {
+  test('buildClaudeArgs appends --model only when a model is pinned', () => {
+    expect(__testing.buildClaudeArgs('claude-opus-4-8')).toEqual(['-p', '--model', 'claude-opus-4-8']);
+    expect(__testing.buildClaudeArgs(null)).toEqual(['-p']);
+  });
+
+  test('resolveCliModel strips the provider prefix the queue validator requires', () => {
+    // Dream cycle stores provider-qualified ids; claude --model wants the bare id.
+    expect(__testing.resolveCliModel('anthropic:claude-opus-4-8')).toBe('claude-opus-4-8');
+    expect(__testing.resolveCliModel('claude-opus-4-8')).toBe('claude-opus-4-8');
+    // Absent / empty → null → no --model flag (preserves legacy default behavior).
+    expect(__testing.resolveCliModel(undefined)).toBeNull();
+    expect(__testing.resolveCliModel('')).toBeNull();
+    expect(__testing.resolveCliModel('   ')).toBeNull();
+  });
+
+  test('a pinned payload model reaches the spawned claude -p as --model', () => {
+    // End-to-end through resolveCliModel → buildClaudeArgs: the exact argv the
+    // spawn receives for a dream writer job carrying the Opus 4.8 pin.
+    const payloadModel = 'anthropic:claude-opus-4-8';
+    const argv = __testing.buildClaudeArgs(__testing.resolveCliModel(payloadModel));
+    expect(argv).toEqual(['-p', '--model', 'claude-opus-4-8']);
   });
 });
