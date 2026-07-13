@@ -14,6 +14,7 @@ import type { GBrainConfig } from '../../config.ts';
 import { loadConfig } from '../../config.ts';
 import { operations, type OperationContext } from '../../operations.ts';
 import { serializeMarkdown } from '../../markdown.ts';
+import { splitProviderModelId } from '../../model-id.ts';
 import type { MinionJobContext, SubagentHandlerData } from '../types.ts';
 
 const DEFAULT_CLAUDE_BIN = 'claude';
@@ -81,8 +82,12 @@ export function makeShellSubagentHandler(deps: ShellSubagentDeps) {
 
     const claudeBin = (await engine.getConfig('dream.synthesize.claude_bin').catch(() => null))?.trim()
       || DEFAULT_CLAUDE_BIN;
+    // The job payload already carries the resolved model (the dream cycle sets
+    // it for queue-validation). Pin the spawned `claude -p` to it instead of
+    // letting the process inherit the interactive CLI's configured model.
+    const cliModel = resolveCliModel(data.model);
     const prompt = `${data.prompt}${OUTPUT_CONTRACT}`;
-    const { stdout, stderr, exitCode } = await runClaudePrint(claudeBin, prompt, ctx);
+    const { stdout, stderr, exitCode } = await runClaudePrint(claudeBin, prompt, ctx, cliModel);
     if (exitCode !== 0) {
       throw new Error(`shell-subagent claude process exited ${exitCode}: ${tail(stderr, STDERR_MAX_CHARS)}`);
     }
@@ -154,17 +159,45 @@ function buildPutPageContext(opts: {
   };
 }
 
+/**
+ * Normalize a job-payload model id into the value the local `claude` CLI's
+ * `--model` flag accepts.
+ *
+ * The dream cycle stores a provider-qualified id (e.g.
+ * `anthropic:claude-opus-4-8`) because the Minions queue validator
+ * (classifyCapabilities → resolveRecipe) requires the `provider:` prefix. The
+ * `claude` CLI wants a bare alias or full model name (e.g. `opus` or
+ * `claude-opus-4-8`), so strip the provider here. Returns null when no usable
+ * model is present, which preserves the pre-existing behavior (no `--model`
+ * flag → `claude -p` uses its own configured default).
+ */
+function resolveCliModel(rawModel: unknown): string | null {
+  if (typeof rawModel !== 'string' || rawModel.trim().length === 0) return null;
+  const { model } = splitProviderModelId(rawModel);
+  const bare = model.trim();
+  return bare.length > 0 ? bare : null;
+}
+
+/**
+ * Build the argv for the `claude -p` spawn. Appends `--model <id>` only when a
+ * model is pinned; identical to the historical `['-p']` when absent.
+ */
+function buildClaudeArgs(cliModel: string | null): string[] {
+  return cliModel ? ['-p', '--model', cliModel] : ['-p'];
+}
+
 async function runClaudePrint(
   claudeBin: string,
   prompt: string,
   ctx: MinionJobContext,
+  cliModel: string | null,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
 
   let proc: ChildProcess;
   try {
-    proc = spawn(claudeBin, ['-p'], {
+    proc = spawn(claudeBin, buildClaudeArgs(cliModel), {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -286,4 +319,6 @@ export const __testing = {
   parsePageBlocks,
   renderBlockContent,
   OUTPUT_CONTRACT,
+  resolveCliModel,
+  buildClaudeArgs,
 };
