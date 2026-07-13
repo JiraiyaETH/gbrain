@@ -39,7 +39,10 @@ This skill guarantees:
 - Tiered enrichment: Tier 1 (full), Tier 2 (medium), Tier 3 (minimal) based on notability
 - No stubs: every new page has meaningful content from web search or existing brain context
 
-> **Filing rule:** Read `skills/_brain-filing-rules.md` before creating any new page.
+> **Filing rule:** For the path + type of any new page, consult
+> `skills/brain-taxonomist/SKILL.md` — the ACTIVE schema pack via `gbrain schema show
+> --json`, never a hardcoded directory. `skills/_brain-filing-rules.md` still covers the
+> non-pack conventions (back-linking, citations, notability).
 
 > **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
 > **Convention:** See `skills/conventions/post-run-retrieval-gate.md` after
@@ -339,6 +342,11 @@ not manually spam `add_link` for ordinary enrichment links; do verify via the
 `auto_links` field in the put_page response (`{ created, removed, unresolved,
 errors }`).
 Timeline entries still need explicit `gbrain timeline-add` calls.
+
+**Embedding (make the write searchable):** Writes via `gbrain put` / `gbrain capture`
+(local CLI) embed automatically inline, so the page is searchable immediately. If the
+content instead lands via a file edit + `gbrain sync --no-embed`, finish the pass with
+`gbrain embed --stale` so the new or changed chunks get vectors.
 
 If `auto_links.created` includes unexpected strong typed edges, repair the page
 text or downgrade the edge before reporting the enrichment done.

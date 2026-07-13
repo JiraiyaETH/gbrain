@@ -50,7 +50,9 @@ live in other skills. Before writing anything, read and OBEY:
   contract supports relationship queries without outranking canonical person,
   company, or project pages for broad identity queries.
 - **`brain-ops`** — the read → reconcile → write cycle; brain-first lookup.
-- **`_brain-filing-rules` / `RESOLVER.md`** — where a page goes.
+- **`brain-taxonomist`** — where a page goes (path + type), from the ACTIVE schema pack
+  via `gbrain schema show --json`, never hardcoded. `_brain-filing-rules` / `RESOLVER.md`
+  still cover the non-pack conventions (back-linking, citations, notability).
 - **`enrich`** — entity enrichment. This skill produces only *thin stubs*;
   `enrich` fattens them later. Never enrich during ingest.
 

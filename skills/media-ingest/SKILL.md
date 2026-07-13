@@ -37,7 +37,10 @@ writes_to:
 
 Ingest video, audio, PDF, book, screenshot, and GitHub repo content into the brain.
 
-> **Filing rule:** Read `skills/_brain-filing-rules.md` before creating any new page.
+> **Filing rule:** For the path + type of any new page, consult
+> `skills/brain-taxonomist/SKILL.md` — the ACTIVE schema pack via `gbrain schema show
+> --json`, never a hardcoded directory. `skills/_brain-filing-rules.md` still covers the
+> non-pack conventions (back-linking, citations, notability).
 
 ## Contract
 
