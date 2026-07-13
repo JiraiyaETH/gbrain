@@ -253,6 +253,15 @@ DO NOT WRITE
 - Patterns with <${minEvidence} reflections cited.
 - Anything outside ${patternWritePrefix}.
 
+FRONTMATTER LINKS (typed edges — precision over recall)
+On each pattern page, add these YAML frontmatter fields (list form, exact slugs only) to connect it to EXISTING brain pages. Your schema pack turns the valid ones into typed graph edges.
+- relevant_to: 2-5 existing pages this pattern is genuinely ABOUT — the projects, concepts, people, or companies the motif concerns. Do NOT list the reflection evidence here; those stay as [[wikilinks]] in the body. relevant_to is for the topics/entities the pattern is about.
+- supersedes: ONLY when this page explicitly REPLACES a specific prior pattern page (a correction) — NOT the same-slug update you do when refreshing an existing pattern. Omit otherwise.
+
+HARD RULES for these fields:
+- Reference ONLY slugs you have actually SEEN exist (via the search tool or the reflections listed below). If unsure a page exists, put it in the body as a [[wikilink]] instead (a harmless mention).
+- Never invent or guess a slug. Maximum 2-5 relevant_to entries. Add no frontmatter fields beyond these and the ones you already emit.
+
 CONTEXT
 - Today: ${today}
 - Reflections in scope: ${reflections.length}
