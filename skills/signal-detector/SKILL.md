@@ -1,6 +1,6 @@
 ---
 name: signal-detector
-version: 1.0.0
+version: 1.1.0
 description: |
   Cost-aware ambient signal capture. Evaluates inbound messages for original
   thinking and entity mentions, skips operational noise, and delegates only
@@ -100,12 +100,17 @@ meetings, and concepts. An original without cross-links is a dead original.
      stub when needed for edge resolution, or a fuller page when evidence supports it.
    - If page exists but THIN → trigger enrich
    - If page exists and RICH → no action
-3. For new FACTS with specific dates → call `gbrain timeline-add <slug> <date> "<summary>"`
+3. For new FACTS with specific dates → append a dated entry to the target page's
+   `## Timeline` section in the FILE: `- **<YYYY-MM-DD>** | <summary> → [[<related-page>]]`,
+   then `gbrain put`. Do NOT use `gbrain timeline-add` — it writes a DB-only row that
+   creates no graph edge and never appears in the page file, so the back-link is
+   silently missing. Bold date + pipe is the only format `extract timeline` parses.
 
 **Auto-link (v0.10.1):** When you write/update an originals or ideas page that
 references a person or company, the auto-link post-hook on `put_page`
 automatically creates the link from the new page to that entity. You don't
-need to call `gbrain link` manually. Timeline entries still need explicit calls.
+need to call `gbrain link` manually. Timeline entries still need to be added
+explicitly (the file-based pattern above).
 If you write relationship frontmatter, consult the active schema pack first and
 use only declared `frontmatter_links`. After `put_page`, inspect `auto_links`;
 resolve or log `auto_links.unresolved` before considering the capture complete.
