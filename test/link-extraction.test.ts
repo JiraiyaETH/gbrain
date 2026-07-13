@@ -1287,6 +1287,25 @@ describe('makeResolver — fallback chain', () => {
     expect(await r.resolve('people/pedro')).toBe('people/pedro');
   });
 
+  test('step 1: multi-segment slug passthrough (deterministic, no fuzzy)', async () => {
+    // Regression: frontmatter targets with MULTI-segment slugs (>1 slash)
+    // must take the exact getPage fast-path, not fall to unreliable fuzzy.
+    // Single-slash + multi-slash both resolve; findByTitleFuzzy is never hit.
+    const engine = makeFakeEngine([
+      'personal/reflections/three-kinds-of-stuck-20118b',
+      'contracts/theo/msa-2026',
+      'people/pedro',
+    ]);
+    const r = makeResolver(engine);
+    expect(await r.resolve('personal/reflections/three-kinds-of-stuck-20118b'))
+      .toBe('personal/reflections/three-kinds-of-stuck-20118b');
+    expect(await r.resolve('contracts/theo/msa-2026')).toBe('contracts/theo/msa-2026');
+    // Single-slash behavior unchanged.
+    expect(await r.resolve('people/pedro')).toBe('people/pedro');
+    // All three resolved via Step 1 getPage — zero fuzzy fallbacks.
+    expect((engine as any)._counts().fuzzyCalls).toBe(0);
+  });
+
   test('step 2: dir-hint construction', async () => {
     const engine = makeFakeEngine(['companies/stripe']);
     const r = makeResolver(engine);
