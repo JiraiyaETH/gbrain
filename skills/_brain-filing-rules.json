@@ -3,10 +3,10 @@
   "companion": "_brain-filing-rules.md",
   "description": "Machine-readable brain filing rules for skill writes_to auditing. The active schema pack is canonical for page types; this sidecar mirrors its file-backed path prefixes so check-resolvable can detect skill/schema drift.",
   "generated_by": "regen-brain-filing-rules.sh",
-  "generated_at": "2026-07-13T05:46:16Z",
+  "generated_at": "2026-07-13T07:08:11Z",
   "pack": {
     "name": "jiraiya-brain",
-    "version": "0.4.0"
+    "version": "0.4.1"
   },
   "schema_version": 1,
   "rules": [
