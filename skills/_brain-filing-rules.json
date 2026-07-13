@@ -1,115 +1,444 @@
 {
   "version": "1.1.0",
   "companion": "_brain-filing-rules.md",
-  "schema_sync": {
-    "source": "gbrain schema show --json",
-    "pack": "jiraiya-brain",
-    "pack_version": "0.3.3",
-    "policy": "rules[].directory plus sources_dir.directory should mirror active page_types[].path_prefixes, excluding DB-only types with no path_prefixes. Run gbrain check-resolvable --strict after schema-pack changes."
-  },
   "description": "Machine-readable brain filing rules for skill writes_to auditing. The active schema pack is canonical for page types; this sidecar mirrors its file-backed path prefixes so check-resolvable can detect skill/schema drift.",
+  "generated_by": "regen-brain-filing-rules.sh",
+  "generated_at": "2026-07-06T06:23:19Z",
+  "pack": {
+    "name": "jiraiya-brain",
+    "version": "0.3.14"
+  },
+  "schema_version": 1,
   "rules": [
     {
       "kind": "person",
       "directory": "people/",
-      "examples": ["founders", "investors", "attendees", "contacts"],
+      "examples": [
+        "founders",
+        "investors",
+        "attendees",
+        "contacts"
+      ],
       "description": "A page whose primary subject is one person."
     },
     {
       "kind": "company",
       "directory": "companies/",
-      "examples": ["portfolio companies", "clients", "vendors", "organizations"],
+      "examples": [
+        "portfolio companies",
+        "clients",
+        "vendors",
+        "organizations"
+      ],
       "description": "A page whose primary subject is one company or organization."
     },
     {
       "kind": "meeting",
       "directory": "meetings/",
-      "examples": ["1:1s", "pitches", "pods", "meeting notes"],
+      "examples": [
+        "1:1s",
+        "pitches",
+        "pods",
+        "meeting notes"
+      ],
       "description": "A meeting transcript or minutes. Propagate durable entities to companies/ and people/ pages."
     },
     {
       "kind": "contract",
       "directory": "contracts/",
-      "examples": ["signed agreements", "KOL agreements", "service retainers", "referral agreements"],
+      "examples": [
+        "signed agreements",
+        "KOL agreements",
+        "service retainers",
+        "referral agreements"
+      ],
       "description": "A typed contract page whose primary subject is an agreement; link parties out to people/ and companies/."
     },
     {
       "kind": "research",
       "directory": "research/",
-      "examples": ["web-research deltas", "freshness checks", "citation-verified claims"],
+      "examples": [
+        "web-research deltas",
+        "freshness checks",
+        "citation-verified claims"
+      ],
       "description": "Web-research output: what is new vs already-known about a topic, citation-checked claims, freshness deltas."
     },
     {
       "kind": "report",
-      "directory": "reports/",
-      "examples": ["scheduled reports", "briefings", "digests"],
-      "description": "Report pages generated through the report/frontmatter contract. One-shot results should usually be delivered, not filed here."
-    },
-    {
-      "kind": "report",
       "directory": "dream-cycle-summaries/",
-      "examples": ["dream cycle summaries", "maintenance cycle indexes"],
+      "examples": [
+        "dream cycle summaries",
+        "maintenance cycle indexes"
+      ],
       "description": "Date-keyed summaries produced by the dream/maintenance cycle."
     },
     {
       "kind": "log",
-      "directory": "workout/",
-      "examples": ["workout logs", "training sessions"],
-      "description": "Health/training log pages whose primary subject is a workout entry."
-    },
-    {
-      "kind": "log",
       "directory": "food/",
-      "examples": ["food logs", "nutrition entries"],
+      "examples": [
+        "food logs",
+        "nutrition entries"
+      ],
       "description": "Health/nutrition log pages whose primary subject is a food entry."
     },
     {
       "kind": "concept",
       "directory": "concepts/",
-      "examples": ["mental models", "theses", "frameworks"],
+      "examples": [
+        "mental models",
+        "theses",
+        "frameworks"
+      ],
       "description": "A reusable idea, framework, or mental model not tied to a single person/company/project."
     },
     {
       "kind": "idea",
       "directory": "ideas/",
-      "examples": ["product ideas", "essay seeds", "back-of-envelope concepts"],
+      "examples": [
+        "product ideas",
+        "essay seeds",
+        "back-of-envelope concepts"
+      ],
       "description": "Generative ideas the user might build, write, or expand later. Stub-shaped pages that mature over time."
     },
     {
       "kind": "project",
       "directory": "projects/",
-      "examples": ["internal initiatives", "multi-session work", "active workstreams"],
+      "examples": [
+        "internal initiatives",
+        "multi-session work",
+        "active workstreams"
+      ],
       "description": "A multi-session piece of work with owner/outcome/active work."
     },
     {
       "kind": "note",
       "directory": "notes/",
-      "examples": ["planning satellites", "compact standalone insights", "working trackers"],
+      "examples": [
+        "planning satellites",
+        "compact standalone insights",
+        "working trackers"
+      ],
       "description": "Lean working notes, planning satellites, and compact insights that are useful to retrieve but are not full concepts, projects, sources, or authored writing."
     },
     {
       "kind": "writing",
       "directory": "writing/",
-      "examples": ["essays", "drafts", "published pieces", "tweets"],
+      "examples": [
+        "essays",
+        "drafts",
+        "published pieces",
+        "tweets"
+      ],
       "description": "Prose authored by the user. Use instead of stale originals/ for authored thinking."
+    },
+    {
+      "kind": "source",
+      "directory": "sources/",
+      "examples": [
+        "transcript",
+        "capture",
+        "import",
+        "external-content",
+        "content"
+      ],
+      "description": "Pack-derived type source. Files under sources/."
     },
     {
       "kind": "personal",
       "directory": "personal/",
-      "examples": ["private logistics", "family", "personal planning"],
+      "examples": [
+        "private logistics",
+        "family",
+        "personal planning"
+      ],
       "description": "Personal-life content kept separate from work, excluding sensitive originals that should stay outside Brain."
+    },
+    {
+      "kind": "atom",
+      "directory": "",
+      "examples": [
+        "atom-extraction",
+        "atom-manual",
+        "atom-lore",
+        "content-atom",
+        "lore"
+      ],
+      "description": "Pack-derived type atom. Files under ."
     },
     {
       "kind": "conversation",
       "directory": "conversations/",
-      "examples": ["conversations/chatgpt/{thread-slug}.md", "conversations/claude/{thread-slug}.md", "Telegram thread imports"],
+      "examples": [
+        "conversations/chatgpt/{thread-slug}.md",
+        "conversations/claude/{thread-slug}.md",
+        "Telegram thread imports"
+      ],
       "description": "Imported chat/thread artifacts where the conversation itself is the evidence layer. Cross-link durable entities and concepts from the page."
+    }
+  ],
+  "page_types": [
+    {
+      "name": "person",
+      "primitive": "entity",
+      "directory": "people/",
+      "path_prefixes": [
+        "people/"
+      ],
+      "extractable": false,
+      "expert_routing": true,
+      "aliases": [
+        "contact",
+        "creator",
+        "client",
+        "founder"
+      ]
+    },
+    {
+      "name": "company",
+      "primitive": "entity",
+      "directory": "companies/",
+      "path_prefixes": [
+        "companies/"
+      ],
+      "extractable": false,
+      "expert_routing": true,
+      "aliases": [
+        "organization",
+        "brand",
+        "platform"
+      ]
+    },
+    {
+      "name": "meeting",
+      "primitive": "temporal",
+      "directory": "meetings/",
+      "path_prefixes": [
+        "meetings/"
+      ],
+      "extractable": true,
+      "expert_routing": false,
+      "aliases": [
+        "call",
+        "fireflies-transcript",
+        "meeting-transcript"
+      ]
+    },
+    {
+      "name": "contract",
+      "primitive": "temporal",
+      "directory": "contracts/",
+      "path_prefixes": [
+        "contracts/"
+      ],
+      "extractable": false,
+      "expert_routing": false,
+      "aliases": [
+        "agreement",
+        "creator-contract"
+      ]
+    },
+    {
+      "name": "research",
+      "primitive": "temporal",
+      "directory": "research/",
+      "path_prefixes": [
+        "research/"
+      ],
+      "extractable": true,
+      "expert_routing": false,
+      "aliases": [
+        "analysis",
+        "deep-dive",
+        "market-scan",
+        "competitor-scan"
+      ]
+    },
+    {
+      "name": "report",
+      "primitive": "temporal",
+      "directory": "reports/",
+      "path_prefixes": [
+        "reports/",
+        "dream-cycle-summaries/"
+      ],
+      "extractable": false,
+      "expert_routing": false,
+      "aliases": [
+        "digest",
+        "briefing",
+        "dream-cycle",
+        "cycle-summary"
+      ]
+    },
+    {
+      "name": "log",
+      "primitive": "temporal",
+      "directory": "workout/",
+      "path_prefixes": [
+        "workout/",
+        "food/"
+      ],
+      "extractable": false,
+      "expert_routing": false,
+      "aliases": [
+        "health",
+        "workout-log",
+        "food-log"
+      ]
+    },
+    {
+      "name": "concept",
+      "primitive": "concept",
+      "directory": "concepts/",
+      "path_prefixes": [
+        "concepts/"
+      ],
+      "extractable": true,
+      "expert_routing": false,
+      "aliases": [
+        "framework",
+        "mental-model",
+        "playbook",
+        "lesson",
+        "decision",
+        "principle"
+      ]
+    },
+    {
+      "name": "idea",
+      "primitive": "concept",
+      "directory": "ideas/",
+      "path_prefixes": [
+        "ideas/"
+      ],
+      "extractable": true,
+      "expert_routing": false,
+      "aliases": [
+        "original",
+        "thesis",
+        "possibility",
+        "seed"
+      ]
+    },
+    {
+      "name": "project",
+      "primitive": "concept",
+      "directory": "projects/",
+      "path_prefixes": [
+        "projects/"
+      ],
+      "extractable": false,
+      "expert_routing": false,
+      "aliases": [
+        "initiative",
+        "workstream",
+        "campaign",
+        "spec"
+      ]
+    },
+    {
+      "name": "note",
+      "primitive": "concept",
+      "directory": "notes/",
+      "path_prefixes": [
+        "notes/"
+      ],
+      "extractable": true,
+      "expert_routing": false,
+      "aliases": [
+        "memo",
+        "insight",
+        "anecdote"
+      ]
+    },
+    {
+      "name": "writing",
+      "primitive": "media",
+      "directory": "writing/",
+      "path_prefixes": [
+        "writing/"
+      ],
+      "extractable": true,
+      "expert_routing": false,
+      "aliases": [
+        "longform",
+        "my-post"
+      ]
+    },
+    {
+      "name": "source",
+      "primitive": "media",
+      "directory": "sources/",
+      "path_prefixes": [
+        "sources/"
+      ],
+      "extractable": true,
+      "expert_routing": false,
+      "aliases": [
+        "transcript",
+        "capture",
+        "import",
+        "external-content",
+        "content"
+      ]
+    },
+    {
+      "name": "personal",
+      "primitive": "annotation",
+      "directory": "personal/",
+      "path_prefixes": [
+        "personal/"
+      ],
+      "extractable": false,
+      "expert_routing": false,
+      "aliases": [
+        "private",
+        "health-note"
+      ]
+    },
+    {
+      "name": "atom",
+      "primitive": "annotation",
+      "directory": null,
+      "path_prefixes": [],
+      "extractable": false,
+      "expert_routing": false,
+      "aliases": [
+        "atom-extraction",
+        "atom-manual",
+        "atom-lore",
+        "content-atom",
+        "lore"
+      ]
+    },
+    {
+      "name": "conversation",
+      "primitive": "temporal",
+      "directory": "conversations/",
+      "path_prefixes": [
+        "conversations/"
+      ],
+      "extractable": false,
+      "expert_routing": false,
+      "aliases": [
+        "chat",
+        "dm",
+        "telegram-thread",
+        "im-log"
+      ]
     }
   ],
   "sources_dir": {
     "directory": "sources/",
     "purpose": "ONLY for raw data: bulk imports, API dumps, periodic captures, or raw external content that feeds multiple brain pages. A page with a clear primary subject goes to that subject's directory, not sources/.",
-    "not_for": ["articles about a person", "analyses of a company", "reusable frameworks", "authored user writing"]
+    "not_for": [
+      "articles about a person",
+      "analyses of a company",
+      "reusable frameworks",
+      "authored user writing"
+    ]
   },
   "notes": [
     "The ACTIVE schema pack is canonical for valid file-backed shelves; this sidecar mirrors it for skill writes_to auditing.",
