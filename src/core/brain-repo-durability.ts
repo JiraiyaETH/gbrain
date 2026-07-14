@@ -151,6 +151,13 @@ ${HOOK_BANNER}
 # Bypass: git commit --no-verify.
 set -euo pipefail
 
+# The committed helper owns its synchronous pull/rebase/push guarantee. Do not
+# launch a redundant background push for that commit: it can race the helper's
+# immediately following fetch and contend on refs/remotes/origin/<branch>.
+if [ "\${GBRAIN_DURABILITY_HELPER_COMMIT:-0}" = "1" ]; then
+  exit 0
+fi
+
 _branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
 if [ "$_branch" = "HEAD" ]; then
   echo "$(date -u +%FT%TZ) [push] detached HEAD; skip" >> "\${GBRAIN_HOME:-$HOME/.gbrain}/brain-push.log" 2>/dev/null || true
@@ -183,10 +190,6 @@ if [ "\${1:-}" = "--push-only" ]; then
 fi
 
 _msg="\${1:?usage: brain-commit-push.sh <message> <path> [paths...]}"; shift || true
-# Pull first so the local tree is current before we stage.
-git fetch origin >/dev/null 2>&1 || true
-git pull --rebase origin "$_branch" || { git rebase --abort >/dev/null 2>&1 || true; echo "rebase conflict: manual attention needed" >&2; exit 3; }
-
 # EXPLICIT paths only — never a blind 'git add -A' (would risk committing
 # secrets, temp files, or unrelated edits).
 if [ "$#" -eq 0 ]; then
@@ -194,7 +197,12 @@ if [ "$#" -eq 0 ]; then
 fi
 git add -- "$@"
 if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
-git commit -m "$_msg"
+GBRAIN_DURABILITY_HELPER_COMMIT=1 git commit -m "$_msg"
+
+# Commit the requested local edits before rebasing so a dirty tracked file
+# cannot wedge the durability lane at pull --rebase.
+git fetch origin >/dev/null 2>&1 || true
+git pull --rebase origin "$_branch" || { git rebase --abort >/dev/null 2>&1 || true; echo "rebase conflict: manual attention needed" >&2; exit 3; }
 
 if brain_push "$_branch"; then exit 0; fi
 echo "PUSH FAILED — commit is local-only, NEEDS ATTENTION (see ${'$'}{GBRAIN_HOME:-$HOME/.gbrain}/brain-push.log)" >&2

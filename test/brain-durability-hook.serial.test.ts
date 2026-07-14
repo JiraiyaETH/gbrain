@@ -55,6 +55,17 @@ afterEach(() => {
 });
 
 describe('brain-commit-push.sh (D13 guarantee)', () => {
+  test('commits a dirty tracked file before pulling, then pushes cleanly', () => {
+    writeFileSync(join(work, 'README.md'), 'updated before durability run\n');
+
+    execFileSync('bash', [join(work, 'scripts', 'brain-commit-push.sh'), 'update readme', 'README.md'], {
+      cwd: work, stdio: ['ignore', 'pipe', 'pipe'], env: process.env,
+    });
+
+    expect(originHead(bare)).toBe(git(work, 'rev-parse', 'HEAD'));
+    expect(git(work, 'status', '--porcelain')).toBe('');
+  });
+
   test('add → commit → push lands on origin', () => {
     mkdirSync(join(work, 'people'), { recursive: true });
     writeFileSync(join(work, 'people', 'alice.md'), '# alice\n');
