@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { operations, OperationError, type OperationContext } from '../src/core/operations.ts';
 import { runImport } from '../src/commands/import.ts';
+import { runExtractCore } from '../src/commands/extract.ts';
 import { performSync } from '../src/commands/sync.ts';
 import { runCycle } from '../src/core/cycle.ts';
 import {
@@ -224,6 +225,60 @@ describe('per-source schema-pack resolution', () => {
       });
       expect(['first_sync', 'synced', 'partial', 'up_to_date']).toContain(synced.status);
       expect(await pageType(engine, 'robots/synced', 'robotics')).toBe('robot-note');
+    });
+  });
+
+  test('incremental filesystem extract materializes active-pack frontmatter links', async () => {
+    await withRig(async ({ engine }) => {
+      const repo = makeRepo({
+        'robots/target-bot.md': '# Target Bot\n\nTarget page.\n',
+        'robots/source-bot.md': [
+          '---',
+          'type: robot-note',
+          'robot_link: robots/target-bot',
+          '---',
+          '# Source Bot',
+          '',
+          'No prose link is present; the edge must come from pack frontmatter.',
+        ].join('\n'),
+      });
+      try {
+        await engine.executeRaw(
+          `UPDATE sources SET local_path = $1 WHERE id = 'robotics'`,
+          [repo],
+        );
+        await performSync(engine, {
+          repoPath: repo,
+          sourceId: 'robotics',
+          full: true,
+          noPull: true,
+          noEmbed: true,
+          noExtract: true,
+        });
+
+        const before = await engine.getLinks('robots/source-bot', { sourceId: 'robotics' });
+        expect(before).toEqual([]);
+
+        const result = await runExtractCore(engine, {
+          mode: 'links',
+          dir: repo,
+          slugs: ['robots/source-bot'],
+          sourceId: 'robotics',
+          includeFrontmatter: true,
+        });
+
+        expect(result.links_created).toBe(1);
+        const links = await engine.getLinks('robots/source-bot', { sourceId: 'robotics' });
+        expect(links).toHaveLength(1);
+        expect(links[0]).toMatchObject({
+          from_slug: 'robots/source-bot',
+          to_slug: 'robots/target-bot',
+          link_type: 'robot_related',
+          link_source: 'frontmatter',
+        });
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
     });
   });
 
