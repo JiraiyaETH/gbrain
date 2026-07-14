@@ -18,9 +18,11 @@ import { existsSync, unlinkSync } from 'fs';
 let lintCalls: Array<{ target: string; fix: boolean; dryRun: boolean | undefined }> = [];
 let backlinksCalls: Array<{ action: string; dir: string; dryRun: boolean | undefined }> = [];
 let syncCalls: Array<{ dryRun: boolean | undefined; noPull: boolean | undefined; noExtract: boolean | undefined; sourceId: string | undefined }> = [];
-let extractCalls: Array<{ mode: string; dir: string; slugs: string[] | undefined; sourceId: string | undefined }> = [];
+let extractCalls: Array<{ mode: string; dir: string; slugs: string[] | undefined; sourceId: string | undefined; includeFrontmatter: boolean | undefined }> = [];
 let embedCalls: Array<{ stale: boolean | undefined; dryRun: boolean | undefined }> = [];
 let orphansCalls: number = 0;
+let syncPagesAffected: string[] | undefined = ['a', 'b'];
+let synthesizeWrittenSlugs: string[] = [];
 
 // Mock lint
 mock.module('../../src/commands/lint.ts', () => ({
@@ -60,7 +62,7 @@ mock.module('../../src/commands/sync.ts', () => ({
       renamed: 0,
       chunksCreated: opts.dryRun ? 0 : 10,
       embedded: 0,
-      pagesAffected: opts.dryRun ? [] : ['a', 'b'],
+      pagesAffected: opts.dryRun ? [] : syncPagesAffected,
     };
   },
   runSync: async () => {},
@@ -69,10 +71,46 @@ mock.module('../../src/commands/sync.ts', () => ({
   pathToSlug: (s: string) => s,
 }));
 
+// Mock synthesize so tests can pin the exact written-slug handoff into extract.
+mock.module('../../src/core/cycle/synthesize.ts', () => ({
+  DEFAULT_DREAM_SYNTHESIZE_ROUTES: {
+    reflection: 'wiki/personal/reflections/{date}-<topic-slug>-{hash}',
+    original: 'wiki/originals/ideas/{date}-<idea-slug>-{hash}',
+    pattern: 'wiki/personal/patterns/<topic-slug>',
+  },
+  loadDreamSynthesizePaths: async () => ({
+    globs: [],
+    routes: {
+      reflection: 'wiki/personal/reflections/{date}-<topic-slug>-{hash}',
+      original: 'wiki/originals/ideas/{date}-<idea-slug>-{hash}',
+      pattern: 'wiki/personal/patterns/<topic-slug>',
+    },
+  }),
+  renderDreamSlugRoute: (template: string, dateHint: string, hashSuffix: string) =>
+    template.replaceAll('{date}', dateHint).replaceAll('{hash}', hashSuffix),
+  runPhaseSynthesize: async () => ({
+    phase: 'synthesize',
+    status: 'ok',
+    duration_ms: 0,
+    summary: `${synthesizeWrittenSlugs.length} page(s) written`,
+    details: {
+      transcripts_processed: 0,
+      synth_pages_written: synthesizeWrittenSlugs.length,
+      written_slugs: synthesizeWrittenSlugs,
+    },
+  }),
+}));
+
 // Mock extract
 mock.module('../../src/commands/extract.ts', () => ({
   runExtractCore: async (_engine: any, opts: any) => {
-    extractCalls.push({ mode: opts.mode, dir: opts.dir, slugs: opts.slugs, sourceId: opts.sourceId });
+    extractCalls.push({
+      mode: opts.mode,
+      dir: opts.dir,
+      slugs: opts.slugs,
+      sourceId: opts.sourceId,
+      includeFrontmatter: opts.includeFrontmatter,
+    });
     return { links_created: 7, timeline_entries_created: 3, pages_processed: opts.slugs?.length ?? 5 };
   },
   walkMarkdownFiles: () => [],
@@ -148,6 +186,8 @@ beforeEach(() => {
   extractCalls = [];
   embedCalls = [];
   orphansCalls = 0;
+  syncPagesAffected = ['a', 'b'];
+  synthesizeWrittenSlugs = [];
 });
 
 // ─── dryRun propagation (regression guards) ────────────────────────
@@ -435,6 +475,30 @@ describe('runCycle — incremental extract slug propagation (#417)', () => {
     expect(extractCalls.length).toBe(1);
     expect(extractCalls[0].slugs).toEqual(['a', 'b']);
     expect(extractCalls[0].sourceId).toBeUndefined();
+    expect(extractCalls[0].includeFrontmatter).toBe(true);
+  });
+
+  test('cycle unions synthesize-written slugs into the incremental extract scope', async () => {
+    syncPagesAffected = [];
+    synthesizeWrittenSlugs = ['ideas/new-insight', 'personal/reflections/new-reflection'];
+
+    await runCycle(sharedEngine, { brainDir: '/tmp/brain', phases: ['sync', 'synthesize', 'extract'] });
+
+    expect(extractCalls).toHaveLength(1);
+    expect(extractCalls[0].slugs).toEqual(synthesizeWrittenSlugs);
+  });
+
+  test('cycle deduplicates overlap between sync and synthesize extract slugs', async () => {
+    syncPagesAffected = ['ideas/shared', 'concepts/from-sync'];
+    synthesizeWrittenSlugs = ['ideas/shared', 'personal/reflections/from-synth'];
+
+    await runCycle(sharedEngine, { brainDir: '/tmp/brain', phases: ['sync', 'synthesize', 'extract'] });
+
+    expect(extractCalls[0].slugs).toEqual([
+      'ideas/shared',
+      'concepts/from-sync',
+      'personal/reflections/from-synth',
+    ]);
   });
 
   test('extract phase falls back to full walk when sync was skipped (slugs undefined)', async () => {

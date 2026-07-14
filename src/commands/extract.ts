@@ -39,7 +39,7 @@ import {
   isGlobalBasenameEnabled, resolveLinkInferenceMode, LINK_EXTRACTOR_VERSION_TS,
   WIKILINK_BASENAME_LINK_TYPE,
   buildBasenameIndex, queryBasenameIndex, stripCodeBlocks,
-  type UnresolvedFrontmatterRef, type LinkCandidate,
+  type UnresolvedFrontmatterRef, type LinkCandidate, type FrontmatterFieldMapping,
 } from '../core/link-extraction.ts';
 import { loadActivePackBestEffort } from '../core/schema-pack/best-effort.ts';
 import { createProgress } from '../core/progress.ts';
@@ -361,7 +361,13 @@ function excerptForInference(s: string, idx: number, width: number): string {
  */
 export async function extractLinksFromFile(
   content: string, relPath: string, allSlugs: Set<string>,
-  opts?: { includeFrontmatter?: boolean; globalBasename?: boolean; structuredFirst?: boolean; mentionsOnly?: boolean },
+  opts?: {
+    includeFrontmatter?: boolean;
+    frontmatterMappings?: FrontmatterFieldMapping[];
+    globalBasename?: boolean;
+    structuredFirst?: boolean;
+    mentionsOnly?: boolean;
+  },
 ): Promise<ExtractedLink[]> {
   const links: ExtractedLink[] = [];
   const slug = pathToSlug(relPath);
@@ -414,7 +420,13 @@ export async function extractLinksFromFile(
 
   const extracted = await extractPageLinks(
     slug, bodyContent, frontmatterForLinks, parsed.type, fsResolver,
-    { skipFrontmatter: !opts?.includeFrontmatter, globalBasename, structuredFirst, mentionsOnly },
+    {
+      skipFrontmatter: !opts?.includeFrontmatter,
+      frontmatterMappings: opts?.frontmatterMappings,
+      globalBasename,
+      structuredFirst,
+      mentionsOnly,
+    },
   );
   for (const c of extracted.candidates) {
     pushLink({
@@ -542,8 +554,10 @@ export interface ExtractOpts {
    * When provided, skips the full directory walk and reads only the
    * files corresponding to these slugs. Massive perf win on large brains.
    * Pass undefined or omit for a full walk (CLI / first-run path).
-   */
+  */
   slugs?: string[];
+  /** Include schema-pack frontmatter fields in filesystem link extraction. */
+  includeFrontmatter?: boolean;
   /**
    * v0.41.15.0 (D9): in-process parallel file workers for the fs-walk
    * loops. Default 1. PGLite engines clamp to 1 (single-writer; though
@@ -609,6 +623,9 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
     0,
   );
   const workers = workersResolved.workers;
+  const frontmatterMappings = opts.includeFrontmatter
+    ? await loadFrontmatterMappings(engine, opts.sourceId)
+    : undefined;
 
   // Incremental path: if specific slugs provided, only extract from those files.
   // This is the cycle path — sync tells us what changed, we only re-extract those.
@@ -617,7 +634,19 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
       // Nothing changed — skip entirely.
       return result;
     }
-    const r = await extractForSlugs(engine, opts.dir, opts.slugs, opts.mode, dryRun, jsonMode, workers, opts.signal, opts.sourceId ?? 'default');
+    const r = await extractForSlugs(
+      engine,
+      opts.dir,
+      opts.slugs,
+      opts.mode,
+      dryRun,
+      jsonMode,
+      workers,
+      opts.signal,
+      opts.sourceId ?? 'default',
+      opts.includeFrontmatter,
+      frontmatterMappings,
+    );
     result.links_created = r.links_created;
     result.timeline_entries_created = r.timeline_created;
     result.pages_processed = r.pages;
@@ -626,7 +655,17 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
 
   // Full walk path: CLI `gbrain extract` or first-run.
   if (opts.mode === 'links' || opts.mode === 'all') {
-    const r = await extractLinksFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.signal, opts.sourceId ?? 'default');
+    const r = await extractLinksFromDir(
+      engine,
+      opts.dir,
+      dryRun,
+      jsonMode,
+      workers,
+      opts.signal,
+      opts.sourceId ?? 'default',
+      opts.includeFrontmatter,
+      frontmatterMappings,
+    );
     result.links_created = r.created;
     result.pages_processed = r.pages;
   }
@@ -967,6 +1006,7 @@ Status (v0.42):
         dryRun,
         jsonMode,
         sourceId: resolvedSourceId,
+        includeFrontmatter,
         workers,
       });
     }
@@ -1008,6 +1048,8 @@ async function extractForSlugs(
   signal?: AbortSignal,
   // #1747/#1503: stamp resolved brain source id on batch rows (see ExtractOpts.sourceId).
   sourceId = 'default',
+  includeFrontmatter = false,
+  frontmatterMappings?: FrontmatterFieldMapping[],
 ): Promise<{ links_created: number; timeline_created: number; pages: number }> {
   // Build the full slug set for link resolution (fast: just readdir, no file reads)
   const allFiles = walkMarkdownFiles(brainDir);
@@ -1086,7 +1128,13 @@ async function extractForSlugs(
         const content = readFileSync(fullPath, 'utf-8');
 
         if (doLinks) {
-          const links = await extractLinksFromFile(content, relPath, allSlugs, { globalBasename, structuredFirst, mentionsOnly });
+          const links = await extractLinksFromFile(content, relPath, allSlugs, {
+            includeFrontmatter,
+            frontmatterMappings,
+            globalBasename,
+            structuredFirst,
+            mentionsOnly,
+          });
           for (const link of links) {
             if (dryRun) {
               if (!jsonMode) console.log(`  ${link.from_slug} → ${link.to_slug} (${link.link_type})`);
@@ -1149,6 +1197,8 @@ async function extractLinksFromDir(
   // #1747/#1503: stamp resolved brain source id on batch rows so the
   // addLinksBatch JOIN matches non-'default' source pages.
   sourceId = 'default',
+  includeFrontmatter = false,
+  frontmatterMappings?: FrontmatterFieldMapping[],
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
   const allSlugs = new Set(files.map(f => pathToSlug(f.relPath)));
@@ -1200,7 +1250,13 @@ async function extractLinksFromDir(
       if (isAborted(signal)) return;
       try {
         const content = readFileSync(file.path, 'utf-8');
-        const links = await extractLinksFromFile(content, file.relPath, allSlugs, { globalBasename, structuredFirst, mentionsOnly });
+        const links = await extractLinksFromFile(content, file.relPath, allSlugs, {
+          includeFrontmatter,
+          frontmatterMappings,
+          globalBasename,
+          structuredFirst,
+          mentionsOnly,
+        });
         for (const link of links) {
           if (dryRunSeen) {
             const key = `${link.from_slug}::${link.to_slug}::${link.link_type}`;
