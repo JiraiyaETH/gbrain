@@ -984,6 +984,7 @@ async function runPhaseExtract(
       mode: 'all',
       dir: brainDir,
       slugs: changedSlugs,  // undefined = full walk (first run / manual)
+      includeFrontmatter: true,
       signal,
       ...(sourceId ? { sourceId } : {}),
     });
@@ -1711,11 +1712,18 @@ export async function runCycle(
       } else if (brainDir === null) {
         phaseResults.push(skipNoBrainDir('extract'));
       } else {
-        // Pass changed slugs from sync for incremental extract.
-        // If sync didn't run (phases exclude it) or failed, syncPagesAffected
-        // is undefined → extract falls back to full walk (safe default).
+        // Pass the union of sync changes and pages written by synthesize.
+        // If sync didn't run (phases exclude it) or failed, keep undefined so
+        // extract falls back to a full walk (safe default, which includes any
+        // synthesize output).
+        const extractSlugs = syncPagesAffected === undefined
+          ? undefined
+          : [...new Set([
+              ...syncPagesAffected,
+              ...(synthesizeWrittenSlugs ?? []),
+            ])];
         progress.start('cycle.extract');
-        const { result, duration_ms } = await timePhase(() => runPhaseExtract(engine, brainDir, dryRun, syncPagesAffected, opts.signal, cycleSourceId));
+        const { result, duration_ms } = await timePhase(() => runPhaseExtract(engine, brainDir, dryRun, extractSlugs, opts.signal, cycleSourceId));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();
