@@ -152,6 +152,70 @@ describe('eval gate: --source scoping (defect fix)', () => {
     expect(out.exitCode).toBe(2);
   });
 
+  // P1-3 (Codex QA): --source argument validation. A missing/empty/flag-like
+  // next token must NOT be silently accepted (which would score the global
+  // corpus).
+  test('trailing --source (no value) → exit 2', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-gate-test-'));
+    const qrels = writeQrelsFile(dir, [
+      { query_id: 'q1', query: 'x', relevant_slugs: ['nonexistent'] },
+    ]);
+    try {
+      const out = await withExitCapture(() =>
+        runEvalGate(engine, ['--qrels', qrels, '--source']),
+      );
+      expect(out.exitCode).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--source '' (empty string) → exit 2", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-gate-test-'));
+    const qrels = writeQrelsFile(dir, [
+      { query_id: 'q1', query: 'x', relevant_slugs: ['nonexistent'] },
+    ]);
+    try {
+      const out = await withExitCapture(() =>
+        runEvalGate(engine, ['--qrels', qrels, '--source', '']),
+      );
+      expect(out.exitCode).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--source --json (next token is a flag) → exit 2', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-gate-test-'));
+    const qrels = writeQrelsFile(dir, [
+      { query_id: 'q1', query: 'x', relevant_slugs: ['nonexistent'] },
+    ]);
+    try {
+      const out = await withExitCapture(() =>
+        runEvalGate(engine, ['--qrels', qrels, '--source', '--json']),
+      );
+      expect(out.exitCode).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // P1-4 (Codex QA): --source only scopes the qrels correctness gate. Combining
+  // it with --baseline (which replays globally, slug-only) is rejected rather
+  // than half-scoped silently.
+  test('--baseline + --source combination → exit 2 (not-yet-supported)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-gate-test-'));
+    const baseline = writeBaselineFile(dir, [makeRow('foo', ['a', 'b'])]);
+    try {
+      const out = await withExitCapture(() =>
+        runEvalGate(engine, ['--baseline', baseline, '--source', 'default']),
+      );
+      expect(out.exitCode).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('--source is parsed and forwarded to hybridSearch as sourceId', async () => {
     // Stub hybridSearch to capture the opts it receives, then drive the
     // correctness gate's DEFAULT searchFn (built inside runCorrectnessGate)
