@@ -42,6 +42,7 @@ import {
 } from '../core/bench/qrels-file.ts';
 import { runCorrectnessGate, type CorrectnessResult } from '../core/bench/correctness-gate.ts';
 import { replayCore, type ReplaySummary } from './eval-replay.ts';
+import { assertValidSourceId } from '../core/source-id.ts';
 
 interface GateOpts {
   help?: boolean;
@@ -122,6 +123,20 @@ function parseArgs(args: string[]): GateOpts {
         if (next.startsWith('-')) {
           throw new GateUsageError(
             `--source requires a source id, got flag-like token '${next}'`,
+          );
+        }
+        // P2-A (Codex QA round 2): explicit-flag callers MUST run the value
+        // through the canonical validator (src/core/source-id.ts). It rejects
+        // anything that isn't 1-32 lowercase-alnum chars with optional interior
+        // hyphens — so `foo/bar` (slash), `Default` (uppercase), `my_source`
+        // (underscore), edge-hyphens, etc. can't silently score the wrong scope.
+        // assertValidSourceId throws a plain Error; re-wrap as GateUsageError so
+        // it exits 2 (usage) rather than crashing.
+        try {
+          assertValidSourceId(next);
+        } catch (e) {
+          throw new GateUsageError(
+            e instanceof Error ? e.message : `invalid --source value '${next}'`,
           );
         }
         opts.source = next;
