@@ -1,0 +1,331 @@
+Cognitive Scaffold: From Fluid Context to Crystallized Memory for Long-Horizon DeepResearch Agents - ACL Anthology
+ACL Anthology
+News
+(current)
+FAQ
+(current)
+Corrections
+(current)
+Submissions
+(current)
+GitHub
+Cognitive Scaffold: From Fluid Context to Crystallized Memory for Long-Horizon
+D
+eep
+R
+esearch Agents
+Qiuyuan Ai
+,
+Zenghuang Fu
+,
+Zhaoyang Li
+,
+Ping Jiang
+,
+Haoyu Wu
+,
+Jie Song
+,
+Guannan He
+Correct Metadata for
+Use this form to create a GitHub issue with structured data describing the correction. You will need a GitHub account.
+Once you create that issue, the correction will be reviewed by a staff member.
+⚠️ Mobile Users: Submitting this form to create a new issue will only work with github.com, not the GitHub Mobile app.
+Important
+: The Anthology treat PDFs as authoritative. Please use this form only to correct data
+that is out of line with the PDF. See
+our corrections
+guidelines
+if you need to change the PDF.
+Title
+Adjust the title. Retain tags such as
+<fixed-case>.
+Authors
+Adjust author names and order to match the
+PDF.
+Add Author
+Abstract
+Correct abstract if needed. Retain XML formatting tags such as <tex-math>. You may use <b>...</b> for
+bold
+, <i>...</i> for
+italic
+, <u>...</u> for
+underline
+, <sc>...</sc> for
+small-caps
+, <tt>...<tt> for
+typewriter text
+, <url>...</url> for URLs, <a href=...> for hyperlinks, and <par/> for paragraph breaks.
+Verification against PDF
+Ensure that the new title/authors match the snapshot below. (If there
+is no snapshot or it is too small, consult
+the PDF
+.)
+Authors concatenated from the text boxes above:
+ALL author names match the snapshot above—including
+middle initials, hyphens, and accents.
+Create GitHub issue for staff review
+Abstract
+Scaling LLM-based agents to long-horizon deep research is constrained by the context-noise trade-off, where linear history accumulation degrades reasoning and dilutes fine-grained evidence. To address this, we introduce the Cognitive Scaffold, a factorized memory architecture that decouples the cognitive state into a Fluid Working Context for immediate reasoning and a persistent Knowledge Graph for long-term retention. Unlike unstructured summarization, our framework employs a Rejection Sampling Fine-Tuning (RFT) pipeline to crystallize saturated context into structured event snapshots, strictly enforcing atomic constraints to preserve numerical values and entities. During reasoning, a thought-driven dual-path retrieval mechanism enables the agent to proactively recover precise evidence. Empirical evaluations on Xbench-DeepSearch, BrowseComp-ZH, and GAIA demonstrate that Cognitive Scaffold consistently outperforms baselines, achieving 74.7% Avg@3 and 87.0% Pass@3 on Xbench-DeepSearch, 48.5% Avg@3 and 65.9% Pass@3 on BrowseComp-ZH, and 72.8% Avg@3 and 88.3% Pass@3 on GAIA, while reducing compression hallucinations to 5.3%. We open-source our codebase to facilitate future research.
+Anthology ID:
+2026.acl-long.1170
+Volume:
+Proceedings of the 64th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)
+Month:
+July
+Year:
+2026
+Address:
+San Diego, California, United States
+Editors:
+Maria Liakata
+,
+Viviane P. Moreira
+,
+Jiajun Zhang
+,
+David Jurgens
+Venue:
+ACL
+SIG:
+Publisher:
+Association for Computational Linguistics
+Note:
+Pages:
+25526–25542
+Language:
+URL:
+https://aclanthology.org/2026.acl-long.1170/
+DOI:
+10.18653/v1/2026.acl-long.1170
+Bibkey:
+ai-etal-2026-cognitive
+Cite (ACL):
+Qiuyuan Ai, Zenghuang Fu, Zhaoyang Li, Ping Jiang, Haoyu Wu, Jie Song, and Guannan He. 2026.
+Cognitive Scaffold: From Fluid Context to Crystallized Memory for Long-Horizon DeepResearch Agents
+. In
+Proceedings of the 64th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)
+, pages 25526–25542, San Diego, California, United States. Association for Computational Linguistics.
+Cite (Informal):
+Cognitive Scaffold: From Fluid Context to Crystallized Memory for Long-Horizon DeepResearch Agents
+(Ai et al., ACL 2026)
+Copy Citation:
+BibTeX
+Markdown
+MODS XML
+Endnote
+More
+options…
+PDF:
+https://aclanthology.org/2026.acl-long.1170.pdf
+Checklist:
+2026.acl-long.1170.checklist.pdf
+PDF
+Cite
+Search
+Checklist
+Fix data
+Export citation
+BibTeX
+MODS XML
+Endnote
+Preformatted
+@inproceedings{ai-etal-2026-cognitive,
+title = "Cognitive Scaffold: From Fluid Context to Crystallized Memory for Long-Horizon {D}eep{R}esearch Agents",
+author = "Ai, Qiuyuan and
+Fu, Zenghuang and
+Li, Zhaoyang and
+Jiang, Ping and
+Wu, Haoyu and
+Song, Jie and
+He, Guannan",
+editor = "Liakata, Maria and
+Moreira, Viviane P. and
+Zhang, Jiajun and
+Jurgens, David",
+booktitle = "Proceedings of the 64th Annual Meeting of the {A}ssociation for {C}omputational {L}inguistics (Volume 1: Long Papers)",
+month = jul,
+year = "2026",
+address = "San Diego, California, United States",
+publisher = "Association for Computational Linguistics",
+url = "https://aclanthology.org/2026.acl-long.1170/",
+doi = "10.18653/v1/2026.acl-long.1170",
+pages = "25526--25542",
+ISBN = "979-8-89176-390-6",
+abstract = "Scaling LLM-based agents to long-horizon deep research is constrained by the context-noise trade-off, where linear history accumulation degrades reasoning and dilutes fine-grained evidence. To address this, we introduce the Cognitive Scaffold, a factorized memory architecture that decouples the cognitive state into a Fluid Working Context for immediate reasoning and a persistent Knowledge Graph for long-term retention. Unlike unstructured summarization, our framework employs a Rejection Sampling Fine-Tuning (RFT) pipeline to crystallize saturated context into structured event snapshots, strictly enforcing atomic constraints to preserve numerical values and entities. During reasoning, a thought-driven dual-path retrieval mechanism enables the agent to proactively recover precise evidence. Empirical evaluations on Xbench-DeepSearch, BrowseComp-ZH, and GAIA demonstrate that Cognitive Scaffold consistently outperforms baselines, achieving 74.7{\%} Avg@3 and 87.0{\%} Pass@3 on Xbench-DeepSearch, 48.5{\%} Avg@3 and 65.9{\%} Pass@3 on BrowseComp-ZH, and 72.8{\%} Avg@3 and 88.3{\%} Pass@3 on GAIA, while reducing compression hallucinations to 5.3{\%}. We open-source our codebase to facilitate future research."
+}
+Download as
+File
+Copy to Clipboard
+<?xml version="1.0" encoding="UTF-8"?>
+<modsCollection xmlns="http://www.loc.gov/mods/v3">
+<mods ID="ai-etal-2026-cognitive">
+<titleInfo>
+<title>Cognitive Scaffold: From Fluid Context to Crystallized Memory for Long-Horizon DeepResearch Agents</title>
+</titleInfo>
+<name type="personal">
+<namePart type="given">Qiuyuan</namePart>
+<namePart type="family">Ai</namePart>
+<role>
+<roleTerm authority="marcrelator" type="text">author</roleTerm>
+</role>
+</name>
+<name type="personal">
+<namePart type="given">Zenghuang</namePart>
+<namePart type="family">Fu</namePart>
+<role>
+<roleTerm authority="marcrelator" type="text">author</roleTerm>
+</role>
+</name>
+<name type="personal">
+<namePart type="given">Zhaoyang</namePart>
+<namePart type="family">Li</namePart>
+<role>
+<roleTerm authority="marcrelator" type="text">author</roleTerm>
+</role>
+</name>
+<name type="personal">
+<namePart type="given">Ping</namePart>
+<namePart type="family">Jiang</namePart>
+<role>
+<roleTerm authority="marcrelator" type="text">author</roleTerm>
+</role>
+</name>
+<name type="personal">
+<namePart type="given">Haoyu</namePart>
+<namePart type="family">Wu</namePart>
+<role>
+<roleTerm authority="marcrelator" type="text">author</roleTerm>
+</role>
+</name>
+<name type="personal">
+<namePart type="given">Jie</namePart>
+<namePart type="family">Song</namePart>
+<role>
+<roleTerm authority="marcrelator" type="text">author</roleTerm>
+</role>
+</name>
+<name type="personal">
+<namePart type="given">Guannan</namePart>
+<namePart type="family">He</namePart>
+<role>
+<roleTerm authority="marcrelator" type="text">author</roleTerm>
+</role>
+</name>
+<originInfo>
+<dateIssued>2026-07</dateIssued>
+</originInfo>
+<typeOfResource>text</typeOfResource>
+<relatedItem type="host">
+<titleInfo>
+<title>Proceedings of the 64th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)</title>
+</titleInfo>
+<name type="personal">
+<namePart type="given">Maria</namePart>
+<namePart type="family">Liakata</namePart>
+<role>
+<roleTerm authority="marcrelator" type="text">editor</roleTerm>
+</role>
+</name>
+<name type="personal">
+<namePart type="given">Viviane</namePart>
+<namePart type="given">P</namePart>
+<namePart type="family">Moreira</namePart>
+<role>
+<roleTerm authority="marcrelator" type="text">editor</roleTerm>
+</role>
+</name>
+<name type="personal">
+<namePart type="given">Jiajun</namePart>
+<namePart type="family">Zhang</namePart>
+<role>
+<roleTerm authority="marcrelator" type="text">editor</roleTerm>
+</role>
+</name>
+<name type="personal">
+<namePart type="given">David</namePart>
+<namePart type="family">Jurgens</namePart>
+<role>
+<roleTerm authority="marcrelator" type="text">editor</roleTerm>
+</role>
+</name>
+<originInfo>
+<publisher>Association for Computational Linguistics</publisher>
+<place>
+<placeTerm type="text">San Diego, California, United States</placeTerm>
+</place>
+</originInfo>
+<genre authority="marcgt">conference publication</genre>
+<identifier type="isbn">979-8-89176-390-6</identifier>
+</relatedItem>
+<abstract>Scaling LLM-based agents to long-horizon deep research is constrained by the context-noise trade-off, where linear history accumulation degrades reasoning and dilutes fine-grained evidence. To address this, we introduce the Cognitive Scaffold, a factorized memory architecture that decouples the cognitive state into a Fluid Working Context for immediate reasoning and a persistent Knowledge Graph for long-term retention. Unlike unstructured summarization, our framework employs a Rejection Sampling Fine-Tuning (RFT) pipeline to crystallize saturated context into structured event snapshots, strictly enforcing atomic constraints to preserve numerical values and entities. During reasoning, a thought-driven dual-path retrieval mechanism enables the agent to proactively recover precise evidence. Empirical evaluations on Xbench-DeepSearch, BrowseComp-ZH, and GAIA demonstrate that Cognitive Scaffold consistently outperforms baselines, achieving 74.7% Avg@3 and 87.0% Pass@3 on Xbench-DeepSearch, 48.5% Avg@3 and 65.9% Pass@3 on BrowseComp-ZH, and 72.8% Avg@3 and 88.3% Pass@3 on GAIA, while reducing compression hallucinations to 5.3%. We open-source our codebase to facilitate future research.</abstract>
+<identifier type="citekey">ai-etal-2026-cognitive</identifier>
+<identifier type="doi">10.18653/v1/2026.acl-long.1170</identifier>
+<location>
+<url>https://aclanthology.org/2026.acl-long.1170/</url>
+</location>
+<part>
+<date>2026-07</date>
+<extent unit="page">
+<start>25526</start>
+<end>25542</end>
+</extent>
+</part>
+</mods>
+</modsCollection>
+Download as
+File
+Copy to Clipboard
+%0 Conference Proceedings
+%T Cognitive Scaffold: From Fluid Context to Crystallized Memory for Long-Horizon DeepResearch Agents
+%A Ai, Qiuyuan
+%A Fu, Zenghuang
+%A Li, Zhaoyang
+%A Jiang, Ping
+%A Wu, Haoyu
+%A Song, Jie
+%A He, Guannan
+%Y Liakata, Maria
+%Y Moreira, Viviane P.
+%Y Zhang, Jiajun
+%Y Jurgens, David
+%S Proceedings of the 64th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)
+%D 2026
+%8 July
+%I Association for Computational Linguistics
+%C San Diego, California, United States
+%@ 979-8-89176-390-6
+%F ai-etal-2026-cognitive
+%X Scaling LLM-based agents to long-horizon deep research is constrained by the context-noise trade-off, where linear history accumulation degrades reasoning and dilutes fine-grained evidence. To address this, we introduce the Cognitive Scaffold, a factorized memory architecture that decouples the cognitive state into a Fluid Working Context for immediate reasoning and a persistent Knowledge Graph for long-term retention. Unlike unstructured summarization, our framework employs a Rejection Sampling Fine-Tuning (RFT) pipeline to crystallize saturated context into structured event snapshots, strictly enforcing atomic constraints to preserve numerical values and entities. During reasoning, a thought-driven dual-path retrieval mechanism enables the agent to proactively recover precise evidence. Empirical evaluations on Xbench-DeepSearch, BrowseComp-ZH, and GAIA demonstrate that Cognitive Scaffold consistently outperforms baselines, achieving 74.7% Avg@3 and 87.0% Pass@3 on Xbench-DeepSearch, 48.5% Avg@3 and 65.9% Pass@3 on BrowseComp-ZH, and 72.8% Avg@3 and 88.3% Pass@3 on GAIA, while reducing compression hallucinations to 5.3%. We open-source our codebase to facilitate future research.
+%R 10.18653/v1/2026.acl-long.1170
+%U https://aclanthology.org/2026.acl-long.1170/
+%U https://doi.org/10.18653/v1/2026.acl-long.1170
+%P 25526-25542
+Download as
+File
+Copy to Clipboard
+Markdown (Informal)
+[Cognitive Scaffold: From Fluid Context to Crystallized Memory for Long-Horizon DeepResearch Agents](https://aclanthology.org/2026.acl-long.1170/) (Ai et al., ACL 2026)
+Cognitive Scaffold: From Fluid Context to Crystallized Memory for Long-Horizon DeepResearch Agents
+(Ai et al., ACL 2026)
+ACL
+Qiuyuan Ai, Zenghuang Fu, Zhaoyang Li, Ping Jiang, Haoyu Wu, Jie Song, and Guannan He. 2026.
+Cognitive Scaffold: From Fluid Context to Crystallized Memory for Long-Horizon DeepResearch Agents
+. In
+Proceedings of the 64th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)
+, pages 25526–25542, San Diego, California, United States. Association for Computational Linguistics.
+Copy Markdown to
+Clipboard
+Copy ACL to
+Clipboard
+ACL materials are Copyright © 1963–2026 ACL; other materials are copyrighted by their respective copyright holders. Materials prior to 2016 here are licensed under the
+Creative Commons Attribution-NonCommercial-ShareAlike 3.0 International License
+. Permission is granted to make copies for the purposes of teaching and research. Materials published in or after 2016 are licensed on a
+Creative Commons Attribution 4.0 International License
+.
+The ACL Anthology is managed and built by the
+ACL Anthology team
+of volunteers.
+Site last built on 14 July 2026 at 23:59 UTC with
+commit 06ab3d5
+.

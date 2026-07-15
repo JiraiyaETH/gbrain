@@ -1,0 +1,31 @@
+[1.3874] docs/architecture/key_files -- - `src/core/skill-frontmatter.ts` — shared content-based SKILL.md frontmatter parser. Recognizes the
+[1.2773] src-core-skill-brain-first-ts -- [TypeScript] src/core/skill-brain-first.ts:57-63 export statement BrainFirstReason
+
+export type Brai
+[1.2420] scripts-check-skill-brain-first-sh -- [Bash] scripts/check-skill-brain-first.sh:1-65 module
+
+#!/usr/bin/env bash
+# CI guard for the v0.36.
+[1.0789] scripts-live-brain-first-check-ts -- [TypeScript] scripts/live-brain-first-check.ts:153-172 function main
+
+if (fixPreview) {
+    process.
+[1.0344] src-core-skill-frontmatter-ts -- [TypeScript] src/core/skill-frontmatter.ts:231-243 export statement formatBrainFirstTypoHint
+
+export
+[0.9218] src-commands-skillify-check-ts -- [TypeScript] src/commands/skillify-check.ts:239-303 function runSkillifyCheckTarget
+
+if (testDir) {
+
+[0.8685] src-core-dry-fix-ts -- [TypeScript] src/core/dry-fix.ts:245-323 export statement autoFixDryViolations
+
+export function auto
+[0.8222] src-core-audit-skill-brain-first-ts -- [TypeScript] src/core/audit-skill-brain-first.ts:206-225 export statement logBrainFirstEvent
+
+export
+[0.8144] src-core-skillify-templates-ts -- [TypeScript] src/core/skillify/templates.ts:31-120 export statement skillMdTemplate
+
+export function
+[0.7946] test-skill-brain-first-test-ts -- [TypeScript] test/skill-brain-first.test.ts:54-529 merged (3 siblings)
+
+const FIXTURE_DIR = join(imp

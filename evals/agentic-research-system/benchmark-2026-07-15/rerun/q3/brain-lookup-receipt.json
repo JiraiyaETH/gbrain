@@ -1,0 +1,29 @@
+{
+  "retrieved_at": "2026-07-15T00:34:58.626830+00:00",
+  "commands": {
+    "search.txt": {
+      "argv": [
+        "gbrain",
+        "search",
+        "Brain-first research anchoring confirmation bias novelty factual accuracy safeguards"
+      ],
+      "exit_code": 0,
+      "latency_seconds": 5.84025,
+      "stdout_bytes": 12,
+      "stderr_bytes": 0
+    },
+    "query.txt": {
+      "argv": [
+        "gbrain",
+        "query",
+        "Does supplying existing Brain context before external research improve novelty and factual accuracy, or does it anchor the researcher and reinforce existing beliefs? Evaluate the evidence and propose safeguards for a Brain-first research workflow."
+      ],
+      "exit_code": 0,
+      "latency_seconds": 5.591807,
+      "stdout_bytes": 12,
+      "stderr_bytes": 0
+    }
+  },
+  "brain_id": "gbrain CLI default resolution",
+  "source_id": "gbrain CLI read-only search/query"
+}

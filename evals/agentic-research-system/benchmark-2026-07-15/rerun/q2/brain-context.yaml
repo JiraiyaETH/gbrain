@@ -1,0 +1,58 @@
+brain_context:
+  retrieved_at: 2026-07-15T00:35:14Z
+  brain_id: default
+  source_id: gbrain-code
+  query: "What is the best architecture for multiple concurrent AI agents sharing a Supabase/Postgres-backed knowledge graph while preserving provenance, preventing conflicting writes, and staying within a strict database connection budget? Compare viable patterns and recommend one for GBrain."
+  status: thin_broadened
+  search_scope:
+    primary_query: "Supabase Postgres knowledge graph concurrent agents provenance connection budget"
+    primary_result: "No results."
+    broadened_queries:
+      - "knowledge graph"
+      - "provenance"
+      - "Supabase"
+      - "connection pool"
+      - "concurrent agents shared database writes"
+    novelty_boundary: "No direct prior Brain page answered this architecture question. The claims below are implementation context retrieved from the gbrain-code source; external findings must be labeled new, changed, missing, contradictory, or confirming against this packet. Absence from the checked Brain queries is not evidence of novelty."
+  pages:
+    - slug: src-core-connection-manager-ts
+      title: "src/core/connection-manager.ts (typescript)"
+      retrieved_via: search|get
+      claims:
+        - "The current connection manager routes reads through a Supabase transaction pooler (port 6543) with a default read pool size of 10 and routes DDL/bulk work through a direct/session path (port 5432) with a default direct pool size of 3."
+        - "Direct-pool initialization is lazy and guarded by a cached Promise so concurrent first callers do not race multiple pool constructions."
+        - "Worker engines and transaction clones can inherit a parent connection manager and share pool instances; connection events are audited."
+        - "A kill switch can fall back to a single-pool path."
+      last_known_at: 2026-07-15
+    - slug: docs/engines
+      title: "Pluggable Engine Architecture"
+      retrieved_via: get
+      claims:
+        - "PostgresEngine plus Supabase is the documented production path for multi-user or multi-device use, while PGLite is single-process/local and its documented concurrency model is limited."
+        - "The BrainEngine contract includes ACID transactions, links and recursive graph traversal, raw data, versions, and ingest-log operations."
+        - "Postgres uses Supavisor pooling, pgvector, tsvector/GIN, JSONB, and recursive CTEs."
+      last_known_at: 2026-07-15
+    - slug: docs/architecture/key_files
+      title: "Key files — per-file index (gbrain repo)"
+      retrieved_via: get
+      claims:
+        - "put_page write-through is atomic via temp-sibling plus rename."
+        - "Link operations expose link_source and link_type, reject reconciliation-managed sources for manual writes, and default omitted manual provenance to manual."
+        - "Remote reads are source-scoped and graph/link reads apply endpoint scoping rules."
+      last_known_at: 2026-07-15
+    - slug: src-core-minions-worker-ts
+      title: "MinionWorker — Concurrent in-process job worker"
+      retrieved_via: get
+      claims:
+        - "The worker processes jobs concurrently with isolated per-job state, lock renewal, token-fenced completion, stall detection, and retry handling."
+      last_known_at: 2026-07-15
+  known_decisions:
+    - "Use PostgresEngine plus Supabase for production multi-user/multi-device GBrain deployments rather than PGLite as the shared backend."
+    - "Keep reads on the pooler and long-running DDL/bulk work on a capped direct pool; allow inherited managers to share pool instances."
+    - "Preserve provenance on links and use atomic write-through for local Markdown."
+  gaps:
+    - "No existing Brain page directly compares shared-writer, single-writer/command-log, and partitioned-writer architectures for concurrent AI agents."
+    - "No direct Brain claim specifies an end-to-end conflict protocol for page versions, graph edges, facts, and provenance under concurrent agents."
+    - "No direct Brain claim quantifies a strict connection budget or maps pool sizes to Supabase plan limits."
+    - "No direct Brain claim establishes whether queue/worker serialization should be the sole write coordinator or only an admission-control layer."
+  contradictions: []

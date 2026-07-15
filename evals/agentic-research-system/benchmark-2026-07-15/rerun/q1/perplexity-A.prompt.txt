@@ -1,0 +1,45 @@
+You are the pre-refactor Perplexity Research backend in a controlled benchmark. Answer the exact research question below using the Brain context packet verbatim as the internal baseline.
+
+EXACT QUESTION
+What important advances in agentic ‘deep research’ systems from the last 90 days should change how GBrain’s Agentic Research System works? Focus on source discovery, parallel investigation, evidence tracking, critique, synthesis, and memory write-back. Distinguish genuinely new mechanisms from repackaged patterns.
+
+DATE / SCOPE
+Benchmark date: 2026-07-15. Last 90 days means 2026-04-16 through 2026-07-15 inclusive. Use publication/release dates, not merely access dates. If a candidate is older, label it as baseline/repackaged rather than a last-90-days advance. Do not infer novelty from absence in search results.
+
+BRAIN CONTEXT PACKET (use as the only internal baseline; classify findings as new, changed, missing, contradictory, or confirming)
+brain_context:
+  retrieved_at: 2026-07-15T00:36:45Z
+  brain_id: default
+  source_id: default
+  brain_context_status: thin_but_present
+  pages:
+    - slug: skills/agentic-research-system/skill
+      title: Agentic Research System
+      last_known_at: 2026-07-02
+      claims:
+        - "Current workflow: protocol-lite brief → Brain lookup → source acquisition router → bounded scout fan-out → search/source/claim ledgers → critic and competing-hypotheses gate → citation audit → constrained synthesis → cross-model eval → run receipt → promotion decision."
+        - "Current requirements: Brain-first lookup, bounded read-only scouts, no snippet citations, claim-level evidence mapping, separate evidence confidence and recommendation strength, cross-model evaluation for high-stakes output, and promotion discipline."
+        - "Current source basis already includes Anthropic multi-agent research, OpenAI deep research/Agents SDK, STORM, PaperQA2, Self-RAG/CRAG/RAGChecker, realistic tool-use benchmarks, and PRISMA/GRADE/Cochrane/ACH."
+        - "Current skill prohibits unapproved Brain write-back and requires a controlled write-back gate plus post-write readback when approved."
+    - slug: skills/agentic-research-system/changelog
+      title: Agentic Research System Changelog
+      last_known_at: 2026-07-01
+      claims:
+        - "Version 1.0.0 was created 2026-07-01 from the agentic research system memo."
+        - "The first cross-modal eval failed on sourcing, specificity, and usefulness; hard gates, source basis, material-claim definitions, reviewer reconciliation, and example artifacts were added."
+        - "The skill was tightened around mutating frontmatter, separate skillification versus run-output evals, trigger ambiguity, and explicit tool capabilities."
+  known_decisions:
+    - "Canonical refactored skill is skills/agentic-research-system/SKILL.md v1.1.0."
+    - "Perplexity is an optional backend/baseline."
+    - "No Brain writes are permitted in this benchmark; write-back is not_run."
+  gaps:
+    - "No Brain page specifically records last-90-days external advances; novelty relative to Brain is bounded by the two pages above and checked public sources."
+    - "No prior completed Q1 Agentic output exists."
+    - "Provider-internal tool counts and costs may be unobservable."
+
+RESEARCH AND EVIDENCE REQUIREMENTS
+- Prefer primary sources: official engineering/product docs, release notes, papers/preprints, benchmark reports, and code repositories. Use secondary sources only for discovery/corroboration.
+- Focus on operational mechanisms in the six requested areas. For each candidate, state: date, mechanism, what is operationally different, why it is genuinely new or repackaged, evidence strength, and concrete GBrain implication.
+- Preserve direct URLs in citations. Cite each material claim. Explicitly disclose weak evidence, missing primary sources, contradictions, and what was not found in the checked scope.
+- Do not claim actual Brain write-back happened. Propose safe write-back changes only.
+- Return a concise decision-oriented synthesis with a table of candidates and a final “change / do not change / investigate” recommendation. Include a short evidence boundary.

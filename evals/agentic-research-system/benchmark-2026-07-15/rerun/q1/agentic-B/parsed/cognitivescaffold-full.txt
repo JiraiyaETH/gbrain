@@ -1,0 +1,1033 @@
+               Cognitive Scaffold: From Fluid Context to Crystallized Memory for
+                              Long-Horizon DeepResearch Agents
+
+Qiuyuan Ai1 * , Zenghuang Fu2 * , Zhaoyang Li1 * , Ping Jiang1,3 , Haoyu Wu1,3 , Jie Song1† , Guannan He1†
+                                            1
+                                              Peking University
+                        2
+                          Institute of Automation, Chinese Academy of Sciences
+                                         3
+                                           Mininglamp Technology
+                               gnhe@pku.edu.cn, jie.song@pku.edu.cn
+
+
+                                  Abstract                           Such deep research workloads are inherently long-
+                                                                     horizon: solving a single query may require hun-
+              Scaling LLM-based agents to long-horizon               dreds of interactions with noisy environments (e.g.,
+              deep research is constrained by the “context-
+                                                                     raw HTML, search results, code repositories), and
+              noise trade-off,” where linear history accu-
+              mulation degrades reasoning and dilutes fine-          the agent must retain and revisit precise evidence
+              grained evidence. To address this, we introduce        across extended trajectories.
+              the Cognitive Scaffold, a factorized memory                However, scaling LLM agents to longer hori-
+              architecture that decouples the cognitive state        zons is fundamentally constrained by the prevail-
+              into a Fluid Working Context for immediate             ing design of agentic frameworks: they linearly ac-
+              reasoning and a persistent Knowledge Graph             cumulate the entire interaction history (reasoning
+              for long-term retention. Unlike unstructured
+                                                                     traces, tool calls, and observations) into a single,
+              summarization, our framework employs a Re-
+              jection Sampling Fine-Tuning (RFT) pipeline            ever-growing context buffer. This induces a severe
+              to crystallize saturated context into structured       context-noise trade-off (Yen et al., 2025; Liu et al.,
+              “event snapshots,” strictly enforcing atomic con-      2024). As the history length T grows far beyond
+              straints to preserve numerical values and enti-        the context limit Lmax , agents suffer from (i) cogni-
+              ties. During reasoning, a thought-driven dual-         tive degradation, where relevant evidence becomes
+              path retrieval mechanism enables the agent             “lost in the middle” and decisions increasingly rely
+              to proactively recover precise evidence. Em-           on parametric priors rather than retrieved facts (Liu
+              pirical evaluations on Xbench-DeepSearch,
+                                                                     et al., 2024); and (ii) computational inefficiency,
+              BrowseComp-ZH, and GAIA demonstrate
+              that Cognitive Scaffold consistently outper-           since attention and KV-cache management costs
+              forms baselines, achieving 74.7% Avg@3 and             grow rapidly with context length (Press et al., 2021).
+              87.0% Pass@3 on Xbench-DeepSearch, 48.5%               In practice, these effects manifest as brittle plan-
+              Avg@3 and 65.9% Pass@3 on BrowseComp-                  ning, evidence being ignored, and unstable tool-use
+              ZH, and 72.8% Avg@3 and 88.3% Pass@3 on                behaviors under dense web noise.
+              GAIA, while reducing compression hallucina-                A natural direction is to compress history.
+              tions to 5.3%. We open-source our codebase to
+                                                                     Summary-based methods periodically replace the
+              facilitate future research.
+                                                                     overflowing context with a short natural-language
+      1       Introduction                                           synopsis (Wu et al., 2025b), while more recent
+                                                                     folding-style approaches attempt to proactively
+      Modern scientific and industrial progress increas-             condense completed sub-trajectories (Ye et al.,
+      ingly depends on the ability to seek, verify, and              2025; Yan et al., 2025; Fang et al., 2025). Al-
+      synthesize information from the web and het-                   though effective at reducing token count, these
+      erogeneous corpora. Recent LLM-based agents                    approaches remain largely linear and irreversible:
+      have therefore shifted the paradigm from pas-                  once dense evidence is compressed, fine-grained
+      sive retrieval-augmented generation (RAG) to au-               details—notably numerical values and named en-
+      tonomous, tool-augmented research that iteratively             tities that are critical for scientific reasoning—are
+      plans, searches, executes, and consolidates ev-                easily lost (Durmus et al., 2020). Multi-agent de-
+      idence before producing a final report (Schick                 compositions offer another route by distributing
+      et al., 2023; Wang et al., 2023; Nan et al., 2025).            context across specialized agents (Zhang et al.,
+          * Equal contribution.                                      2025b), but they typically rely on handcrafted, task-
+          †
+              Corresponding author.                                  specific workflows and resist end-to-end optimiza-
+                                                                  25526
+  Proceedings of the 64th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 25526–25542
+                                   July 2-7, 2026 ©2026 Association for Computational Linguistics
+                                                             Table 1, the proposed scaffold consistently outper-
+                                                             forms the LLM-based React Agent and the con-
+                                                             ventional DeepResearch Agent, while improving
+                                                             efficiency by bounding the active context and dele-
+                                                             gating long-term retention to the graph.
+                                                                Our contributions are threefold:
+
+                                                                 • We introduce Cognitive Scaffold, a factor-
+                                                                   ized memory design that decouples short-term
+                                                                   reasoning from long-term retention via a dy-
+                                                                   namic event-centric Knowledge Graph.
+Figure 1: The Cognitive Scaffold Architecture. The
+framework decouples memory into a fluid Working Con-             • We propose an RFT-based consolidation
+text (Ct ) and a persistent Knowledge Graph (Gt ). Upon            mechanism with an atomic fidelity constraint,
+saturation (Itrigger ), the Compression Model (Mϕ )                enabling high-precision compression that pre-
+crystallizes history into event snapshots. During rea-             serves numerical values and entities. Further-
+soning, the agent (πθ ) employs latent thoughts to trigger         more, we introduce Automated Prompt Op-
+dual-path retrieval, ensuring long-horizon consistency.
+                                                                   timization (APO), a compressor-in-the-loop
+                                                                   procedure that selects a model-specific com-
+tion. Consequently, current systems still lack a prin-             pression guideline for each distilled compres-
+cipled mechanism that simultaneously (a) bounds                    sor, improving instruction following and sta-
+the active context, (b) preserves high-fidelity evi-               bility at deployment.
+dence, and (c) supports structured revisitation of
+                                                                 • We implement a Thought-Driven Dual-Path
+past decisions.
+                                                                   Retrieval strategy and a decoupled inference
+   In this work, we propose the Cognitive Scaffold                 system. By performing retrieval via latent
+(Figure 1), a factorized memory mechanism de-                      thoughts and merging context via inter-turn
+signed to transcend these limitations. As illustrated              injection, our framework supports scalable
+in the figure, unlike existing agents that rely solely             long-horizon deep research, achieving strong
+on a transient feedback loop (top-left), our architec-             performance across diverse benchmarks.
+ture introduces a persistent memory cycle (bottom-
+right). The key idea is to decouple the agent state          2     Related Work
+into a Fluid Working Context (Ct ) for immediate
+reasoning and a persistent Knowledge Graph (Gt )             2.1    Deep Research and Autonomous
+for long-term retention. Instead of treating memory                 Information Seeking
+as a monolithic token sequence, our agent peri-              The landscape of information retrieval is shift-
+odically crystallizes saturated segments of Ct into          ing from passive Retrieval-Augmented Generation
+graph nodes that store high-fidelity Event Snap-             (RAG) to autonomous Deep Research Agents. Un-
+shots (st ), using a specialized compression model           like traditional RAG, which performs “one-shot”
+(Mϕ ). When reasoning gaps are detected, the rea-            retrieval, Deep Research Agents emulate human
+soning backbone (πθ ) proactively recovers relevant          workflows through iterative planning, execution,
+sub-graphs via introspective, thought-driven navi-           and reflection. Proprietary systems such as OpenAI
+gation. To ensure factual precision during consol-           Deep Research (OpenAI, 2025a) and Gemini Deep
+idation, we introduce a Rejection Sampling Fine-             Research (Team, 2025a) already exhibit strong per-
+Tuning (RFT) pipeline that enforces atomic con-              formance on open-ended inquiries, often executing
+straints over numerical values and entities, substan-        long tool-use trajectories before producing a final
+tially reducing hallucinations. Finally, we utilize a        report.
+specialized lightweight compressor and a Knowl-                 In the open-source community, WebResearcher
+edge Graph to ensure efficient reasoning within a            (Qiao et al., 2025) formulates deep research as a
+bounded context.                                             Markov Decision Process (MDP), while InfoAgent
+   We empirically evaluate our approach on three             (Zhang et al., 2025a) and WebDancer (Wu et al.,
+long-horizon benchmarks spanning general reason-             2025a) enhance autonomy via self-refining search
+ing and bilingual web navigation. As shown in                strategies, typically within a “Plan-Act-Reflect”
+                                                        25527
+loop (Yao et al., 2022). However, these systems            fidelity content. In the LLM domain, systems like
+largely treat interaction history as a flat text buffer:   GraphRAG (Edge et al., 2024) and Graphiti (Ras-
+reasoning traces, search logs, and notes are linearly      mussen et al., 2025) leverage Knowledge Graphs
+appended into the context window. As horizons              for retrieval. While recent iterations support incre-
+extend to hundreds of steps (e.g., in BrowseComp-          mental updates, they primarily function as Declar-
+style benchmarks), this design leads to Context            ative Memory—indexing external corpora to map
+Suffocation: looking back becomes costly and it            pre-existing world knowledge. Crucially, they re-
+is hard to isolate or revise specific branches of the      main passive query engines lacking the operational
+research process. Our work instead views the tra-          protocols for autonomous Deep Research, such as
+jectory as a structured scaffold of research events        determining what to crystallize and when to trigger
+rather than a monolithic token sequence.                   retrieval endogenously.
+                                                              In contrast, we propose the Cognitive Scaffold
+2.2 Dynamic Context Management in                          as a dynamic mechanism for Knowledge Accumu-
+    Long-Horizon Tasks                                     lation. Unlike corpus-centric indexing, our knowl-
+To mitigate context saturation, recent work has            edge graph evolves in real-time to crystallize syn-
+moved beyond static windows toward dynamic con-            thesized insights and web summaries derived from
+text management. ReSum (Wu et al., 2025b) intro-           the agent’s exploration. Instead of raw interac-
+duces a “reset-and-summarize” mechanism, while             tion logs, it stores compressed high-value evidence
+Context Folding (Sun et al., 2025) utilizes branch-        (e.g., key conclusions from visited pages), effec-
+ing and folding to manage tasks. AgentFold (Ye             tively functioning as a dynamic research notebook
+et al., 2025) adds a proactive “folding” action to         that grows with the inquiry. This design allows
+selectively condense sub-trajectories. Distinctively,      agents to maintain a global view of collected evi-
+HiAgent (Hu et al., 2025) mimics human memory              dence while retaining local precision, effectively
+by segmenting history into subgoal-based chunks,           functioning as a digital hippocampus for infinite-
+maintaining detailed context only for the active           horizon reasoning.
+subgoal while compressing completed ones into
+textual observations.                                      3     Methodology
+   However, a fundamental limitation persists
+                                                           We introduce the Cognitive Scaffold, a neuro-
+across these approaches: they rely on textual ab-
+                                                           symbolic architecture that mitigates linear context
+straction as the primary storage medium. Whether
+                                                           limits by decoupling the agent’s state into a Fluid
+through periodic summarization (ReSum) or sub-
+                                                           Working Context (Ct ) for reasoning and a persistent
+goal chunking (HiAgent), converting rich inter-
+                                                           Knowledge Graph (Gt ) for retention. This factor-
+action logs into natural language summaries in-
+                                                           ization prevents context saturation (Figure 2). We
+evitably introduces semantic blurring (Durmus
+                                                           formalize the framework in §3.1, detail the Re-
+et al., 2020). Critical details—such as specific
+                                                           jection Sampling Fine-Tuning (RFT) pipeline for
+error codes, numerical parameters, or intermedi-
+                                                           high-fidelity compression in §3.2, and present the
+ate entity states—are often smoothed out in the
+                                                           Introspective Retrieval mechanism in §3.3.
+text generation process. Furthermore, retrieving
+information from a sequence of textual summaries           3.1    The Cognitive Scaffold Framework
+still requires linear scanning, which struggles with
+                                                           Formally, we instantiate the Deep Research Agent
+multi-hop reasoning. In contrast, our Cognitive
+                                                           as a dynamic system evolving over discrete inter-
+Scaffold factorizes the cognitive state. Instead of
+                                                           action steps t. The system is driven by two spe-
+piling up text summaries, we crystallize evidence
+                                                           cialized models: a primary Reasoning Agent (πθ )
+into a structured Knowledge Graph, enabling pre-
+                                                           for high-level planning and a Compression Model
+cise, non-linear access to atomic facts without the
+                                                           (Mϕ ) for context consolidation. As illustrated in
+resolution loss inherent in textual compression.
+                                                           Figure 2, the framework operates through a contin-
+2.3 Structured Cognitive Memory and                        uous evolutionary process.
+    Scaffolding                                            Stage 1: Fluid Reasoning (Ct ). The process begins
+Our work draws on Neuro-Symbolic Architec-                 in the Fluid Phase, where πθ performs linear rea-
+tures (Chandra et al., 2025; Gershman et al., 2025)        soning within the Fluid Working Context Ct . This
+that separate stable structural scaffolds from high-       memory acts as a sliding window for recent tokens.
+                                                      25528
+Figure 2: The evolutionary process of the Cognitive Scaffold. The framework operates in two recurrent stages. Left
+(Fluid Reasoning): The Reasoning Agent (πθ ) interacts with the environment within a transient Fluid Working
+Context (Ct ). Transition: When the context fills, the Compression Model (Mϕ ) crystallizes overflowed history
+into structured Event Snapshots. Middle (Knowledge Consolidation): These snapshots are stored in the persistent
+Knowledge Graph (Gt ), enabling Introspective Retrieval where the agent actively queries past information to support
+current reasoning via the structure crystallization and retrieval loop. Right (RFT Alignment): The compression
+model is trained via a Rejection Sampling Fine-Tuning pipeline that enforces atomic constraints through format,
+semantic, and compression rewards.
+
+
+Let Q denote the initial user query and ∆t repre-             Instead of silently deleting history, the updated
+sent the interaction increment at step t (containing        context for the next step t + 1 is reconstructed as:
+the thought chain, tool execution, and observation).
+                                                                   Ct+1 ← Chead ⊕ N OTE(sk ) ⊕ Hrecent          (2)
+In this phase, the context accumulates linearly:
+                                                            Here, Chead contains the immutable system prompt
+                  Ct+1 ← Ct ⊕ ∆t                    (1)
+                                                            and the original user query Q. Hrecent is a buffer
+As interactions accumulate and |Ct | approaches its         of the most recent interaction rounds retained to
+capacity limit τ (k) (where k denotes the number            preserve local coherence. This ensures the agent
+of prior folding events), the system triggers a state       explicitly perceives the consolidated insight along-
+transition.                                                 side the original goal, effectively bridging the past
+Structure Crystallization (Update & Lazy In-                and future.
+jection). Upon saturation (Itrigger = 1), the               Stage 2: Knowledge-Enhanced Reasoning (Gt ).
+overflowed history segment is transferred to Mϕ             Following the transition, the system enters the
+for the Crystallization Process. Using the RFT              Structured Phase. The Reasoning Agent πθ re-
+pipeline, Mϕ extracts the essential information             sumes with the refreshed window, but now pos-
+from the noisy stream and converts it into the k-           sesses the capability of Introspective Retrieval. The
+th Event Snapshot (sk ). This snapshot serves a             Knowledge Graph Gt serves as an external memory
+dual purpose via a unified Lazy Injection protocol:         bank. If a retrieval operation yields a set of nodes
+(i) Storage: sk is structured into a node vk and            and edges (packaged as O BSret ), the context update
+permanently committed to the Knowledge Graph:               rule is augmented:
+Gt+1 ← Gt ∪ {vk }. (ii) Anchor Injection: To en-
+                                                                         Ct+1 ← Ct ⊕ ∆t ⊕ O BSret               (3)
+sure context continuity without retaining the full
+history, sk is injected back into the cleared working      This completes the system’s dynamic cycle: (1)
+memory as a structured “Memory Note”.                      accumulate linearly (Eq. 1), (2) crystallize upon
+                                                      25529
+saturation (Eq. 2), and (3) augment via retrieval         We measure information preservation via the co-
+(Eq. 3). The full inference procedure is detailed in      sine similarity between embeddings: Rsem =
+Algorithm 1 in Appendix B.                                cos(E(Hraw ), E(s)). (iii) Compression Efficiency
+                                                          (Rcomp ): We incentivize conciseness using the re-
+3.2 High-Fidelity Memory Compression via                  duction ratio, penalized by a length floor: Rcomp =
+    RFT                                                   |Hraw |/ max(|s|, 100). Based on our empirical
+The effectiveness of the Cognitive Scaffold hinges        tuning (as shown in the accompanying code), we
+on the quality of the crystallized nodes. The Com-        set the weights to wf mt = 0.1, wsem = 10, and
+pression Model Mϕ must function not merely as             wcomp = 0.02, prioritizing semantic fidelity above
+a summarizer, but as a high-fidelity information          all else. High-scoring pairs are retained to form the
+distiller. To achieve this, we employ a Rejection         distillation dataset Dtrain .
+Sampling Fine-Tuning (RFT) pipeline alongside a
+                                                          Automated Prompt Optimization (APO).
+dynamic triggering mechanism.
+                                                          Since the optimal compression guideline is often
+Dynamic Density Triggering. Instead of fixed-             model-dependent, we further refine the prompt for
+interval compression, the crystallization process is      Mϕ using a black-box search. We treat Eq. (5)
+governed by the information density of the Fluid          as the objective function and iteratively propose
+Working Context Ct . We monitor the token ac-             guideline variants, evaluating them on held-out
+cumulation and define the trigger condition as            trajectories to select the instruction that maximizes
+Itrigger = I (|Ct | > τ (k)), where k is the count of     the composite reward.
+prior folding events. To prevent premature com-
+                                                          Graph Instantiation via Graphiti. The output
+pression of complex dependency chains in later
+                                                          of the compression pipeline is a dense natural lan-
+stages, the threshold τ (k) adaptively expands fol-
+                                                          guage summary (the Event Snapshot s). To trans-
+lowing a backoff logic:
+                                                          form this unstructured text into a traversable topol-
+                                                      ogy, we leverage the Graphiti framework (Ras-
+                               k
+     τ (k) = min τbase +          · ∆τ, Lmax      (4)     mussen et al., 2025). Specifically, we employ an
+                               η
+                                                          LLM-based extraction module that processes s to
+Here, τbase is the initial capacity, η controls the ex-   identify salient entities (e.g., tool outputs, naviga-
+pansion frequency, and Lmax is the context ceiling.       tional landmarks) and their semantic relations (e.g.,
+This ensures the active buffer grows to accommo-          part_of, contradicts). These extracted elements are
+date longer reasoning traces as the task complexity       instantiated as nodes and edges in the Knowledge
+increases.                                                Graph Gt . Crucially, the original high-fidelity snap-
+                                                          shot s is stored as a property of the central event
+The RFT Alignment Pipeline. To train Mϕ , we              node, ensuring that the graph retains both the struc-
+construct a dataset of (Hraw , s) pairs, where Hraw       tural skeleton for retrieval and the atomic details
+is a raw history segment and s is a high-quality          for reading.
+event snapshot. We adopt a “Generate-Evaluate-
+Distill” protocol: a teacher model generates candi-       3.3   Introspective Retrieval via
+date snapshots, which are then filtered by a com-               Thought-Driven Navigation
+posite reward function. Unlike strictly rule-based
+                                                          While consolidation resolves the storage limit, the
+filtering, we employ a weighted scoring metric to
+                                                          utility of the scaffold lies in its retrieval dynamics.
+balance structural correctness, semantic fidelity,
+                                                          Unlike standard RAG systems that passively wait
+and compression rate:
+                                                          for user queries, our agent employs an Introspec-
+    Score(s) = wf mt · If mt (s)                          tive Retrieval Mechanism to proactively address
+                                                          reasoning gaps.
+                  + wsem · Rsem (Hraw , s)         (5)
+                  + wcomp · Rcomp (Hraw , s)              Thought-as-Query Trigger. The retrieval pro-
+                                                          cess is initiated endogenously by the agent’s inter-
+The components are defined as follows: (i) Format         nal Chain-of-Thought. Instead of relying on exter-
+Consistency (If mt ): A binary indicator checking         nal prompts, we treat the current reasoning trace
+strict adherence to the output format (e.g., proper       Rt generated by πθ as a latent query source. The
+XML tags). (ii) Semantic Alignment (Rsem ):               system continuously monitors Rt for informational
+                                                     25530
+gaps, converting the immediate thought stream into      0.9) and enable logprobs to support confidence-
+an introspective query vector qint = Embed(Rt )         aware decision making and trajectory scoring. To
+without requiring explicit user intervention.           control computational budget, we cap the gener-
+                                                        ation length with max_tokens = 8192 per call.
+Dual-Path Navigation. Upon triggering, the sys-         We further apply presence_penalty = 1.1 to sup-
+tem executes a parallelized “Dual-Path” strategy        press degenerate repetitions and encourage explo-
+to recover structure from the Knowledge Graph           ration over diverse hypotheses. (ii) Compression
+Gt : (i) The Entity Path (Semantic Recall) targets      Model (Mϕ ): The consolidation module is ini-
+discrete Event Nodes v ∈ Gt via a hybrid search.        tialized with Qwen3-8B (Yang et al., 2025) and
+A node is retrieved if its content similarity exceeds   fine-tuned on the synthesized RFT dataset using
+a threshold: sim(qint , Embed(v)) > δ, augmented        LoRA (Rank = 64, α = 16), enabling lightweight
+by sparse BM25 matching to mitigate semantic            deployment while preserving high fidelity of nu-
+drift. (ii) The Relation Path (Structural Expansion)    merical values and entities. The system adopts
+simultaneously retrieves Relational Edges e ∈ Gt        a base threshold τbase = 10 × 1024, an incre-
+connected to the identified entities. Crucially, this   mental step ∆τ = 3 × 1024, and η = 3 to reg-
+stream applies Topological Reranking (via Graph         ulate the frequency of compression and context
+Distance minimization) to prioritize facts that are     expansion. (iii) Knowledge Graph: The Knowl-
+structurally proximal, thereby recovering the logi-     edge Graph (Rasmussen et al., 2025) is managed
+                    CAUSED_BY
+cal skeleton (e.g., −−−−−−−→ chains) surrounding        via Neo4j.Hardware details are provided in Ap-
+isolated facts.                                         pendix G.
+Context Augmentation. To maintain the stability         Benchmarks. We evaluate on three diverse
+of the reasoning stream, retrieved information is       datasets designed to stress-test long-term con-
+integrated naturally as an observation. Retrieval       text capabilities: (i) Xbench-DeepSearch(Team,
+operates asynchronously and does not interrupt the      2025b): a comprehensive benchmark requiring the
+generation of the reasoning trace Rt . Instead, the     agent to synthesize information over long interac-
+synthesized sub-graphs (Entities Vret + Relations       tion trajectories to answer complex queries. (ii)
+Eret ) are formatted as a structured observation        BrowseComp-ZH(Zhou et al., 2025): real-world
+block O BSret . As formally defined in Eq. (3), this    Chinese web-browsing tasks, where the agent must
+observation is appended to the current interaction      navigate noisy HTML pages and maintain goal con-
+context. This mechanism closes the cognitive loop:      sistency over many clicks; this dataset is particu-
+Thinking triggers Retrieval → Navigation synthe-        larly challenging due to the high density of informa-
+sizes Structure → Context Augmentation refines          tion on each page. (iii) GAIA(Mialon et al., 2023):
+future Thinking.                                        we use the text-only subset of GAIA questions,
+                                                        evaluating the agent’s ability to perform multi-step
+4   Experiments                                         reasoning and answer short, factual queries without
+                                                        relying on external tools or multimodal inputs.
+In this section, we empirically evaluate the pro-
+posed Cognitive Scaffold framework. Our experi-         Baselines. We compare against two categories
+ments are designed to assess the system’s perfor-       of methods:(i) LLM-based ReAct Agents: Stan-
+mance on long-horizon tasks, the fidelity of our        dard agents utilizing proprietary and open-weights
+compression mechanism, and the computational            LLMs within a linear ReAct loop, serving as base-
+efficiency of the decoupled architecture.               lines for raw reasoning capability under linear
+                                                        context accumulation.(ii) DeepResearch Agents:
+Implement. Our framework is implemented us-             Specialized systems designed for long-horizon au-
+ing a decoupled inference architecture to optimize      tonomous research, including both commercial
+the trade-off between reasoning capability and com-     black-box services and recent open-source ap-
+putational cost: (i) Reasoning Model (πθ ): The         proaches that employ dynamic context manage-
+reasoning backbone is instantiated with Tongyi-         ment techniques such as periodic summarization or
+DeepResearch-30B-A3B(Team et al., 2025b) as a           trajectory folding.We report Avg@3 and Pass@3
+centralized planner for multi-step tool-augmented       based on three independent runs per instance:
+reasoning. During inference, we adopt nucleus           Avg@3 is the average success rate over the three
+sampling with (temperature = 0.5, top_p =               runs, while Pass@3 counts an instance as solved if
+                                                   25531
+   Method                                          Availability   Xbench-DeepSearch    BrowseComp-ZH        GAIA
+                                                                  Avg@3       Pass@3   Avg@3   Pass@3   Avg@3   Pass@3
+   LLM-based ReAct Agent
+   GLM-4.5                                              ✗           70.0        –       37.5     –       66.0      –
+   DeepSeek-V3.1-671B-A37B (DeepSeek Team, 2025)        ✓           71.0        –       49.2     –       63.1      –
+   OpenAI-o3 (OpenAI, 2025b)                            ✗           66.7        –       58.1     –       70.5      –
+   OpenAI-o4-mini                                       ✗            –          –        –       –       60.0      –
+   Claude-4-Sonnet                                      ✗           64.6        –       29.1     –       68.3      –
+   Kimi-K2-Instruct-1T (Team et al., 2025a)             ✓           50.0        –       28.8     –       57.7      –
+   DeepResearch Agent
+   Tongyi DeepResearch(Team et al., 2025b)              ✓           73.0       86.0     46.7    63.7     70.9    85.5
+   OpenAI DeepResearch (OpenAI, 2025a)                  ✗            –          –       42.9     –       67.4     –
+   Kimi Researcher (Moonshot AI, 2025)                  ✗           69.0        –        –       –        –       –
+   ReSumTool-30B (Wu et al., 2025b)                     ✓            –          –        –      42.6      –      63.1
+   AgentFold (Ye et al., 2025)                          ✓            –          –       47.3     –       67.0     –
+   Ours                                                 ✓           74.7       87.0     48.5    65.9     72.8    88.3
+
+
+Table 1: Main Results. Comparison of Success Rate (%) across three long-horizon benchmarks. BrowseComp-ZH
+evaluates web browsing capabilities in Chinese, while Xbench and GAIA test general reasoning and tool use.
+Availability indicates whether the system is publicly released (e.g., code) or closed. Best results among publicly
+released methods are bolded.
+
+
+at least one run succeeds.                                        4.2      Analysis of Compression Fidelity
+                                                                  We build 2,500 candidate context–summary pairs
+4.1 Main Performance Comparison                                   (Hraw , s) from teacher trajectories (avg. ∼20k-
+Table 1 shows that Cognitive Scaffold consis-                     context tokens). After applying the rule-based re-
+tently outperforms baselines across all benchmarks.               wards (format, semantic alignment, compression),
+On Xbench-DeepSearch and GAIA, it surpasses                       we retain 2,200 pairs for training and hold out
+leading proprietary agents (e.g., Tongyi DeepRe-                  300 for testing. With Qwen3-8B as the student
+search), achieving 87.0% and 88.3% Pass@3 re-                     compressor, SFT-All on all 2,200 pairs slightly in-
+spectively. Most notably, on BrowseComp-ZH,                       creases hallucination (7.6%→8.6%) and reduces
+it dominates summary-based approaches, achiev-                    entity F1 (75.0→63.9), while RFT-Filtered (top
+ing 65.9% Pass@3 compared to ReSum’s 42.6%.                       1,500 by composite reward) lowers hallucination
+These results confirm that decoupling fluid reason-               to 5.3% and improves F1 to 77.5. The same pat-
+ing from structured memory significantly enhances                 tern holds for GLM-4-9B (Hall: 9.4%→6.9%,
+both stability and retention.                                     F1: 74.5→76.3), suggesting rejection sampling on
+                                                                  high-reward pairs is key for faithful compression
+   The performance gap is most pronounced on
+                                                                  across base LLMs. We compute Hallucination Rate
+BrowseComp-ZH (+23.3%), a high-noise environ-
+                                                                  and Entity F1 using an LLM-as-a-judge evaluator;
+ment demanding precise navigation. While pre-
+                                                                  details are in Appendix C. See Appendix G.2 for
+vious summary-based methods often suffer from
+                                                                  the training hardware and LoRA setup.
+semantic blurring—abstracting away critical loca-
+tors—our RFT-driven crystallization strictly pre-
+                                                                  4.3      Efficiency and Scalability
+serves atomic constraints within the Knowledge
+Graph (Gt ). Moreover, by outperforming long-                     We evaluate efficiency by analyzing the prompting
+context baselines despite using a bounded win-                    cost of the reasoning model πθ . For a question with
+dow, our results suggest the bottleneck in infinite-              T steps, let Ct denote the context injected at step
+horizon reasoning is context purity rather than ca-               t. The cumulative
+                                                                            P          input token cost is defined as
+pacity. By offloading static history to the graph                 Lmain = Tt=1 |Ct |. Without memory folding, the
+and retrieving it via thought-driven navigation, the              interaction history grows linearly with the reason-
+framework effectively mitigates the “lost-in-the-                 ing horizon. Cognitive Scaffold, however, com-
+middle” phenomenon, ensuring πθ always operates                   presses saturated segments into compact snapshots,
+on a high-signal fluid context. To provide intuition              effectively bounding the active working context.
+for these quantitative gains, we present a detailed                  As shown in Figure 3, on BrowseComp-ZH,
+qualitative analysis in Appendix D.                               the uncompressed baseline consumes 1.08 × 109
+                                                            25532
+ Setting                      Hallucination ↓   Entity F1 ↑                           BrowseComp-ZH GAIA (text-only)
+                                                               Variant
+                                                                                      Avg@3 Pass@3 Avg@3 Pass@3
+ Qwen3-8B compressor
+ Origin (no tuning)                7.6             75.0        w/o KG retrieval        47.2    64.2   72.3    87.2
+ SFT-All (2,200 pairs)             8.6             63.9        w/o RFT compressor      47.9    65.3   71.6    86.4
+ RFT-Filtered (1,500 pairs)        5.3             77.5        Full scaffold (ours)    48.5    65.9   72.8    88.3
+ GLM-4-9B compressor
+ Origin (no tuning)                 9.4            74.5              Table 3: Ablation on scaffold components.
+ SFT-All (2,200 pairs)             10.6            65.8
+ RFT-Filtered (1,500 pairs)         6.9            76.3
+                                                              significant gains in memory efficiency do not cre-
+Table 2: Compression fidelity on a held-out test set (300     ate a computational bottleneck, enabling scalable
+pairs). “RFT-Filtered” denotes rejection-sampling fine-       long-horizon inference. Detailed curves for other
+tuning, where only the top-reward 1,500 pairs are used
+                                                              benchmarks are provided in Appendix A.
+for training.
+                                                              4.4    Ablation on Scaffold Components
+                                                              We conduct ablation studies on BrowseComp-ZH
+                                                              and GAIA to evaluate the key components of our
+                                                              Cognitive Scaffold, maintaining a consistent rea-
+                                                              soning backbone and training data across variants.
+                                                              As shown in Table 3, the full scaffold achieves
+                                                              the best performance, and removing either the KG-
+                                                              based retrieval or the RFT-trained compressor con-
+                                                              sistently degrades performance.
+Figure 3: Cumulative main-model token cost on                    On our primary large-scale benchmark
+BrowseComp-ZH. The x-axis denotes the question in-            (BrowseComp-ZH, N = 288), these performance
+dex, and the y-axis shows the cumulative number of            drops are statistically significant (p < 0.05
+input tokens fed into the reasoning backbone πθ . The
+                                                              after Holm correction). Specifically, remov-
+shaded area indicates the cumulative token gap between
+“No Memory Fold” and Cognitive Scaffold.                      ing KG-based retrieval drops the performance
+                                                              from 48.50 ± 1.00 to 47.22 ± 1.59 (Avg@3;
+                                                              p = 0.0025), underscoring the importance of
+tokens, while Cognitive Scaffold requires only                structured graph retrieval for re-accessing long-
+1.20 × 108 tokens—an approximately 9× reduc-                  range facts. Similarly, replacing the RFT-trained
+tion. Compared to state-of-the-art methods like Re-           compressor with the SFT-All variant degrades
+Sum, which maintains 20k–35k tokens on GAIA                   results to 47.92 ± 0.35 (p = 0.028), suggesting
+and BrowseComp-ZH, our method significantly re-               that high-fidelity compression is necessary to
+duces the average active trajectory size to 12.7k and         preserve critical entities and constraints.
+13.1k tokens, respectively, representing a reduction             On the smaller GAIA dataset (N = 103), per-
+of over 50% in static context length.                         formance drops follow consistent directions. The
+   To provide a comprehensive end-to-end evalu-               degradation without the RFT compressor remains
+ation, we define Total Tokens as the aggregate of             significant prior to correction (p = 0.045). While
+tokens from the reasoner, compressor, and KG con-             the drop without KG retrieval yields a higher p-
+struction. Across BrowseComp-ZH, GAIA, and                    value (p = 0.158), we attribute this to the lim-
+XBench, the 8B compressor and KG construction                 ited statistical power inherent in a smaller sample
+(offloaded to a lightweight API) introduce marginal           size, as the positive effect direction remains robust
+overhead . Even accounting for all components,                across benchmarks. Overall, both structured mem-
+Cognitive Scaffold maintains a token reduction of             ory and high-fidelity compression are necessary to
+≥ 7.6× over the baseline.                                     fully realize the benefits of the scaffold.
+   Regarding temporal overhead, we logged the
+                                                              5     Conclusion
+end-to-end wall-clock latency. While structural
+memory operations and KG construction intro-                  We introduce the Cognitive Scaffold to resolve the
+duce additional steps, the average completion time            context-noise trade-off in long-horizon agents. By
+per query increases by only 7%–8% across bench-               factorizing memory into a fluid context for immedi-
+marks. This marginal increase indicates that the              ate reasoning and a crystallized Knowledge Graph
+                                                          25533
+for long-term retention, our framework enables pre-       Darren Edge, Ha Trinh, Newman Cheng, Joshua
+cise, hallucination-free synthesis over extended tra-       Bradley, Alex Chao, Apurva Mody, Steven Truitt,
+                                                            Dasha Metropolitansky, Robert Osazuwa Ness, and
+jectories. While this neuro-symbolic approach sig-
+                                                            Jonathan Larson. 2024. From local to global: A
+nificantly outperforms linear baselines, it relies on       graph rag approach to query-focused summarization.
+the fidelity of LLM-based extraction, necessitating         arXiv preprint arXiv:2404.16130.
+robust auditing against error propagation. We open-
+                                                          Runnan Fang, Yuan Liang, Xiaobin Wang, Jialong Wu,
+source our code and trajectories to foster further
+                                                            Shuofei Qiao, Pengjun Xie, Fei Huang, Huajun Chen,
+research into transparent, efficient, and cognitively       and Ningyu Zhang. 2025. Memp: Exploring agent
+durable agents.                                             procedural memory. Preprint, arXiv:2508.06433.
+
+6   Limitations                                           Samuel J Gershman, Ila Fiete, and Kazuki Irie.
+                                                            2025. Key-value memory in the brain. Neuron,
+Our study has several limitations. First, we evaluate       113(11):1694–1707.
+the proposed compression and distillation pipeline        Mengkang Hu, Tianxing Chen, Qiguang Chen, Yao Mu,
+under a specific set of tasks and domains. While           Wenqi Shao, and Ping Luo. 2025. Hiagent: Hier-
+the design is domain-agnostic in principle, gener-          archical working memory management for solving
+alization to substantially different domains (e.g.,         long-horizon agent tasks with large language model.
+                                                            In Proceedings of the 63rd Annual Meeting of the
+highly technical, legal/medical, or code-heavy cor-        Association for Computational Linguistics (Volume
+pora) may require re-tuning the compression guide-         1: Long Papers), pages 32779–32798.
+line, reward weights, or format constraints. A
+broader cross-domain evaluation is left for future        Nelson F Liu, Kevin Lin, John Hewitt, Ashwin Paran-
+                                                            jape, Michele Bevilacqua, Fabio Petroni, and Percy
+work. Second, although our approach is compatible           Liang. 2024. Lost in the middle: How language mod-
+with several adjacent directions, we do not system-         els use long contexts. Transactions of the Association
+atically explore these intersections in this paper.         for Computational Linguistics, 12:157–173.
+For example, integrating privacy- or safety-aware
+                                                          Grégoire Mialon, Clémentine Fourrier, Thomas Wolf,
+memory filtering, incorporating human-in-the-loop           Yann LeCun, and Thomas Scialom. 2023. Gaia: a
+feedback for guideline refinement, or extending             benchmark for general ai assistants. In The Twelfth
+the scaffold to multi-agent settings could further          International Conference on Learning Representa-
+improve robustness and applicability.                       tions.
+
+                                                          Moonshot AI. 2025. Kimi-researcher: End-to-end rl
+Acknowledgements                                           training for emerging agentic capabilities. Blog post.
+                                                           Accessed: 2025-12-25.
+We acknowledge support by the National Science
+and Technology Major Project of China under grant         Jiayan Nan, Wenquan Ma, Wenlong Wu, and Yize
+number 2025ZD1401507, the National Natural Sci-              Chen. 2025. Nemori: Self-organizing agent mem-
+                                                             ory inspired by cognitive science. arXiv preprint
+ence Foundation of China under Grant 72342004,               arXiv:2508.03341.
+and the CNPC Innovation Fund 2024DQ02-0503.
+We also acknowledge the support provided by the           OpenAI. 2025a. Deep research system card.
+High-Performance Computing Platform of Peking
+                                                          OpenAI. 2025b. Introducing openai o3 and o4-mini.
+University.
+                                                          Ofir Press, Noah A Smith, and Mike Lewis. 2021.
+                                                            Train short, test long: Attention with linear biases
+References                                                  enables input length extrapolation. arXiv preprint
+                                                            arXiv:2108.12409.
+Sarthak Chandra, Sugandha Sharma, Rishidev Chaud-
+  huri, and Ila Fiete. 2025. Episodic and associative     Zile Qiao, Guoxin Chen, Xuanzhong Chen, Donglei
+  memory from spatial scaffolds in the hippocampus.         Yu, Wenbiao Yin, Xinyu Wang, Zhen Zhang, Baix-
+  Nature, 638(8051):739–751.                                 uan Li, Huifeng Yin, Kuan Li, and 1 others. 2025.
+                                                            Webresearcher: Unleashing unbounded reasoning
+DeepSeek Team. 2025. Introducing deepseek-v3.1: our          capability in long-horizon agents. arXiv preprint
+  first step toward the agent era!                           arXiv:2509.13309.
+
+Esin Durmus, He He, and Mona Diab. 2020. Feqa: A          Preston Rasmussen, Pavlo Paliychuk, Travis Beauvais,
+  question answering evaluation framework for faithful-     Jack Ryan, and Daniel Chalef. 2025. Zep: a tempo-
+  ness assessment in abstractive summarization. arXiv       ral knowledge graph architecture for agent memory.
+  preprint arXiv:2005.03754.                                arXiv preprint arXiv:2501.13956.
+                                                     25534
+Timo Schick, Jane Dwivedi-Yu, Roberto Dessì, Roberta         Rui Ye, Zhongwang Zhang, Kuan Li, Huifeng Yin,
+  Raileanu, Maria Lomeli, Eric Hambro, Luke Zettle-            Zhengwei Tao, Yida Zhao, Liangcai Su, Liwen
+  moyer, Nicola Cancedda, and Thomas Scialom. 2023.            Zhang, Zile Qiao, Xinyu Wang, and 1 others.
+  Toolformer: Language models can teach themselves             2025. Agentfold: Long-horizon web agents with
+  to use tools. Advances in Neural Information Pro-            proactive context management. arXiv preprint
+  cessing Systems, 36:68539–68551.                             arXiv:2510.24699.
+Weiwei Sun, Miao Lu, Zhan Ling, Kang Liu, Xuesong            Howard Yen, Ashwin Paranjape, Mengzhou Xia, The-
+ Yao, Yiming Yang, and Jiecao Chen. 2025. Scaling              jas Venkatesh, Jack Hessel, Danqi Chen, and Yuhao
+  long-horizon llm agent via context-folding. arXiv            Zhang. 2025. Lost in the maze: Overcoming con-
+  preprint arXiv:2510.11967.                                   text limitations in long-horizon agentic search. arXiv
+                                                               preprint arXiv:2510.18939.
+Google Gemini Team. 2025a. Gemini deep research.
+Kimi Team, Yifan Bai, Yiping Bao, Guanduo Chen,              Gongrui Zhang, Jialiang Zhu, Ruiqi Yang, Kai Qiu,
+  Jiahao Chen, Ningxin Chen, Ruijue Chen, Yanru                Miaosen Zhang, Zhirong Wu, Qi Dai, Bei Liu, Chong
+  Chen, Yuankun Chen, Yutian Chen, and 1 others.               Luo, Zhengyuan Yang, and 1 others. 2025a. Infoa-
+  2025a. Kimi k2: Open agentic intelligence. arXiv             gent: Advancing autonomous information-seeking
+  preprint arXiv:2507.20534.                                   agents. arXiv preprint arXiv:2509.25189.
+
+Tongyi DeepResearch Team, Baixuan Li, Bo Zhang,              Wentao Zhang, Liang Zeng, Yuzhen Xiao, Yongcong
+  Dingchu Zhang, Fei Huang, Guangyu Li, Guoxin                Li, Ce Cui, Yilei Zhao, Rui Hu, Yang Liu, Yahui
+  Chen, Huifeng Yin, Jialong Wu, Jingren Zhou, Kuan           Zhou, and Bo An. 2025b. Agentorchestra: Or-
+  Li, Liangcai Su, Litu Ou, Liwen Zhang, Pengjun Xie,         chestrating hierarchical multi-agent intelligence with
+  Rui Ye, Wenbiao Yin, Xinmiao Yu, Xinyu Wang,                the tool-environment-agent(tea) protocol. Preprint,
+  and 38 others. 2025b. Tongyi deepresearch technical         arXiv:2506.12508.
+  report. Preprint, arXiv:2510.24701.
+                                                             Peilin Zhou, Bruce Leon, Xiang Ying, Can Zhang,
+Xbench Team. 2025b. Xbench-deepsearch.                         Yifan Shao, Qichen Ye, Dading Chong, Zhiling
+                                                               Jin, Chenxuan Xie, Meng Cao, and 1 others. 2025.
+Guanzhi Wang, Yuqi Xie, Yunfan Jiang, Ajay Man-                Browsecomp-zh: Benchmarking web browsing abil-
+  dlekar, Chaowei Xiao, Yuke Zhu, Linxi Fan, and               ity of large language models in chinese. arXiv
+  Anima Anandkumar. 2023. Voyager: An open-ended               preprint arXiv:2504.19314.
+  embodied agent with large language models. arXiv
+  preprint arXiv:2305.16291.
+                                                             A    Token Efficiency Analysis on GAIA
+Jialong Wu, Baixuan Li, Runnan Fang, Wenbiao Yin,                 and XBench
+   Liwen Zhang, Zhengwei Tao, Dingchu Zhang, Zekun
+   Xi, Gang Fu, Yong Jiang, and 1 others. 2025a. Web-
+   dancer: Towards autonomous information seeking
+   agency. arXiv preprint arXiv:2505.22648.
+Xixi Wu, Kuan Li, Yida Zhao, Liwen Zhang, Litu
+  Ou, Huifeng Yin, Zhongwang Zhang, Xinmiao
+  Yu, Dingchu Zhang, Yong Jiang, and 1 others.
+  2025b. Resum: Unlocking long-horizon search in-
+  telligence via context summarization. arXiv preprint
+  arXiv:2509.13313.
+Sikuan Yan, Xiufeng Yang, Zuchao Huang, Ercong Nie,
+   Zifeng Ding, Zonggen Li, Xiaowen Ma, Kristian Ker-        Figure 4: Cumulative main-model token cost on GAIA.
+   sting, Jeff Z Pan, Hinrich Schütze, and 1 others. 2025.   The x-axis denotes the question index, and the y-axis
+   Memory-r1: Enhancing large language model agents          shows the cumulative number of input tokens fed into
+   to manage and utilize memories via reinforcement          the reasoning backbone πθ . The shaded area indicates
+   learning. arXiv preprint arXiv:2508.19828.                the cumulative token gap between “No Memory Fold”
+An Yang, Anfeng Li, Baosong Yang, Beichen Zhang,             and Cognitive Scaffold.
+  Binyuan Hui, Bo Zheng, Bowen Yu, Chang
+  Gao, Chengen Huang, Chenxu Lv, and 1 others.                 Token efficiency is evaluated by measuring the
+  2025. Qwen3 technical report. arXiv preprint
+  arXiv:2505.09388.                                          cumulative number of input tokens fed into the
+                                                             main reasoning backbone πθ across questions. As
+Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak             shown in Figure 4 and Figure 5, Cognitive Scaffold
+  Shafran, Karthik R Narasimhan, and Yuan Cao. 2022.
+  React: Synergizing reasoning and acting in language
+                                                             consistently reduces the growth rate of cumulative
+  models. In The eleventh international conference on        token consumption compared with the “No Mem-
+  learning representations.                                  ory Fold” setting, and the shaded region visualizes
+                                                        25535
+                                                         Algorithm 1 Cognitive Scaffold Inference Frame-
+                                                         work
+                                                         Require: User query q; reasoning model πθ ; compression
+                                                             model Mϕ ; knowledge graph Gt ; tool set T ; token thresh-
+                                                             old τ (k); step budget B.
+                                                         Ensure: Final answer y.
+                                                          1: Initialize working context C0 ← [system_prompt, q]
+                                                          2: t ← 0
+                                                          3: while t < B do
+                                                          4:     Sample next token/action at ∼ πθ (· | Ct )
+                                                          5:     if <final_answer> is detected in at then
+Figure 5: Cumulative main-model token cost on             6:           Parse y from at
+XBench. The x-axis denotes the question index, and the    7:           return y
+y-axis shows the cumulative number of input tokens fed    8:     end if
+into the reasoning backbone πθ . The shaded area indi-    9:     if at contains a tool call u ∈ T then
+                                                         10:           Execute u and obtain tool response rt
+cates the cumulative token gap between “No Memory        11:           Append at and rt to the working context Ct
+Fold” and Cognitive Scaffold.                            12:      end if
+                                                         13:      if at calls graph_search then
+                                                         14:           Query Gt to retrieve relevant event snapshots St
+the cumulative token gap between the two vari-           15:           Append St into Ct as additional context
+                                                         16:      end if
+ants. This indicates that memory folding and graph-      17:      if len(Ct ) > τ (k) then
+based retrieval can preserve long-horizon reasoning      18:           Select a block of past interaction rounds Ht to
+capability while keeping the visible context com-            fold
+                                                         19:           st ← Mϕ (qHt , Ht )                      ▷ returns
+pact, leading to substantially lower main-model              <summary>...</summary>
+token cost on both benchmarks.                           20:           Insert st as a node into Gt and update edges
+                                                         21:           Mark Ht as folded and remove it from the visible
+                                                             context
+B   Pseudocode of the Cognitive Scaffold                 22:           Keep only the last k raw rounds and retrieved
+    Inference Framework                                      snapshots in Ct
+                                                         23:      end if
+This appendix provides the pseudocode of our Cog-        24:      t←t+1
+nitive Scaffold Inference Framework. As shown            25: end while
+                                                         26: return the best answer extracted from the reasoning his-
+in Algorithm 1, the framework performs tool-                 tory in Ct
+augmented reasoning under a strict context budget
+by maintaining a working context that accumulates
+model generations and tool feedback, optionally          to extract salient entities/numbers from both q and
+retrieving event snapshots from the constructed          s to measure preservation.
+knowledge graph. When the context length exceeds
+a token threshold, it triggers a folding operation via   Hallucination Rate (claim-level). The judge ex-
+a compression model to summarize selected his-           tracts up to K atomic claims {ci }ni=1 from s (each
+torical interaction rounds, stores the summary as a      ci is a single factual statement). For each claim,
+new node in the knowledge graph, and removes the         it searches for the best supporting evidence span
+folded content from the visible context while pre-       in q; if no supporting span exists, the evidence
+serving only the most recent raw rounds. This de-        is marked as NONE. Each claim is labeled as one
+sign balances information retention (through struc-      of: E NTAILED, N OT _S UPPORTED, or C ONTRA -
+tured memory in the graph) and context efficiency        DICTED . We define the hallucination rate as the
+(through compression), enabling long-horizon rea-        fraction of claims that are not supported or contra-
+soning and producing the final answer from the           dicted by the source:
+maintained reasoning trace.                                                                          n
+                                                                                             1X
+                                                                                Hall(q, s) =    I[ℓi ∈ B] ,
+C    Automatic Evaluation of Compression                                                     n
+                                                                                                    i=1
+     Fidelity
+                                                            B = {N OT _S UPPORTED, C ONTRADICTED}.
+We automatically evaluate compression fidelity for                                               (6)
+each context–summary pair (Hraw , s) using an
+LLM-as-a-judge in a strict JSON-only mode. The              where ℓi is the judge label for claim ci . We also
+evaluator is prompted (i) to extract atomic factual      report the contradiction rate Contra(q, s) = #{i :
+claims from s and verify their support in q, and (ii)    ℓi = C ONTRADICTED}/n.
+                                                    25536
+Entity F1 (salient entity/number preserva-                     Factor       Base-A          Base-B          Ours
+tion). The judge extracts up to M salient enti-                Spatial 1F (Heuristic) B1 (Keyword) 2F (Topology)
+ties/numbers/constraints from q as a gold list G               Semantic   Ignored        Ignored    Fact 7 Match
+                                                               Result    Huoban ✗      Onyasai ✗    Shuanrou ✓
+and up to M from s as a predicted list P . Salient
+items include PERSON/ORG, model names, loca-               Table 4: Reasoning comparison. Baselines fail due to
+tions, dates, numbers/thresholds, file paths, URLs,        spatial heuristics (1F/B1) and semantic blindness, while
+and method names. We normalize surface forms               Ours succeeds via topology and explicit fact retrieval.
+by lowercasing, collapsing whitespace, and remov-
+ing thousand separators in numbers, then dedu-
+plicate each list. We perform greedy one-to-one            E     Detailed Case Study Analysis
+matching between P and G using exact match, op-
+                                                           In this section, we provide the raw evidence ref-
+tionally enabling fuzzy string similarity (Sequence-
+                                                           erenced in Section D, including the crystallized
+Matcher ratio) with threshold τ . Let TP be the
+                                                           knowledge graph nodes, the compression summary,
+number of matched items, FP = |P | − TP, and
+                                                           and a step-by-step comparison of the agent’s rea-
+FN = |G| − TP. Precision, recall, and F1 are:
+                                                           soning process.
+                         TP
+               Prec =          ,                           E.1     Constructed Cognitive Scaffold (KG
+                      TP + FP
+                         TP                                        Snapshot)
+                Rec =          ,                    (7)
+                      TP + FN                              Table 5 presents the actual entity nodes and facts
+                      2 Prec Rec                           instantiated by our system during the exploration
+                 F1 =            .
+                      Prec + Rec                           of the “Fengchao Theater” trajectory. These struc-
+                                                           tured records directly support the spatial and se-
+  In our implementation we use K=10, M =20,
+                                                           mantic reasoning described in the main text.
+and τ =0.92 when fuzzy matching is enabled.
+                                                           E.2     Crystallized Compression Summary
+D    Case Study: Resolving Contextual
+     Noise                                                 Table 6 summarizes the key failure modes of the
+                                                           baselines versus the successful mechanism of our
+We analyze a real-world multi-hop query requiring          method.
+the agent to identify a restaurant near Fengchao
+                                                              The following text represents the actual output
+Theater (inferred from a quote) that is encountered
+                                                           from the Compression Model (Mϕ ), which served
+while “going downstairs” and is “associated with
+                                                           as the working memory for the final reasoning step.
+the local area” (Dongzhimen).
+                                                           Note the explicit inference regarding the “area-
+Baseline Failure. Linear agents efficiently re-            related” constraint.
+trieve the theater but falter under noisy HTML
+listing restaurants on multiple floors (B1, 1F, 2F).             Compression Summary Output:
+Lacking structural grounding, they rely on heuris-               User Scenario: User exited Dongzhimen Station
+tics—either selecting the ground floor (Huoban                   (Line 13), saw a driving school across the street;
+                                                                 walked to Fengchao Theater to watch “Rhinoceros
+BBQ, 1F) or matching keywords like “downstairs”                  in Love” (Quote: “Dusk is when my vision is
+(Onyasai, B1)—while crucially ignoring the “area-                worst”); saw a restaurant while going downstairs
+                                                                 that relates to the local area.
+related” semantic constraint.                                    Key Information Points:
+Scaffold Success. Our framework identifies the
+correct target, Dongzhimen Shuanrou (2F), through                   1. Fengchao Theater (No.3 Xinzhong St) is
+                                                                       the venue.
+two crystallized mechanisms (details in App. E
+                                                                    2. Floor Layout: B1 has Onyasai Hotpot; 1F
+and F): (1) Aggregated View: The compression                           has Huoban BBQ; 2F has Dongzhimen
+model consolidates the floor plan into a single node                   Shuanrou.
+summary (Node 3), clarifying the descent topology                   3. Changjian Driving School is 30m from
+                                                                       Dongzhimen Station Exit G.
+(2F → 1F → B1). (2) Semantic Anchoring: It
+retrieves Fact 7, which explicitly links the restau-              Inference: While the exact floor of descent is im-
+rant to the “Dongzhimen” area. This retrieved fact                plicit, “Dongzhimen Shuanrou” is speculated
+                                                                  to be the target due to its explicit naming asso-
+acts as a decisive filter, overriding spatial heuristics          ciation with the “Dongzhimen” area, unlike the
+to validate the 2nd-floor option.                                 other candidates.
+
+                                                      25537
+ ID                  Content / Summary
+
+ Node 3              Entity: Fengchao Theater
+                     Summary: Located at No.3 Xinzhong Street, near Dongzhimen. It hosts the play “Rhinoceros in Love”.
+                     Contains Onyasai Hotpot (B1), Huoban BBQ (1F), and Dongzhimen Shuanrou (2F).
+ Node 5              Entity: Dongzhimen Shuanrou
+                     Summary: Located on the 2nd floor of Fengchao Theater. Identified as one of the area-related
+                     restaurants.
+ Fact 7              Relation: Dongzhimen Shuanrou is strongly associated with the Dongzhimen area.
+ Fact 10             Relation: Driving schools near Dongzhimen Station include Changjian Driving School (30m from
+                     Exit G).
+
+Table 5: Key components of the Cognitive Scaffold instantiated during the task. Note how Node 3 aggregates the
+floor plan, and Node 5 explicitly encodes the spatial (2F) and semantic (area-related) attributes.
+
+
+ Dimension          Baseline A (Failure)               Baseline B (Failure)                Ours (Success)
+
+ Spatial Logic      Ground-Floor Heuristic           Keyword Matching              Topological Deduction
+                    Assumes “downstairs” always tar- Matches the word “downstairs” Uses Node 3’s summary to de-
+                    gets the 1st floor (Ground).     directly to “B1/Underground”. duce descent order: 2F → 1F →
+                                                                                   B1.
+ Semantic Filter    Ignored                            Ignored                             Explicit Match
+                    Disregards the “area-related” con- Misses the semantic link; selects   Retrieves Fact from Node 5: “...is
+                    straint; selects based on popular- based on text overlap.              one of the area-related restau-
+                    ity.                                                                   rants.”
+ Result             Huoban BBQ (1F) ✗                  Onyasai Hotpot (B1) ✗               Dongzhimen Shuanrou (2F) ✓
+
+Table 6: Comparison of reasoning dynamics. The baselines fail due to unstructured context processing (heuris-
+tic/keyword bias), while the Scaffold model succeeds by leveraging crystallized spatial topology and explicit
+semantic facts.
+
+
+F     Detailed Comparison of Reasoning                              sphere...”
+      Trajectories
+                                                              Final Prediction: Huoban Japanese BBQ (1st
+To provide a granular view of how the Cognitive               Floor). ✗
+Scaffold resolves the multi-hop spatial ambigu-
+                                                              F.2   Trajectory 2: Linear Baseline B (Failure -
+ity, we present the translated reasoning traces of
+                                                                    Keyword Matching)
+the critical decision-making step for the query de-
+scribed in Section D.                                         Model Output (Reasoning Trace):
+
+F.1 Trajectory 1: Linear Baseline A (Failure -                      “...I found Onyasai Hotpot located on
+    Heuristic Bias)                                                 the B1 floor (underground). The user’s
+                                                                    query contains the phrase ‘while going
+Model Output (Reasoning Trace):                                     down’. The search snippet for Onyasai
+                                                                    mentions it is ‘located downstairs’. This
+      “...Based on the search results, the
+                                                                    keyword match suggests Onyasai is the
+      Fengchao Theater has restaurants on mul-
+                                                                    intended target. The other restaurants
+      tiple levels. The user mentioned ‘go-
+                                                                    are on higher floors (1F, 2F), which con-
+      ing downstairs’. Typically, when leav-
+                                                                    tradicts the ‘downstairs’ description if
+      ing a building, one goes down to the
+                                                                    interpreted as a destination...”
+      ground floor. Huoban Japanese BBQ
+      is explicitly listed as being on the 1st                Final Prediction: Onyasai Japanese Hotpot (B1
+      floor and is very popular. Therefore, it                Floor). ✗
+      is the most likely restaurant encountered
+      when reaching the exit level. The user’s                F.3 Trajectory 3: Cognitive Scaffold (Success -
+      mention of ‘area-related’ is likely a gen-                  Structural & Semantic Logic)
+      eral reference to the busy dining atmo-                 Model Output (Reasoning Trace):
+                                                        25538
+    “...I need to satisfy three constraints: (1)
+    Near Fengchao Theater, (2) Encountered
+    while going downstairs, (3) Strongly re-
+    lated to the ‘Dongzhimen’ area. Accord-
+    ing to the Instantiated Entity Nodes:
+        • Node 3 (Theater) aggregates the lay-
+          out: 2F (Dongzhimen Shuanrou) →
+          1F (Huoban BBQ) → B1 (Onyasai).
+        • Spatial Logic: ‘Going downstairs’
+          from the theater implies a descend-
+          ing order. The first facility encoun-
+          tered would be on the 2nd floor.
+        • Semantic Filter: The user requires
+          an association with the local area.
+          Node 5 explicitly states: ‘Dongzhi-
+          men Shuanrou... is one of the area-
+          related restaurants’. The name it-
+          self contains ‘Dongzhimen’.
+     Huoban BBQ (1F) and Onyasai (B1)
+     lack this semantic link in their node sum-
+     maries. Therefore, despite being on the
+     2nd floor, Dongzhimen Shuanrou is the
+     correct answer.”
+
+Final Prediction: Dongzhimen Shuanrou (2nd
+Floor). ✓
+
+G    Hardware Configuration
+G.1 DeepResearch-30B-A3B Deployment
+We deploy DeepResearch-30B-A3B using vLLM
+on 8× NVIDIA A100 GPUs (40GB).
+
+G.2 Compressor Training Setup (SFT/RFT
+    with LoRA)
+For the compressor fine-tuning (SFT and RFT), we
+use 4× NVIDIA A100 GPUs (40GB) and train
+with LoRA (Rank = 64, α = 16).
+
+H    Prompt Templates
+This appendix lists the prompts for compression
+and automatic evaluation, including the Guideline-
+Improver and LLM-as-a-judge templates for hal-
+lucination and entity preservation. Placeholders
+in braces (e.g., {q}, {s}) are filled at runtime, and
+outputs follow strict tag/JSON formats for repro-
+ducibility.
+
+
+
+
+                                                   25539
+Prompt (Guideline-Improver for Memory Compression)
+ You are an expert instruction designer and memory-compression specialist. Your job is to rewrite and strengthen a
+ guideline prompt that instructs a student model to compress a multi-turn dialogue into a compact, high-fidelity memory
+ note.
+ The student model sees:
+
+   - A fixed system prompt (must NOT be referenced or modified).
+
+   - The full multi-turn dialogue history.
+
+   - A final user message that contains the compression guideline P (to be improved).
+
+ The student must output exactly ONE memory note, wrapped in <summary>...</summary>, with no additional
+ commentary, headings, or metadata.
+
+ [CURRENT_GUIDELINE]
+ {current_guideline}
+ [/CURRENT_GUIDELINE]
+
+ [EVALUATION_STATISTICS]
+ avg_reward: {avg_reward}
+ avg_similarity_to_reference: {avg_similarity}
+ avg_length_score: {avg_length_score}
+ avg_format_score: {avg_format_score}
+ num_examples: {num_examples}
+ [/EVALUATION_STATISTICS]
+
+ [EXAMPLES]
+ {examples_text}
+ [/EXAMPLES]
+
+ [YOUR TASK]
+ Using the current guideline, the evaluation statistics, and the examples:
+ 1) Diagnose weaknesses of the current guideline:
+
+   - Where it is vague or underspecified.
+
+   - What critical content it tends to omit or distort.
+
+   - Where it causes format violations or verbosity.
+
+ 2) Produce an improved guideline prompt that makes the student summary:
+
+   - Faithful: preserve key facts, numbers, entities, decisions, constraints, and outcomes.
+
+   - Tool-aware: include any tool calls, tool outputs/results, and how they influenced decisions.
+
+   - Action-oriented: capture TODOs, pending questions, commitments, deadlines (if present), and next steps.
+
+   - Structured but compact: prefer short sentences; avoid duplication; keep only what matters for future continuity.
+
+   - Non-speculative: do not invent; if uncertain, mark uncertainty briefly (e.g., “unclear/unspecified”).
+
+ 3) Hard format rules for the student output:
+
+   - Output MUST be exactly one <summary>...</summary> block.
+
+   - No text outside <summary>...</summary>.
+
+   - No bullet lists unless necessary; if used, keep at most 3–5 bullets.
+
+   - Do NOT include analysis, reasoning traces, or meta commentary.
+
+ IMPORTANT CONSTRAINTS:
+
+   - Do NOT mention or modify the system prompt.
+
+   - Do NOT include dataset-specific names, IDs, or private strings.
+
+   - Do NOT copy the examples verbatim; generalize the instruction.
+
+   - The new guideline must be a SINGLE instruction written in English, suitable as the final user message.
+                                                          25540
+Prompt (Guideline-Improver for Memory Compression)
+ [OUTPUT FORMAT]
+ Output ONLY:
+ [GUIDELINE]
+ ... your improved English guideline here ...
+ [/GUIDELINE]
+ Do not output anything else.
+
+
+           Table 7: Prompt template (Guideline-Improver for Memory Compression) (continued).
+
+
+
+
+Prompt (LLM-as-a-Judge for Hallucination Evaluation)
+ [SYSTEM]
+ You are a strict evaluator. You MUST output ONLY valid JSON (no markdown, no extra text). If
+ something is unknown, use null or an empty list.
+ [USER]
+ You will evaluate whether the compressed text contains hallucinations.
+
+ Definitions:
+ - Source text Q (ground truth): the original uncompressed history.
+ - Summary S: the compressed version generated from Q.
+ - A claim is hallucinated if it is NOT_SUPPORTED by Q, or CONTRADICTED by Q.
+
+ Task:
+ 1) Extract up to {k_claims} atomic claims from S. Each claim should be a single factual statement.
+ 2) For each claim, find the best supporting evidence span in Q (a short quote). If none exists, set evidence = "NONE".
+ 3) Label each claim as one of: "ENTAILED", "NOT_SUPPORTED", "CONTRADICTED".
+ 4) Output JSON with fields:
+   - "claims": list of objects {"claim", "label", "evidence"}
+   - "meta": {"num_claims"}
+
+ Important rules:
+ - Use "NOT_SUPPORTED" if Q does not clearly support the claim (even if it sounds plausible).
+ - Use "CONTRADICTED" only if Q clearly says the opposite.
+ - Evidence must be copied from Q when label is ENTAILED or CONTRADICTED; otherwise "NONE".
+
+ Q:
+ «<Q_BEGIN
+ {q}
+ Q_END»>
+
+ S:
+ «<S_BEGIN
+ {s}
+ S_END»>
+
+
+             Table 8: Prompt template (LLM-as-a-judge for claim-level hallucination evaluation).
+
+
+
+
+                                                        25541
+Prompt (LLM-as-a-Judge for Entity Preservation Evaluation)
+ [SYSTEM]
+ You are a strict evaluator. You MUST output ONLY valid JSON (no markdown, no extra text). If
+ something is unknown, use null or an empty list.
+ [USER]
+ Extract salient entities and numbers for evaluating entity preservation.
+
+ Definitions:
+ - Q is the source text.
+ - S is the compressed summary.
+ - “Salient entities” are the minimal set of entities/numbers/constraints that are important for solving downstream tasks,
+   such as: PERSON, ORG, PRODUCT/MODEL, LOCATION, DATE/TIME, NUMBER/THRESHOLD, FILE/PATH,
+ URL, METHOD/ALGO.
+
+ Task:
+ 1) From Q, extract up to {max_entities} salient entities into "gold_entities".
+ 2) From S, extract up to {max_entities} entities into "pred_entities".
+ 3) For each entity, provide:
+   - "text": the surface form as it appears
+  - "type": one of ["PERSON","ORG","MODEL","LOCATION","DATE","NUMBER","FILE","URL","METHOD","OTHER"]
+
+ Output JSON:
+ {
+  "gold_entities": ["text": "...", "type": "..."],
+  "pred_entities": ["text": "...", "type": "..."]
+ }
+
+ Q:
+ «<Q_BEGIN
+ {q}
+ Q_END»>
+
+ S:
+ «<S_BEGIN
+ {s}
+ S_END»>
+
+
+       Table 9: Prompt template (LLM-as-a-judge for salient entity/number preservation evaluation).
+
+
+
+
+                                                         25542
+

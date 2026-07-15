@@ -1,0 +1,38 @@
+{
+  "provider": "Perplexity API",
+  "endpoint": "https://api.perplexity.ai/chat/completions",
+  "model": "sonar-pro",
+  "status": 200,
+  "latency_seconds": 55.736575,
+  "request_prompt_file": "prompt-pre-refactor.txt",
+  "request_payload_sha256": "b8e77aa7f46f3b40c44ca94f0c9caa71d9bcceef0731b845136ca2e9a7465c53",
+  "response_bytes": 32118,
+  "error": null,
+  "credential_source": "/Users/jarvis/bin/get-secret.sh PERPLEXITY_API_KEY",
+  "credential_value_persisted": false,
+  "credential_value_logged": false,
+  "retrieved_at": "2026-07-15T00:40:38.503746+00:00",
+  "usage": {
+    "completion_tokens": 4885,
+    "cost": {
+      "input_tokens_cost": 0.00473,
+      "output_tokens_cost": 0.07327,
+      "request_cost": 0.006,
+      "total_cost": 0.084
+    },
+    "prompt_tokens": 1575,
+    "search_context_size": "low",
+    "total_tokens": 6460
+  },
+  "citations_count": 13,
+  "response_keys": [
+    "choices",
+    "citations",
+    "created",
+    "id",
+    "model",
+    "object",
+    "search_results",
+    "usage"
+  ]
+}

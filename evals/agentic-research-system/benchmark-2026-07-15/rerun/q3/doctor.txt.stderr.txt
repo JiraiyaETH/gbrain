@@ -1,0 +1,77 @@
+[doctor.db_checks] start
+[doctor.db_checks] connection
+[doctor.db_checks] pgvector
+[doctor.db_checks] pgbouncer_prepare
+[doctor.db_checks] rls
+[doctor.db_checks] schema_version
+[doctor.db_checks] rls_event_trigger
+[doctor.db_checks] embeddings
+[doctor.db_checks] embedding_provider
+[doctor.db_checks] alternative_providers
+[doctor.db_checks] embedding_column_registry
+[doctor.db_checks] embedding_env_override
+[doctor.db_checks] graph_coverage
+[doctor.db_checks] orphan_ratio
+[orphans.scan] start
+[orphans.scan] done
+[doctor.db_checks] integrity_sample
+[doctor.db_checks] jsonb_integrity
+[doctor.db_checks] jsonb_integrity.pages.frontmatter
+[doctor.db_checks] jsonb_integrity.raw_data.data
+[doctor.db_checks] jsonb_integrity.ingest_log.pages_updated
+[doctor.db_checks] jsonb_integrity.files.metadata
+[doctor.db_checks] jsonb_integrity.page_versions.frontmatter
+[doctor.db_checks] takes_weight_grid
+[doctor.db_checks] child_table_orphans
+[doctor.db_checks] whoknows_health
+[doctor.db_checks] cross_modal_modality_backfill
+[doctor.db_checks] unified_multimodal_coverage
+[doctor.db_checks] markdown_body_completeness
+[doctor.db_checks] oversized_pages
+[doctor.db_checks] scraper_junk_pages
+[doctor.db_checks] content_sanity_audit_recent
+[doctor.db_checks] quarantined_pages
+[doctor.db_checks] flagged_pages
+[doctor.db_checks] frontmatter_integrity
+[doctor.db_checks] eval_capture
+[doctor.db_checks] contradictions
+[doctor.db_checks] facts_extraction_health
+[doctor.db_checks] effective_date_health
+[doctor.db_checks] salience_health
+[doctor.db_checks] queue_health
+[doctor.db_checks] subagent_capability
+[doctor.db_checks] facts_health
+[doctor.db_checks] image_assets
+[doctor.db_checks] ocr_health
+[doctor.db_checks] sync_freshness
+[doctor.db_checks] code_index_freshness
+[doctor.db_checks] sync_consolidation
+[doctor.db_checks] links_extraction_lag
+[doctor.db_checks] cycle_freshness
+[doctor.db_checks] search_mode
+[doctor.db_checks] hidden_by_search_policy
+[doctor.db_checks] eval_drift
+[doctor.db_checks] reranker_health
+[doctor.db_checks] batch_retry_health
+[doctor.db_checks] wedged_queue
+[doctor.db_checks] autopilot_fanout_concurrency
+[doctor.db_checks] graph_signals_coverage
+[doctor.db_checks] brainstorm_health
+[doctor.db_checks] link_resolution_opportunity
+[doctor.db_checks] ze_embedding_health
+[doctor.db_checks] embedding_width_consistency
+[doctor.db_checks] facts_embedding_width_consistency
+[doctor.db_checks] source_routing_health
+[doctor.db_checks] oauth_confidential_client_health
+[doctor.db_checks] autopilot_lock_scope
+[doctor.db_checks] stale_locks
+[doctor.db_checks] cycle_phase_scope
+[doctor.db_checks] onboard_checks
+[doctor.db_checks] done
+[doctor-categories] unknown check name 'embed_staleness' — defaulting to 'meta'. Add it to src/core/doctor-categories.ts.
+[doctor-categories] unknown check name 'entity_link_coverage' — defaulting to 'meta'. Add it to src/core/doctor-categories.ts.
+[doctor-categories] unknown check name 'timeline_coverage' — defaulting to 'meta'. Add it to src/core/doctor-categories.ts.
+[doctor-categories] unknown check name 'takes_count' — defaulting to 'meta'. Add it to src/core/doctor-categories.ts.
+[doctor-categories] unknown check name 'pack_upgrade_available' — defaulting to 'meta'. Add it to src/core/doctor-categories.ts.
+[doctor-categories] unknown check name 'type_proliferation' — defaulting to 'meta'. Add it to src/core/doctor-categories.ts.
+[doctor-categories] unknown check name 'dangling_aliases' — defaulting to 'meta'. Add it to src/core/doctor-categories.ts.
