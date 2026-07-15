@@ -923,9 +923,35 @@ const put_page: Operation = {
     // double-encode fingerprint. We test the parsed body (compiled_truth) so a
     // legitimate real-newline horizontal rule (`---` on its own line) is never
     // matched; the escaped form has no real line break at all.
+    //
+    // Two shapes are caught (P1-1, Codex QA):
+    //   (a) the noncanonical unquoted form `---\n…` — a raw escaped fragment.
+    //   (b) the CANONICAL `JSON.stringify(realMarkdownDoc)` form, which produces
+    //       a LEADING double-quote before the escaped `---\n` (i.e. `"---\n…`).
+    //       gray-matter parses no outer frontmatter (the whole thing is one JSON
+    //       string scalar), so the escaped doc lands verbatim in compiled_truth
+    //       with the opening quote intact.
+    // `/^\s*"?---\\n/` matches both; the optional quote covers the stringify case.
+    const escapedJsonFragment = (s: string): boolean => /^\s*"?---\\n/.test(s);
+    // Whole-content-is-a-JSON-string-scalar case: the raw content parses as a
+    // single JSON string whose decoded value carries real `---\n` frontmatter.
+    // This catches a double-encode where even the parsed compiled_truth doesn't
+    // start with the escape (the outer quotes shifted it) but the intent is the
+    // same corruption.
+    const wholeContentIsJsonStringScalar = (raw: string): boolean => {
+      const t = raw.trim();
+      if (t.length < 2 || t[0] !== '"' || t[t.length - 1] !== '"') return false;
+      try {
+        const decoded = JSON.parse(t);
+        return typeof decoded === 'string' && /^\s*---\n/.test(decoded);
+      } catch {
+        return false;
+      }
+    };
     const escapedJsonBody =
-      /^\s*---\\n/.test(incomingParsed.compiled_truth) ||
-      /^\s*---\\n/.test(incomingParsed.timeline);
+      escapedJsonFragment(incomingParsed.compiled_truth) ||
+      escapedJsonFragment(incomingParsed.timeline) ||
+      wholeContentIsJsonStringScalar(content);
     if (escapedJsonBody) {
       throw new OperationError(
         'invalid_params',
