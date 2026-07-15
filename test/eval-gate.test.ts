@@ -200,6 +200,38 @@ describe('eval gate: --source scoping (defect fix)', () => {
     }
   });
 
+  // P2-A (Codex QA round 2): the --source value runs through the canonical
+  // validator (src/core/source-id.ts assertValidSourceId). Invalid ids → exit 2.
+  test("--source 'foo/bar' (slash — invalid) → exit 2", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-gate-test-'));
+    const qrels = writeQrelsFile(dir, [
+      { query_id: 'q1', query: 'x', relevant_slugs: ['nonexistent'] },
+    ]);
+    try {
+      const out = await withExitCapture(() =>
+        runEvalGate(engine, ['--qrels', qrels, '--source', 'foo/bar']),
+      );
+      expect(out.exitCode).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--source 'Default' (uppercase — invalid) → exit 2", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-gate-test-'));
+    const qrels = writeQrelsFile(dir, [
+      { query_id: 'q1', query: 'x', relevant_slugs: ['nonexistent'] },
+    ]);
+    try {
+      const out = await withExitCapture(() =>
+        runEvalGate(engine, ['--qrels', qrels, '--source', 'Default']),
+      );
+      expect(out.exitCode).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // P1-4 (Codex QA): --source only scopes the qrels correctness gate. Combining
   // it with --baseline (which replays globally, slug-only) is rejected rather
   // than half-scoped silently.
