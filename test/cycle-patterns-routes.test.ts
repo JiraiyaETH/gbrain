@@ -56,7 +56,7 @@ describe('dream patterns route templates', () => {
       },
     } as unknown as BrainEngine;
 
-    await patternsTesting.gatherReflections(engine, 30, reflectionPrefix);
+    await patternsTesting.gatherReflections(engine, 30, reflectionPrefix, 'default');
     const prompt = patternsTesting.buildPatternsPrompt(reflections, 3, routes, reflectionPrefix);
 
     expect(reflectionPrefix).toBe('personal/reflections/%');

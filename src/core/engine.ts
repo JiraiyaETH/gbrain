@@ -1636,7 +1636,7 @@ export interface BrainEngine {
    * by the doctor `contradictions` check. `report_json` and
    * `source_tier_breakdown` are parsed JSONB columns.
    */
-  loadContradictionsTrend(days: number): Promise<Array<{
+  loadContradictionsTrend(days: number, opts?: { sourceId?: string }): Promise<Array<{
     run_id: string;
     ran_at: string;
     judge_model: string;

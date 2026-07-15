@@ -77,6 +77,7 @@ describe('E2E synthesize — disabled / not_configured', () => {
       const result = await runPhaseSynthesize(rig.engine, {
         brainDir: rig.brainDir,
         dryRun: false,
+        sourceId: 'default',
       });
       expect(result.status).toBe('skipped');
       expect((result.details as { reason?: string }).reason).toBe('not_configured');
@@ -92,6 +93,7 @@ describe('E2E synthesize — disabled / not_configured', () => {
       const result = await runPhaseSynthesize(rig.engine, {
         brainDir: rig.brainDir,
         dryRun: false,
+        sourceId: 'default',
       });
       expect(result.status).toBe('skipped');
       expect((result.details as { reason?: string }).reason).toBe('not_configured');
@@ -110,6 +112,7 @@ describe('E2E synthesize — empty corpus', () => {
       const result = await runPhaseSynthesize(rig.engine, {
         brainDir: rig.brainDir,
         dryRun: false,
+        sourceId: 'default',
       });
       expect(result.status).toBe('ok');
       expect((result.details as { transcripts_processed: number }).transcripts_processed).toBe(0);
@@ -152,6 +155,7 @@ describe('E2E synthesize — gateway-adapter mid-run AIConfigError catch (v0.41 
         const result = await runPhaseSynthesize(rig.engine, {
           brainDir: rig.brainDir,
           dryRun: false,
+          sourceId: 'default',
         });
 
         // The phase did NOT throw; it converted the AIConfigError into a
@@ -188,6 +192,7 @@ describe('E2E synthesize — no API key skip path', () => {
         const result = await runPhaseSynthesize(rig.engine, {
           brainDir: rig.brainDir,
           dryRun: false,
+          sourceId: 'default',
         });
         expect(result.status).toBe('ok');
         expect((result.details as { transcripts_processed: number }).transcripts_processed).toBe(0);
@@ -221,6 +226,7 @@ describe('E2E synthesize — dry-run skips Sonnet (Codex finding #8)', () => {
         const result = await runPhaseSynthesize(rig.engine, {
           brainDir: rig.brainDir,
           dryRun: true,
+          sourceId: 'default',
         });
         expect(result.status).toBe('ok');
         expect((result.details as { dryRun: boolean }).dryRun).toBe(true);
@@ -239,11 +245,12 @@ describe('E2E synthesize — cooldown', () => {
     try {
       await rig.engine.setConfig('dream.synthesize.enabled', 'true');
       await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
-      await rig.engine.setConfig('dream.synthesize.last_completion_ts', new Date().toISOString());
+      await rig.engine.setConfig('dream.synthesize.last_completion_ts.default', new Date().toISOString());
       await rig.engine.setConfig('dream.synthesize.cooldown_hours', '12');
       const result = await runPhaseSynthesize(rig.engine, {
         brainDir: rig.brainDir,
         dryRun: false,
+        sourceId: 'default',
       });
       expect(result.status).toBe('skipped');
       expect((result.details as { reason?: string }).reason).toBe('cooldown_active');
@@ -258,7 +265,7 @@ describe('E2E synthesize — cooldown', () => {
     try {
       await rig.engine.setConfig('dream.synthesize.enabled', 'true');
       await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
-      await rig.engine.setConfig('dream.synthesize.last_completion_ts', new Date().toISOString());
+      await rig.engine.setConfig('dream.synthesize.last_completion_ts.default', new Date().toISOString());
       const adHoc = join(tmpdir(), `gbrain-synth-ad-hoc-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
       writeFileSync(adHoc, 'hello world '.repeat(300));
       try {
@@ -266,6 +273,7 @@ describe('E2E synthesize — cooldown', () => {
           const result = await runPhaseSynthesize(rig.engine, {
             brainDir: rig.brainDir,
             dryRun: false,
+            sourceId: 'default',
             inputFile: adHoc,
           });
           expect(result.status).toBe('ok');
@@ -274,6 +282,38 @@ describe('E2E synthesize — cooldown', () => {
       } finally {
         rmSync(adHoc, { force: true });
       }
+    } finally {
+      await rig.cleanup();
+    }
+  }, 30_000);
+
+  test('cooldown is per-source and does not suppress a neighboring source', async () => {
+    const rig = await setupRig();
+    try {
+      await rig.engine.executeRaw(
+        `INSERT INTO sources (id, name, config)
+         VALUES ('robotics', 'robotics', '{"federated": true}'::jsonb)`,
+      );
+      await rig.engine.setConfig('dream.synthesize.enabled', 'true');
+      await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
+      await rig.engine.setConfig('dream.synthesize.cooldown_hours', '12');
+      await rig.engine.setConfig('dream.synthesize.last_completion_ts.robotics', new Date().toISOString());
+
+      const defaultResult = await runPhaseSynthesize(rig.engine, {
+        brainDir: rig.brainDir,
+        dryRun: false,
+        sourceId: 'default',
+      });
+      expect(defaultResult.status).toBe('ok');
+      expect(defaultResult.details.reason).toBeUndefined();
+
+      const roboticsResult = await runPhaseSynthesize(rig.engine, {
+        brainDir: rig.brainDir,
+        dryRun: false,
+        sourceId: 'robotics',
+      });
+      expect(roboticsResult.status).toBe('skipped');
+      expect(roboticsResult.details.reason).toBe('cooldown_active');
     } finally {
       await rig.cleanup();
     }
@@ -354,6 +394,7 @@ describe('E2E synthesize — round-trip self-consumption guard (v0.23.2)', () =>
           runPhaseSynthesize(rig.engine, {
             brainDir: rig.brainDir,
             dryRun: false,
+            sourceId: 'default',
           }),
         );
 
@@ -403,6 +444,7 @@ describe('E2E synthesize — round-trip self-consumption guard (v0.23.2)', () =>
           runPhaseSynthesize(rig.engine, {
             brainDir: rig.brainDir,
             dryRun: false,
+            sourceId: 'default',
             bypassDreamGuard: true,
           }),
         );
@@ -462,6 +504,7 @@ describe('E2E synthesize — round-trip self-consumption guard (v0.23.2)', () =>
           runPhaseSynthesize(rig.engine, {
             brainDir: rig.brainDir,
             dryRun: false,
+            sourceId: 'default',
           }),
         );
 
@@ -495,7 +538,7 @@ describe('E2E synthesize — verdict cache (Q-2)', () => {
       const body = 'a meaningful conversation\n'.repeat(200);
       writeFileSync(filePath, body);
       await withoutAnthropicKey(async () => {
-        await runPhaseSynthesize(rig.engine, { brainDir: rig.brainDir, dryRun: false });
+        await runPhaseSynthesize(rig.engine, { brainDir: rig.brainDir, dryRun: false, sourceId: 'default' });
         const { createHash } = await import('node:crypto');
         const hash = createHash('sha256').update(body, 'utf8').digest('hex');
         await rig.engine.putDreamVerdict(filePath, hash, {
@@ -505,6 +548,7 @@ describe('E2E synthesize — verdict cache (Q-2)', () => {
         const result = await runPhaseSynthesize(rig.engine, {
           brainDir: rig.brainDir,
           dryRun: false,
+          sourceId: 'default',
         });
         expect(result.status).toBe('ok');
         const verdicts = (result.details as { verdicts: Array<{ cached: boolean }> }).verdicts;

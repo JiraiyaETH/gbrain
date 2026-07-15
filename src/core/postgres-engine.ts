@@ -4500,7 +4500,7 @@ export class PostgresEngine implements BrainEngine {
    * v0.32.6 — load probe runs from the last N days, newest first (M5).
    * Used by `trend` sub-subcommand and the doctor `contradictions` check.
    */
-  async loadContradictionsTrend(days: number): Promise<Array<{
+  async loadContradictionsTrend(days: number, opts?: { sourceId?: string }): Promise<Array<{
     run_id: string;
     ran_at: string;
     judge_model: string;
@@ -4527,7 +4527,7 @@ export class PostgresEngine implements BrainEngine {
       WHERE ran_at >= ${cutoff}
       ORDER BY ran_at DESC
     `;
-    return rows.map((r) => ({
+    const mapped = rows.map((r) => ({
       run_id: r.run_id as string,
       ran_at: (r.ran_at instanceof Date ? r.ran_at.toISOString() : String(r.ran_at)),
       judge_model: r.judge_model as string,
@@ -4542,6 +4542,21 @@ export class PostgresEngine implements BrainEngine {
       source_tier_breakdown: r.source_tier_breakdown as Record<string, unknown>,
       report_json: r.report_json as Record<string, unknown>,
     }));
+    if (!opts?.sourceId || mapped.length === 0) return mapped;
+
+    const { contradictionTrendSlugs, scopeContradictionsTrend } = await import('./contradictions-trend-scope.ts');
+    const slugs = contradictionTrendSlugs(mapped);
+    if (slugs.length === 0) return [];
+    const allowedRows = await sql<{ slug: string }[]>`
+      SELECT slug FROM pages
+       WHERE source_id = ${opts.sourceId}
+         AND deleted_at IS NULL
+         AND slug = ANY(${slugs}::text[])
+    `;
+    return scopeContradictionsTrend(
+      mapped,
+      new Set(allowedRows.map((row) => row.slug)),
+    );
   }
 
   /**

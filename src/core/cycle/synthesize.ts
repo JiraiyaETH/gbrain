@@ -15,10 +15,11 @@
  *   - Allow-list is sourced from `skills/_brain-filing-rules.json` (single
  *     source of truth) and threaded as handler data; PROTECTED_JOB_NAMES
  *     prevents MCP from submitting `subagent` jobs, so the field is trusted.
- *   - Cooldown via `dream.synthesize.last_completion_ts` config key —
+ *   - Cooldown via a source-keyed `dream.synthesize.last_completion_ts.*`
+ *     config key —
  *     written ONLY on success (codex finding #5 deferral: no auto git commit
  *     in v1).
- *   - Idempotency via `dream:synth:<file_path>:<content_hash>` job key.
+ *   - Idempotency via `dream:synth:<source_id>:<file_path>:<content_hash>`.
  *   - Edited transcripts produce slugs with content-hash suffix → no overwrite.
  *
  * NOT in v1:
@@ -225,6 +226,7 @@ export function rewriteChunkedSlug(slug: string, hash6: string, idx: number): st
 export interface SynthesizePhaseOpts {
   brainDir: string;
   dryRun: boolean;
+  sourceId: string;
   /** Generic in-cycle keepalive for cycle-lock TTL renewal during long waits. */
   yieldDuringPhase?: () => Promise<void>;
   /**
@@ -235,7 +237,6 @@ export interface SynthesizePhaseOpts {
   date?: string;
   from?: string;
   to?: string;
-  sourceId?: string;
   /**
    * Disable the self-consumption guard. Wired from the
    * `--unsafe-bypass-dream-guard` CLI flag. NOT auto-applied for `--input`
@@ -243,6 +244,30 @@ export interface SynthesizePhaseOpts {
    * the synthesize loop. Caller must opt in explicitly.
    */
   bypassDreamGuard?: boolean;
+}
+
+/**
+ * Cheap availability check shared by runCycle's fail-closed dispatch guard
+ * and the phase itself. It intentionally performs config reads only: an
+ * unresolved multi-source cycle may determine that a disabled/unconfigured
+ * phase is harmless, but must not touch content tables.
+ */
+export async function preflightSynthesize(
+  engine: BrainEngine,
+  opts: Pick<SynthesizePhaseOpts, 'inputFile'>,
+): Promise<PhaseResult | null> {
+  if (opts.inputFile) return null;
+  const [enabledRaw, corpusDir] = await Promise.all([
+    engine.getConfig('dream.synthesize.enabled'),
+    engine.getConfig('dream.synthesize.session_corpus_dir'),
+  ]);
+  if (!corpusDir) {
+    return skipped('not_configured', 'dream.synthesize.session_corpus_dir is unset');
+  }
+  if (enabledRaw === 'false') {
+    return skipped('not_configured', 'dream.synthesize.enabled is explicitly false');
+  }
+  return null;
 }
 
 export async function runPhaseSynthesize(
@@ -268,22 +293,15 @@ export async function runPhaseSynthesize(
     opts.brainDir = resolve(opts.brainDir);
   }
   try {
-    const config = await loadSynthConfig(engine);
+    const unavailable = await preflightSynthesize(engine, opts);
+    if (unavailable) return unavailable;
 
-    // Allow ad-hoc --input to run even when config is disabled.
-    if (!opts.inputFile && !config.corpusDir) {
-      return skipped('not_configured',
-        'dream.synthesize.session_corpus_dir is unset');
-    }
-    if (!opts.inputFile && !config.enabled) {
-      return skipped('not_configured',
-        'dream.synthesize.enabled is explicitly false');
-    }
+    const config = await loadSynthConfig(engine);
 
     // Cooldown check (skipped for explicit --input / --date / --from / --to runs).
     const explicitTarget = opts.inputFile || opts.date || opts.from || opts.to;
     if (!explicitTarget) {
-      const cooldown = await checkCooldown(engine, config.cooldownHours);
+      const cooldown = await checkCooldown(engine, config.cooldownHours, opts.sourceId);
       if (cooldown.active) {
         return skipped('cooldown_active',
           `synthesize cooled down until ${cooldown.expires_at} (${config.cooldownHours}h cooldown)`);
@@ -301,9 +319,12 @@ export async function runPhaseSynthesize(
     // run (if any). Surfaced as an informational block to the synthesize
     // subagent so it knows which slugs it should reconcile if it writes to
     // them. Best-effort — a probe that's never run is a normal early state.
-    const priorContradictionsBlock = await loadPriorContradictionsBlock(engine);
+    const priorContradictionsBlock = await loadPriorContradictionsBlock(engine, opts.sourceId);
 
     // Discover.
+    // The session corpus is intentionally source-less: it is an external
+    // discovery lane, not a brain table. Every DB read and every page write
+    // below is nevertheless bound to opts.sourceId.
     const transcripts = opts.inputFile
       ? loadAdHocTranscript(opts.inputFile, config.minChars, config.excludePatterns, opts.bypassDreamGuard)
       : discoverTranscripts({
@@ -423,7 +444,7 @@ export async function runPhaseSynthesize(
       // synthesized and skip. Prevents duplicate writes when a transcript
       // that was previously single-chunk now multi-chunks (because budget
       // shrank or model changed).
-      if (await hasLegacySingleChunkCompletion(engine, t.filePath, hash16)) {
+      if (await hasSingleChunkCompletion(engine, t.filePath, hash16, opts.sourceId)) {
         skipReports.push({
           filePath: t.filePath,
           reason: 'already_synthesized_legacy_single_chunk',
@@ -467,17 +488,17 @@ export async function runPhaseSynthesize(
           model: subagentModel,
           max_turns: 30,
           allowed_slug_prefixes: allowedSlugPrefixes,
-          ...(opts.sourceId && opts.sourceId !== 'default' ? { source_id: opts.sourceId } : {}),
+          source_id: opts.sourceId,
         };
-        // Idempotency key parity:
-        //   - single-chunk → legacy `dream:synth:<filePath>:<hash16>` (byte-
-        //     equivalent across versions; preserves dedup for unchanged
-        //     transcripts on upgrade).
-        //   - multi-chunk → `<legacy>:c<i>of<n>` per chunk; durable across
-        //     runs because D9 splitTranscriptByBudget is hash-deterministic.
-        const idempotency_key = isChunked
-          ? `dream:synth:${t.filePath}:${hash16}:c${i}of${chunks.length}`
-          : `dream:synth:${t.filePath}:${hash16}`;
+        // The source is part of every key so per-source autopilot fanout cannot
+        // cross-suppress identical corpus files. Multi-chunk jobs append the
+        // deterministic chunk identity.
+        const idempotency_key = synthesizeIdempotencyKey(
+          opts.sourceId,
+          t.filePath,
+          hash16,
+          isChunked ? { index: i, total: chunks.length } : undefined,
+        );
         const submitOpts: Partial<MinionJobInput> = {
           max_stalled: 3,
           on_child_fail: 'continue',
@@ -526,8 +547,8 @@ export async function runPhaseSynthesize(
     // bare-hash slugs to `<hash6>-c<idx>` so chunked siblings can't collide
     // even if Sonnet drops the chunk suffix.
     // v0.32.8: refs carry source_id so reverseWriteRefs picks the correct
-    // (source, slug) row (currently always 'default' from subagent put_page).
-    const writtenRefs = await collectChildPutPageSlugs(engine, childIds, chunkInfo, opts.sourceId ?? 'default');
+    // (source, slug) row selected for this cycle.
+    const writtenRefs = await collectChildPutPageSlugs(engine, childIds, chunkInfo, opts.sourceId);
 
     // Dual-write: reverse-render each DB row → markdown file.
     const reverseWriteCount = await reverseWriteRefs(engine, opts.brainDir, writtenRefs);
@@ -539,11 +560,19 @@ export async function runPhaseSynthesize(
     // Back-compat: writeSummaryPage takes string[] for display; map refs back to slugs.
     const writtenSlugs = writtenRefs.map(r => r.slug);
     if (SUMMARY_SLUG_RE.test(summarySlug)) {
-      await writeSummaryPage(engine, opts.brainDir, summarySlug, summaryDate, writtenSlugs, childOutcomes);
+      await writeSummaryPage(
+        engine,
+        opts.brainDir,
+        summarySlug,
+        summaryDate,
+        writtenSlugs,
+        childOutcomes,
+        opts.sourceId,
+      );
     }
 
     // Write completion timestamp ON SUCCESS only.
-    await engine.setConfig('dream.synthesize.last_completion_ts', new Date().toISOString());
+    await engine.setConfig(synthesizeCompletionKey(opts.sourceId), new Date().toISOString());
 
     const ms = Date.now() - start;
     const submittedTranscripts = worthProcessing.length - skipReports.length;
@@ -575,7 +604,6 @@ export async function runPhaseSynthesize(
 // ── Config ────────────────────────────────────────────────────────────
 
 interface SynthConfig {
-  enabled: boolean;
   corpusDir: string | null;
   meetingTranscriptsDir: string | null;
   minChars: number;
@@ -605,11 +633,7 @@ interface SynthConfig {
 }
 
 async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
-  const enabledRaw = await engine.getConfig('dream.synthesize.enabled');
   const corpusDir = await engine.getConfig('dream.synthesize.session_corpus_dir');
-  // v2: enabled defaults to true when corpus dir is configured, false otherwise.
-  // Explicit enabled=false still wins for pausing synthesis without removing corpus config.
-  const enabled = enabledRaw === 'false' ? false : (enabledRaw === 'true' || !!corpusDir);
   const meetingTranscriptsDir = await engine.getConfig('dream.synthesize.meeting_transcripts_dir');
   const minCharsStr = await engine.getConfig('dream.synthesize.min_chars');
   const excludeStr = await engine.getConfig('dream.synthesize.exclude_patterns');
@@ -658,7 +682,6 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
   }
 
   return {
-    enabled,
     corpusDir: corpusDir ?? null,
     meetingTranscriptsDir: meetingTranscriptsDir ?? null,
     minChars: minCharsStr ? Math.max(0, parseInt(minCharsStr, 10) || 2000) : 2000,
@@ -675,15 +698,30 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
 async function checkCooldown(
   engine: BrainEngine,
   hours: number,
+  sourceId: string,
 ): Promise<{ active: boolean; expires_at?: string }> {
   if (hours <= 0) return { active: false };
-  const last = await engine.getConfig('dream.synthesize.last_completion_ts');
+  const last = await engine.getConfig(synthesizeCompletionKey(sourceId));
   if (!last) return { active: false };
   const lastMs = Date.parse(last);
   if (Number.isNaN(lastMs)) return { active: false };
   const expiresMs = lastMs + hours * 60 * 60 * 1000;
   if (Date.now() >= expiresMs) return { active: false };
   return { active: true, expires_at: new Date(expiresMs).toISOString() };
+}
+
+export function synthesizeCompletionKey(sourceId: string): string {
+  return `dream.synthesize.last_completion_ts.${sourceId}`;
+}
+
+export function synthesizeIdempotencyKey(
+  sourceId: string,
+  filePath: string,
+  hash16: string,
+  chunk?: { index: number; total: number },
+): string {
+  const base = `dream:synth:${sourceId}:${filePath}:${hash16}`;
+  return chunk ? `${base}:c${chunk.index}of${chunk.total}` : base;
 }
 
 // ── Allow-list source of truth ───────────────────────────────────────
@@ -937,9 +975,9 @@ Two reasons max, one phrase each.`;
  * Returns '' if no probe runs exist or the engine doesn't know how (pre-v33
  * brain that hasn't applied migrations). Best-effort and silent on failure.
  */
-async function loadPriorContradictionsBlock(engine: BrainEngine): Promise<string> {
+async function loadPriorContradictionsBlock(engine: BrainEngine, sourceId: string): Promise<string> {
   try {
-    const rows = await engine.loadContradictionsTrend(30);
+    const rows = await engine.loadContradictionsTrend(30, { sourceId });
     if (!rows || rows.length === 0) return '';
     const latest = rows[0];
     const report = latest.report_json as Record<string, unknown> | null;
@@ -1086,7 +1124,7 @@ async function collectChildPutPageSlugs(
   engine: BrainEngine,
   childIds: number[],
   chunkInfo: Map<number, { idx: number; hash6: string }>,
-  sourceId = 'default',
+  sourceId: string,
 ): Promise<Array<{ slug: string; source_id: string }>> {
   if (childIds.length === 0) return [];
   // Raw fetch — NO SELECT DISTINCT. Preserves per-child slug duplicates so
@@ -1138,20 +1176,21 @@ async function collectChildPutPageSlugs(
 }
 
 /**
- * D8: query for any `completed` legacy single-chunk job at the canonical
- * idempotency key shape `dream:synth:<filePath>:<hash16>`. Used at fan-out
- * time to detect transcripts that were synthesized under the pre-chunking
- * code path; those should NOT be re-submitted under chunked keys.
+ * D8: query for any completed source-scoped single-chunk job at the canonical
+ * idempotency key shape `dream:synth:<sourceId>:<filePath>:<hash16>`. Used at
+ * fan-out time to avoid re-submitting a transcript that was already completed
+ * under the single-chunk path for this same source.
  *
  * Reuses the existing `minion_jobs.idempotency_key` index — no schema
  * additions. One indexed lookup per worth-processing transcript.
  */
-async function hasLegacySingleChunkCompletion(
+async function hasSingleChunkCompletion(
   engine: BrainEngine,
   filePath: string,
   hash16: string,
+  sourceId: string,
 ): Promise<boolean> {
-  const legacyKey = `dream:synth:${filePath}:${hash16}`;
+  const legacyKey = synthesizeIdempotencyKey(sourceId, filePath, hash16);
   const rows = await engine.executeRaw<{ status: string }>(
     `SELECT status
        FROM minion_jobs
@@ -1229,6 +1268,7 @@ async function writeSummaryPage(
   summaryDate: string,
   writtenSlugs: string[],
   childOutcomes: Array<{ jobId: number; status: string }>,
+  sourceId: string,
 ): Promise<void> {
   const completed = childOutcomes.filter(c => c.status === 'completed').length;
   const failed = childOutcomes.length - completed;
@@ -1272,11 +1312,14 @@ async function writeSummaryPage(
     compiled_truth: parsed.compiled_truth,
     timeline: parsed.timeline,
     frontmatter: parsed.frontmatter,
-  });
+  }, { sourceId });
 
   // Also write to disk (orchestrator dual-write).
   try {
-    const filePath = join(brainDir, `${summarySlug}.md`);
+    validateSourceId(sourceId);
+    const filePath = sourceId === 'default'
+      ? join(brainDir, `${summarySlug}.md`)
+      : join(brainDir, '.sources', sourceId, `${summarySlug}.md`);
     mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, fullMarkdown, 'utf8');
   } catch (e) {
@@ -1342,4 +1385,6 @@ export const __testing = {
   DEFAULT_DREAM_SYNTHESIZE_ROUTES,
   parseDreamSynthesizeRoutes,
   renderDreamSlugRoute,
+  loadPriorContradictionsBlock,
+  writeSummaryPage,
 };

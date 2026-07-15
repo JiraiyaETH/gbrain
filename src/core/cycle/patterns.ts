@@ -37,8 +37,16 @@ import {
 export interface PatternsPhaseOpts {
   brainDir: string;
   dryRun: boolean;
-  sourceId?: string;
+  sourceId: string;
   yieldDuringPhase?: () => Promise<void>;
+}
+
+/** Config-only preflight used before the cycle's unresolved-source guard. */
+export async function preflightPatterns(engine: BrainEngine): Promise<PhaseResult | null> {
+  const enabledStr = await engine.getConfig('dream.patterns.enabled');
+  return enabledStr === 'false'
+    ? skipped('disabled', 'dream.patterns.enabled is false')
+    : null;
 }
 
 export async function runPhasePatterns(
@@ -47,11 +55,10 @@ export async function runPhasePatterns(
 ): Promise<PhaseResult> {
   const start = Date.now();
   try {
-    const config = await loadPatternsConfig(engine);
+    const unavailable = await preflightPatterns(engine);
+    if (unavailable) return unavailable;
 
-    if (!config.enabled) {
-      return skipped('disabled', 'dream.patterns.enabled is false');
-    }
+    const config = await loadPatternsConfig(engine);
 
     const synthPaths = await loadDreamSynthesizePaths();
     const reflectionLikePrefix = deriveDreamRouteLikePrefix(
@@ -104,7 +111,7 @@ export async function runPhasePatterns(
       model: subagentModel,
       max_turns: 30,
       allowed_slug_prefixes: allowedSlugPrefixes,
-      ...(opts.sourceId && opts.sourceId !== 'default' ? { source_id: opts.sourceId } : {}),
+      source_id: opts.sourceId,
     };
     const submitOpts: Partial<MinionJobInput> = {
       max_stalled: 3,
@@ -133,7 +140,7 @@ export async function runPhasePatterns(
     // Collect refs the subagent wrote (codex finding #2 — query tool exec rows).
     // v0.32.8: refs carry source_id so reverseWriteRefs targets the right
     // (source, slug) row instead of the first DB match.
-    const writtenRefs = await collectChildPutPageSlugs(engine, [job.id], opts.sourceId ?? 'default');
+    const writtenRefs = await collectChildPutPageSlugs(engine, [job.id], opts.sourceId);
 
     // Reverse-write to fs.
     const reverseWriteCount = await reverseWriteRefs(engine, opts.brainDir, writtenRefs);
@@ -156,7 +163,6 @@ export async function runPhasePatterns(
 // ── Config ────────────────────────────────────────────────────────────
 
 interface PatternsConfig {
-  enabled: boolean;
   lookbackDays: number;
   minEvidence: number;
   model: string;
@@ -164,8 +170,6 @@ interface PatternsConfig {
 }
 
 async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> {
-  const enabledStr = await engine.getConfig('dream.patterns.enabled');
-  const enabled = enabledStr === null ? true : enabledStr === 'true';
   const lookbackStr = await engine.getConfig('dream.patterns.lookback_days');
   const minEvidenceStr = await engine.getConfig('dream.patterns.min_evidence');
   const useSubscriptionBillingRaw = await engine.getConfig('dream.synthesize.use_subscription_billing');
@@ -178,7 +182,6 @@ async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> 
     fallback: 'sonnet',
   });
   return {
-    enabled,
     lookbackDays: lookbackStr ? Math.max(1, parseInt(lookbackStr, 10) || 30) : 30,
     minEvidence: minEvidenceStr ? Math.max(1, parseInt(minEvidenceStr, 10) || 3) : 3,
     model,
@@ -198,21 +201,18 @@ async function gatherReflections(
   engine: BrainEngine,
   lookbackDays: number,
   reflectionLikePrefix: string,
-  sourceId?: string,
+  sourceId: string,
 ): Promise<ReflectionRef[]> {
   const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
-  const params: unknown[] = [since, reflectionLikePrefix];
-  const sourceClause = sourceId ? 'AND source_id = $3' : '';
-  if (sourceId) params.push(sourceId);
   const rows = await engine.executeRaw<{ slug: string; title: string | null; compiled_truth: string | null }>(
     `SELECT slug, title, compiled_truth
        FROM pages
       WHERE slug LIKE $2
         AND updated_at >= $1::timestamptz
-        ${sourceClause}
+        AND source_id = $3
       ORDER BY updated_at DESC
       LIMIT 100`,
-    params,
+    [since, reflectionLikePrefix, sourceId],
   );
   return rows.map(r => ({
     slug: r.slug,
@@ -294,7 +294,7 @@ function displayPathFromLikePrefix(likePrefix: string): string {
 async function collectChildPutPageSlugs(
   engine: BrainEngine,
   childIds: number[],
-  sourceId = 'default',
+  sourceId: string,
 ): Promise<Array<{ slug: string; source_id: string }>> {
   if (childIds.length === 0) return [];
   // v0.32.8: refs carry source_id so reverseWriteRefs can pass it through

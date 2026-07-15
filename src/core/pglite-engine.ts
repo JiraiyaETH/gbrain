@@ -4490,7 +4490,7 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   /** v0.32.6 M5 — read probe runs from the last N days. */
-  async loadContradictionsTrend(days: number): Promise<Array<{
+  async loadContradictionsTrend(days: number, opts?: { sourceId?: string }): Promise<Array<{
     run_id: string;
     ran_at: string;
     judge_model: string;
@@ -4517,7 +4517,7 @@ export class PGLiteEngine implements BrainEngine {
        ORDER BY ran_at DESC`,
       [cutoff]
     );
-    return (rows as Record<string, unknown>[]).map((r) => ({
+    const mapped = (rows as Record<string, unknown>[]).map((r) => ({
       run_id: r.run_id as string,
       ran_at: r.ran_at instanceof Date ? (r.ran_at as Date).toISOString() : String(r.ran_at),
       judge_model: r.judge_model as string,
@@ -4532,6 +4532,22 @@ export class PGLiteEngine implements BrainEngine {
       source_tier_breakdown: r.source_tier_breakdown as Record<string, unknown>,
       report_json: r.report_json as Record<string, unknown>,
     }));
+    if (!opts?.sourceId || mapped.length === 0) return mapped;
+
+    const { contradictionTrendSlugs, scopeContradictionsTrend } = await import('./contradictions-trend-scope.ts');
+    const slugs = contradictionTrendSlugs(mapped);
+    if (slugs.length === 0) return [];
+    const { rows: allowedRows } = await this.db.query(
+      `SELECT slug FROM pages
+        WHERE source_id = $1
+          AND deleted_at IS NULL
+          AND slug = ANY($2::text[])`,
+      [opts.sourceId, slugs],
+    );
+    return scopeContradictionsTrend(
+      mapped,
+      new Set((allowedRows as Array<{ slug: string }>).map((row) => row.slug)),
+    );
   }
 
   /** v0.32.6 P2 — cache lookup; returns verdict JSON or null. */

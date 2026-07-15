@@ -56,7 +56,7 @@ describe('C6: collectChildPutPageSlugs survives double-encoded jsonb (#745)', ()
        VALUES (1001, 0, 'tool_a', 'brain_put_page', 'complete', $1::jsonb)`,
       [JSON.stringify({ slug: 'wiki/agents/test/normal-shape', body: 'hi' })],
     );
-    const refs = await collectChildPutPageSlugs(engine as any, [1001], new Map());
+    const refs = await collectChildPutPageSlugs(engine as any, [1001], new Map(), 'default');
     expect(refs.map((r: { slug: string }) => r.slug)).toContain('wiki/agents/test/normal-shape');
   });
 
@@ -81,12 +81,12 @@ describe('C6: collectChildPutPageSlugs survives double-encoded jsonb (#745)', ()
     );
     expect(probe.rows[0].t).toBe('string');
 
-    const refs = await collectChildPutPageSlugs(engine as any, [1002], new Map());
+    const refs = await collectChildPutPageSlugs(engine as any, [1002], new Map(), 'default');
     expect(refs.map((r: { slug: string }) => r.slug)).toContain('wiki/agents/test/double-encoded');
   });
 
   test('handles MIXED inputs: returns slugs from both shapes in one query', async () => {
-    const refs = await collectChildPutPageSlugs(engine as any, [1001, 1002], new Map());
+    const refs = await collectChildPutPageSlugs(engine as any, [1001, 1002], new Map(), 'default');
     const slugs = refs.map((r: { slug: string }) => r.slug);
     expect(slugs).toContain('wiki/agents/test/normal-shape');
     expect(slugs).toContain('wiki/agents/test/double-encoded');
@@ -99,7 +99,7 @@ describe('C6: collectChildPutPageSlugs survives double-encoded jsonb (#745)', ()
        VALUES (1003, 0, 'tool_c', 'brain_put_page', 'complete', $1::jsonb)`,
       [JSON.stringify({ unrelated: 'no-slug' })],
     );
-    const refs = await collectChildPutPageSlugs(engine as any, [1003], new Map());
+    const refs = await collectChildPutPageSlugs(engine as any, [1003], new Map(), 'default');
     // Function silently drops rows whose slug resolves to null/empty.
     expect(refs.map((r: { slug: string }) => r.slug)).not.toContain('no-slug');
   });
