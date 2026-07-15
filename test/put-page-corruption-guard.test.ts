@@ -107,6 +107,25 @@ describe('put_page corruption guard — REJECTED classes', () => {
       expect(await engine.getPage(slug)).toBeNull();
     }
   });
+
+  test('rejects canonical JSON.stringify of a CRLF markdown doc (P1-A CRLF-tolerant guard)', async () => {
+    // Codex QA round 2 (P1-A): a CRLF markdown doc JSON.stringify's to literal
+    // `\r\n` escapes, so the escaped form is `---\r\n…`. The pre-fix guard only
+    // matched `---\n` and let this through. Both detection paths are now
+    // CRLF-tolerant. The whole content is a JSON string scalar whose decoded
+    // value carries real `---\r\n` frontmatter.
+    const crlfDoc =
+      `${fence}\r\ntype: note\r\ntitle: GBrain CRLF smoke\r\n${fence}\r\n\r\n# smoke\r\n\r\nbody text\r\n`;
+    const content = JSON.stringify(crlfDoc);
+    for (const remote of [false, true]) {
+      const slug = `notes/crlf-${remote ? 'r' : 'l'}`;
+      const promise = put(slug, content, remote);
+      await expect(promise).rejects.toBeInstanceOf(OperationError);
+      await expect(promise).rejects.toMatchObject({ code: 'invalid_params' });
+      await expect(promise).rejects.toThrow(/JSON-stringified/);
+      expect(await engine.getPage(slug)).toBeNull();
+    }
+  });
 });
 
 describe('put_page corruption guard — ALLOWED (historically valid) classes', () => {

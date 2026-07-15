@@ -932,7 +932,10 @@ const put_page: Operation = {
     //       string scalar), so the escaped doc lands verbatim in compiled_truth
     //       with the opening quote intact.
     // `/^\s*"?---\\n/` matches both; the optional quote covers the stringify case.
-    const escapedJsonFragment = (s: string): boolean => /^\s*"?---\\n/.test(s);
+    // CRLF-tolerant (Codex QA round 2, P1-A): a JSON.stringify of a CRLF markdown
+    // doc emits the literal 4-char escape `\r\n`, so the escaped form is `---\r\n`
+    // (backslash-r backslash-n). Match an optional `\\r` before the `\\n`.
+    const escapedJsonFragment = (s: string): boolean => /^\s*"?---(?:\\r)?\\n/.test(s);
     // Whole-content-is-a-JSON-string-scalar case: the raw content parses as a
     // single JSON string whose decoded value carries real `---\n` frontmatter.
     // This catches a double-encode where even the parsed compiled_truth doesn't
@@ -943,7 +946,9 @@ const put_page: Operation = {
       if (t.length < 2 || t[0] !== '"' || t[t.length - 1] !== '"') return false;
       try {
         const decoded = JSON.parse(t);
-        return typeof decoded === 'string' && /^\s*---\n/.test(decoded);
+        // CRLF-tolerant (Codex QA round 2, P1-A): the decoded scalar carries a
+        // REAL newline, and a CRLF doc decodes to `---\r\n…` — match `\r?\n`.
+        return typeof decoded === 'string' && /^---\r?\n/m.test(decoded);
       } catch {
         return false;
       }
