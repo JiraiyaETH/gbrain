@@ -51,7 +51,7 @@ async function setupRig(): Promise<TestRig> {
  * gather query has data without going through the synthesize phase.
  * Slugs follow the route-driven personal/reflections/<topic>-<hash> shape.
  */
-async function seedReflections(engine: PGLiteEngine, count: number): Promise<void> {
+async function seedReflections(engine: PGLiteEngine, count: number, sourceId = 'default'): Promise<void> {
   for (let i = 0; i < count; i++) {
     const slug = `personal/reflections/2026-04-${String(15 + i).padStart(2, '0')}-test-pattern-aaa${i}`;
     await engine.putPage(slug, {
@@ -60,7 +60,28 @@ async function seedReflections(engine: PGLiteEngine, count: number): Promise<voi
       compiled_truth: `Sample reflection content ${i} discussing recurring theme of work-life balance.`,
       timeline: '',
       frontmatter: { type: 'note', title: `Reflection ${i}` },
-    });
+    }, { sourceId });
+  }
+}
+
+async function withSubagentAutoCancel<T>(engine: PGLiteEngine, body: () => Promise<T>): Promise<T> {
+  let stopped = false;
+  const loop = (async () => {
+    while (!stopped) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await engine.executeRaw(
+        `UPDATE minion_jobs
+            SET status = 'cancelled', finished_at = now()
+          WHERE name IN ('subagent', 'shell-subagent')
+            AND status IN ('waiting', 'active')`,
+      ).catch(() => {});
+    }
+  })();
+  try {
+    return await body();
+  } finally {
+    stopped = true;
+    await loop;
   }
 }
 
@@ -76,6 +97,7 @@ describe('E2E patterns — disabled', () => {
       const result = await runPhasePatterns(rig.engine, {
         brainDir: rig.brainDir,
         dryRun: false,
+        sourceId: 'default',
       });
       expect(result.status).toBe('skipped');
       expect((result.details as { reason?: string }).reason).toBe('disabled');
@@ -92,6 +114,7 @@ describe('E2E patterns — disabled', () => {
       const result = await runPhasePatterns(rig.engine, {
         brainDir: rig.brainDir,
         dryRun: false,
+        sourceId: 'default',
       });
       expect(result.status).toBe('skipped');
       expect((result.details as { reason?: string }).reason).toBe('insufficient_evidence');
@@ -108,6 +131,7 @@ describe('E2E patterns — insufficient_evidence', () => {
       const result = await runPhasePatterns(rig.engine, {
         brainDir: rig.brainDir,
         dryRun: false,
+        sourceId: 'default',
       });
       expect(result.status).toBe('skipped');
       expect((result.details as { reason?: string }).reason).toBe('insufficient_evidence');
@@ -124,6 +148,7 @@ describe('E2E patterns — insufficient_evidence', () => {
       const result = await runPhasePatterns(rig.engine, {
         brainDir: rig.brainDir,
         dryRun: false,
+        sourceId: 'default',
       });
       expect(result.status).toBe('skipped');
       expect((result.details as { reason?: string }).reason).toBe('insufficient_evidence');
@@ -147,6 +172,7 @@ describe('E2E patterns — no reachable provider', () => {
         const result = await runPhasePatterns(rig.engine, {
           brainDir: rig.brainDir,
           dryRun: false,
+          sourceId: 'default',
         });
         expect(result.status).toBe('skipped');
         expect((result.details as { reason?: string }).reason).toBe('no_provider');
@@ -165,11 +191,42 @@ describe('E2E patterns — dry-run', () => {
       const result = await runPhasePatterns(rig.engine, {
         brainDir: rig.brainDir,
         dryRun: true,
+        sourceId: 'default',
       });
       expect(result.status).toBe('ok');
       expect((result.details as { dryRun: boolean }).dryRun).toBe(true);
       expect((result.details as { reflections_considered: number }).reflections_considered).toBe(5);
       expect((result.details as { patterns_written: number }).patterns_written).toBe(0);
+    } finally {
+      await rig.cleanup();
+    }
+  }, 30_000);
+});
+
+describe('E2E patterns — source-threaded child job', () => {
+  test('non-default source is present in child job data and gather scope', async () => {
+    const rig = await setupRig();
+    try {
+      await rig.engine.executeRaw(
+        `INSERT INTO sources (id, name, config)
+         VALUES ('robotics', 'robotics', '{"federated": true}'::jsonb)`,
+      );
+      await rig.engine.setConfig('dream.synthesize.use_subscription_billing', 'true');
+      await seedReflections(rig.engine, 3, 'robotics');
+
+      const result = await withSubagentAutoCancel(rig.engine, () => runPhasePatterns(rig.engine, {
+        brainDir: rig.brainDir,
+        dryRun: false,
+        sourceId: 'robotics',
+      }));
+      expect(result.status).toBe('fail');
+      expect(result.error?.code).toBe('PATTERNS_CHILD_CANCELLED');
+
+      const jobs = await rig.engine.executeRaw<{ data: Record<string, unknown> }>(
+        `SELECT data FROM minion_jobs WHERE name = 'shell-subagent'`,
+      );
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0].data.source_id).toBe('robotics');
     } finally {
       await rig.cleanup();
     }

@@ -2,7 +2,11 @@ import { describe, test, expect } from 'bun:test';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { __testing as synthTesting } from '../src/core/cycle/synthesize.ts';
+import {
+  __testing as synthTesting,
+  synthesizeCompletionKey,
+  synthesizeIdempotencyKey,
+} from '../src/core/cycle/synthesize.ts';
 import { __testing as patternsTesting } from '../src/core/cycle/patterns.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 
@@ -57,19 +61,28 @@ function fakeGatherEngine(calls: Array<{ sql: string; params: unknown[] }>): Bra
 }
 
 describe('cycle source-aware dream writes', () => {
-  test('dream phases thread non-default source_id into child job payloads', () => {
-    expect(synthesizeSrc).toContain("source_id: opts.sourceId");
-    expect(patternsSrc).toContain("source_id: opts.sourceId");
-    expect(synthesizeSrc).toContain("const cycleSourceId = opts.sourceId ?? 'default'");
-    expect(synthesizeSrc).toContain('collectChildPutPageSlugs(engine, childIds, chunkInfo, cycleSourceId)');
-    expect(patternsSrc).toContain("collectChildPutPageSlugs(engine, [job.id], opts.sourceId ?? 'default')");
+  test('synthesize cooldown and idempotency keys differ per source', () => {
+    expect(synthesizeCompletionKey('default')).not.toBe(synthesizeCompletionKey('robotics'));
+    expect(synthesizeIdempotencyKey('default', '/corpus/a.txt', 'abc123'))
+      .not.toBe(synthesizeIdempotencyKey('robotics', '/corpus/a.txt', 'abc123'));
+    expect(synthesizeIdempotencyKey('robotics', '/corpus/a.txt', 'abc123', { index: 1, total: 3 }))
+      .toBe('dream:synth:robotics:/corpus/a.txt:abc123:c1of3');
   });
 
-  test('synthesize child refs default to default source when sourceId is omitted', async () => {
+  test('dream phases thread source_id unconditionally into child job payloads', () => {
+    expect(synthesizeSrc).toContain("source_id: opts.sourceId");
+    expect(patternsSrc).toContain("source_id: opts.sourceId");
+    expect(synthesizeSrc).toContain('const cycleSourceId = opts.sourceId');
+    expect(synthesizeSrc).toContain('collectChildPutPageSlugs(engine, childIds, chunkInfo, cycleSourceId)');
+    expect(patternsSrc).toContain('collectChildPutPageSlugs(engine, [job.id], opts.sourceId)');
+  });
+
+  test('synthesize child refs carry explicit default source without fallback', async () => {
     const refs = await synthTesting.collectChildPutPageSlugs(
       fakeCollectEngine(),
       [101],
       new Map(),
+      'default',
     );
 
     expect(refs).toEqual([
@@ -90,10 +103,10 @@ describe('cycle source-aware dream writes', () => {
     ]);
   });
 
-  test('patterns child refs default to default and carry an explicit cycle sourceId', async () => {
+  test('patterns child refs carry explicit default and non-default source ids', async () => {
     const engine = fakeCollectEngine();
 
-    const defaultRefs = await patternsTesting.collectChildPutPageSlugs(engine, [101]);
+    const defaultRefs = await patternsTesting.collectChildPutPageSlugs(engine, [101], 'default');
     const scopedRefs = await patternsTesting.collectChildPutPageSlugs(engine, [101], 'robotics');
 
     expect(defaultRefs).toEqual([
@@ -115,15 +128,15 @@ describe('cycle source-aware dream writes', () => {
     expect(calls[0].params[2]).toBe('robotics');
   });
 
-  test('patterns gatherReflections keeps the legacy unscoped read when sourceId is omitted', async () => {
+  test('patterns gatherReflections threads explicit default without an unscoped branch', async () => {
     const calls: Array<{ sql: string; params: unknown[] }> = [];
     const engine = fakeGatherEngine(calls);
 
-    await patternsTesting.gatherReflections(engine, 30, 'personal/reflections/%');
+    await patternsTesting.gatherReflections(engine, 30, 'personal/reflections/%', 'default');
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].sql).not.toContain('source_id = $3');
-    expect(calls[0].params).toHaveLength(2);
+    expect(calls[0].sql).toContain('source_id = $3');
+    expect(calls[0].params[2]).toBe('default');
   });
 
   test('synthesize reverseWriteRefs writes non-default sources under brainDir/.sources', async () => {
@@ -155,6 +168,61 @@ describe('cycle source-aware dream writes', () => {
       expect(count).toBe(1);
       expect(existsSync(defaultPath)).toBe(true);
       expect(readFileSync(defaultPath, 'utf8')).toContain('default body');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('summary putPage and filesystem write use the explicit non-default source', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cycle-source-summary-'));
+    const puts: Array<{ slug: string; opts: unknown }> = [];
+    const engine = {
+      putPage: async (slug: string, _input: unknown, opts: unknown) => {
+        puts.push({ slug, opts });
+      },
+    } as unknown as BrainEngine;
+    try {
+      await synthTesting.writeSummaryPage(
+        engine,
+        dir,
+        'dream-cycle-summaries/2026-07-15',
+        '2026-07-15',
+        ['wiki/personal/reflections/example'],
+        [{ jobId: 1, status: 'completed' }],
+        'robotics',
+      );
+      expect(puts).toEqual([{
+        slug: 'dream-cycle-summaries/2026-07-15',
+        opts: { sourceId: 'robotics' },
+      }]);
+      expect(existsSync(join(
+        dir,
+        '.sources/robotics/dream-cycle-summaries/2026-07-15.md',
+      ))).toBe(true);
+      expect(existsSync(join(dir, 'dream-cycle-summaries/2026-07-15.md'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('summary explicit default source preserves root layout', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cycle-default-summary-'));
+    const puts: unknown[] = [];
+    const engine = {
+      putPage: async (_slug: string, _input: unknown, opts: unknown) => { puts.push(opts); },
+    } as unknown as BrainEngine;
+    try {
+      await synthTesting.writeSummaryPage(
+        engine,
+        dir,
+        'dream-cycle-summaries/2026-07-15',
+        '2026-07-15',
+        [],
+        [],
+        'default',
+      );
+      expect(puts).toEqual([{ sourceId: 'default' }]);
+      expect(existsSync(join(dir, 'dream-cycle-summaries/2026-07-15.md'))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

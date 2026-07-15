@@ -51,6 +51,7 @@ import { createProgress, type ProgressReporter } from './progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from './cli-options.ts';
 import { tryAcquireDbLock, reapDeadHolderLocks, type DbLockHandle } from './db-lock.ts';
 import { assertValidSourceId } from './source-id.ts';
+import { resolveSourceWithTier } from './source-resolver.ts';
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -820,28 +821,49 @@ interface SyncPhaseResult extends PhaseResult {
   pagesAffected?: string[];
 }
 
-/**
- * Resolve the source id for a brain directory by looking up the sources
- * table. Returns undefined when no registered source matches (falls back
- * to pre-v0.18 global config.sync.* keys).
- */
+/** Resolve the source scope for content phases without an unsafe fallback. */
 async function resolveSourceForDir(
   engine: BrainEngine,
   brainDir: string | null,
 ): Promise<string | undefined> {
-  // No checkout → no path-derived source. Callers fall back to opts.sourceId
-  // (the cycleSourceId precedence) or 'default'.
   if (brainDir === null) return undefined;
   try {
+    // Reuse the canonical resolver so realpath + longest-prefix containment,
+    // dotfiles, env, and configured defaults stay consistent with the CLI.
+    const resolved = await resolveSourceWithTier(engine, null, brainDir);
+    if (resolved.tier !== 'seed_default') return resolved.source_id;
+
+    // The canonical resolver's final tier is intentionally convenient for
+    // ordinary commands, but cycle content phases may not guess in a
+    // multi-source brain. Preserve fresh-install and single-source behavior by
+    // accepting the sole registered row (including seeded default rows whose
+    // local_path is null); otherwise leave the scope unresolved and fail closed.
     const rows = await engine.executeRaw<{ id: string }>(
-      `SELECT id FROM sources WHERE local_path = $1 LIMIT 1`,
-      [brainDir],
+      `SELECT id FROM sources ORDER BY id LIMIT 2`,
     );
-    return rows[0]?.id;
+    return rows.length === 1 ? rows[0].id : undefined;
   } catch {
     // sources table might not exist on very old brains — fall through.
     return undefined;
   }
+}
+
+const SOURCE_SCOPE_UNRESOLVED_MESSAGE =
+  'cycle content phases require a resolved source; pass --source <id> or run from a registered source checkout';
+
+function unresolvedContentSource(phase: 'synthesize' | 'patterns'): PhaseResult {
+  return {
+    phase,
+    status: 'fail',
+    duration_ms: 0,
+    summary: SOURCE_SCOPE_UNRESOLVED_MESSAGE,
+    details: { reason: 'source_scope_unresolved', code: 'SOURCE_SCOPE_UNRESOLVED' },
+    error: {
+      class: 'SourceScope',
+      code: 'SOURCE_SCOPE_UNRESOLVED',
+      message: SOURCE_SCOPE_UNRESOLVED_MESSAGE,
+    },
+  };
 }
 
 // v0.41 T9 D4-B — orchestrator-level pack gate for lens-pack phases.
@@ -1679,21 +1701,25 @@ export async function runCycle(
         phaseResults.push(skipNoBrainDir('synthesize'));
       } else {
         progress.start('cycle.synthesize');
-        const { runPhaseSynthesize } = await import('./cycle/synthesize.ts');
-        const { result, duration_ms } = await timePhase(() => runPhaseSynthesize(engine, {
-          brainDir,
-          dryRun,
-          yieldDuringPhase: opts.yieldDuringPhase,
+        const { runPhaseSynthesize, preflightSynthesize } = await import('./cycle/synthesize.ts');
+        const unavailable = await preflightSynthesize(engine, {
           inputFile: opts.synthInputFile,
-          date: opts.synthDate,
-          from: opts.synthFrom,
-          to: opts.synthTo,
-          ...(cycleSourceId ? { sourceId: cycleSourceId } : {}),
-          bypassDreamGuard: opts.synthBypassDreamGuard,
-          // #1586: scope synthesized writes to the cycle's resolved source
-          // (explicit --source wins, else derived from the checkout dir).
-          sourceId: cycleSourceId,
-        }));
+        });
+        const { result, duration_ms } = await timePhase(async () => {
+          if (unavailable) return unavailable;
+          if (!cycleSourceId) return unresolvedContentSource('synthesize');
+          return runPhaseSynthesize(engine, {
+            brainDir,
+            dryRun,
+            sourceId: cycleSourceId,
+            yieldDuringPhase: opts.yieldDuringPhase,
+            inputFile: opts.synthInputFile,
+            date: opts.synthDate,
+            from: opts.synthFrom,
+            to: opts.synthTo,
+            bypassDreamGuard: opts.synthBypassDreamGuard,
+          });
+        });
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         // v0.29: capture synthesize-written slugs so the recompute_emotional_weight
@@ -1898,13 +1924,18 @@ export async function runCycle(
         phaseResults.push(skipNoBrainDir('patterns'));
       } else {
         progress.start('cycle.patterns');
-        const { runPhasePatterns } = await import('./cycle/patterns.ts');
-        const { result, duration_ms } = await timePhase(() => runPhasePatterns(engine, {
-          brainDir,
-          dryRun,
-          ...(cycleSourceId ? { sourceId: cycleSourceId } : {}),
-          yieldDuringPhase: opts.yieldDuringPhase,
-        }));
+        const { runPhasePatterns, preflightPatterns } = await import('./cycle/patterns.ts');
+        const unavailable = await preflightPatterns(engine);
+        const { result, duration_ms } = await timePhase(async () => {
+          if (unavailable) return unavailable;
+          if (!cycleSourceId) return unresolvedContentSource('patterns');
+          return runPhasePatterns(engine, {
+            brainDir,
+            dryRun,
+            sourceId: cycleSourceId,
+            yieldDuringPhase: opts.yieldDuringPhase,
+          });
+        });
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();

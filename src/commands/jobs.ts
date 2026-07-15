@@ -1967,10 +1967,12 @@ export async function registerBuiltinHandlers(
     const repoPath: string | null = typeof job.data.repoPath === 'string'
       ? job.data.repoPath
       : ((await engine.getConfig('sync.repo_path')) ?? null);
+    const jobSourceId = job.data.sourceId ?? job.data.source_id;
     const report = await runCycle(engine, {
       brainDir: repoPath,
       phases: [phase as any],
       signal: job.signal,
+      ...(typeof jobSourceId === 'string' ? { sourceId: jobSourceId } : {}),
     });
     return { phase, status: report.status, report };
   };

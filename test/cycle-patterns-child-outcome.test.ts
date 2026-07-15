@@ -48,7 +48,7 @@ async function seedReflections(): Promise<void> {
       `INSERT INTO pages (slug, type, title, compiled_truth)
        VALUES ($1, 'note', $2, $3)`,
       [
-        `wiki/personal/reflections/2026-07-0${i + 1}-reflection`,
+        `personal/reflections/2026-07-0${i + 1}-reflection`,
         `Reflection ${i + 1}`,
         `Recurring theme fixture number ${i + 1}.`,
       ],
@@ -67,7 +67,7 @@ describe('runPhasePatterns child-outcome status (#2782)', () => {
       await engine.setConfig('dream.patterns.subagent_wait_timeout_ms', '1');
 
       const result = await withEnv({ ANTHROPIC_API_KEY: 'sk-ant-test' }, () =>
-        runPhasePatterns(engine, { brainDir, dryRun: false }),
+        runPhasePatterns(engine, { brainDir, dryRun: false, sourceId: 'default' }),
       );
 
       expect(result.status).toBe('fail');
@@ -88,7 +88,7 @@ describe('runPhasePatterns child-outcome status (#2782)', () => {
       await engine.setConfig('dream.patterns.subagent_wait_timeout_ms', '1');
 
       await withEnv({ ANTHROPIC_API_KEY: 'sk-ant-test' }, () =>
-        runPhasePatterns(engine, { brainDir, dryRun: false }),
+        runPhasePatterns(engine, { brainDir, dryRun: false, sourceId: 'default' }),
       );
 
       const jobs = await engine.executeRaw<{ timeout_ms: string | number | null }>(

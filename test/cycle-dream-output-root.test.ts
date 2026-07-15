@@ -105,7 +105,7 @@ describe('#2415: loadOutputRoot validation + patterns gather scope', () => {
       timeline: '',
       frontmatter: {},
     });
-    const result = await runPhasePatterns(engine, { brainDir: '/tmp', dryRun: true });
+    const result = await runPhasePatterns(engine, { brainDir: '/tmp', dryRun: true, sourceId: 'default' });
     expect(result.status).toBe('ok');
     expect(result.details?.reflections_considered).toBe(3);
   });

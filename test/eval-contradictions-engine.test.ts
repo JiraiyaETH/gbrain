@@ -30,7 +30,7 @@ beforeEach(async () => {
   await resetPgliteState(engine);
 });
 
-async function seedPage(slug: string, title: string, body = ''): Promise<number> {
+async function seedPage(slug: string, title: string, body = '', sourceId = 'default'): Promise<number> {
   const compiled = body || `body for ${slug}`;
   await engine.putPage(slug, {
     title,
@@ -38,8 +38,8 @@ async function seedPage(slug: string, title: string, body = ''): Promise<number>
     frontmatter: {},
     compiled_truth: compiled,
     timeline: '',
-  });
-  const page = await engine.getPage(slug);
+  }, { sourceId });
+  const page = await engine.getPage(slug, { sourceId });
   return page!.id;
 }
 
@@ -163,6 +163,54 @@ describe('writeContradictionsRun + loadContradictionsTrend (M5)', () => {
     expect(typeof trend[0].report_json).toBe('object');
     expect((trend[0].source_tier_breakdown as Record<string, unknown>).curated_vs_curated).toBe(99);
     expect((trend[0].report_json.nested as Record<string, unknown>).value).toBe(42);
+  });
+
+  test('source-scoped trend removes cross-source findings and neighboring slugs', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, config)
+       VALUES ('robotics', 'robotics', '{"federated": true}'::jsonb)`,
+    );
+    await seedPage('concepts/robot-a', 'Robot A', '', 'robotics');
+    await seedPage('concepts/robot-b', 'Robot B', '', 'robotics');
+    await seedPage('concepts/default-a', 'Default A');
+    await seedPage('concepts/default-b', 'Default B');
+
+    const finding = (a: string, b: string) => ({
+      severity: 'high',
+      axis: 'scope',
+      a: { slug: a },
+      b: { slug: b },
+    });
+    await engine.writeContradictionsRun({
+      ...baseRow,
+      run_id: 'source-scoped',
+      report_json: {
+        schema_version: 1,
+        per_query: [{
+          query: 'scope',
+          contradictions: [
+            finding('concepts/robot-a', 'concepts/robot-b'),
+            finding('concepts/default-a', 'concepts/default-b'),
+            finding('concepts/robot-a', 'concepts/default-a'),
+          ],
+        }],
+      },
+    });
+
+    const robotics = await engine.loadContradictionsTrend(30, { sourceId: 'robotics' });
+    const roboticsFindings = (robotics[0].report_json.per_query as any[])[0].contradictions;
+    expect(roboticsFindings).toHaveLength(1);
+    expect(roboticsFindings[0].a.slug).toBe('concepts/robot-a');
+    expect(JSON.stringify(robotics)).not.toContain('concepts/default-a');
+
+    const defaults = await engine.loadContradictionsTrend(30, { sourceId: 'default' });
+    const defaultFindings = (defaults[0].report_json.per_query as any[])[0].contradictions;
+    expect(defaultFindings).toHaveLength(1);
+    expect(defaultFindings[0].a.slug).toBe('concepts/default-a');
+    expect(JSON.stringify(defaults)).not.toContain('concepts/robot-a');
+
+    const global = await engine.loadContradictionsTrend(30);
+    expect((global[0].report_json.per_query as any[])[0].contradictions).toHaveLength(3);
   });
 });
 

@@ -45,6 +45,7 @@ describe('runPhaseSynthesize brainDir resolution (regression)', () => {
     const result = await runPhaseSynthesize(engine, {
       brainDir: '',
       dryRun: true,
+      sourceId: 'default',
     });
     expect(result.status).toBe('fail');
     expect((result as { error?: { code?: string } }).error?.code).toBe('BRAINDIR_EMPTY');
@@ -54,13 +55,14 @@ describe('runPhaseSynthesize brainDir resolution (regression)', () => {
     const result = await runPhaseSynthesize(engine, {
       brainDir: '   ',
       dryRun: true,
+      sourceId: 'default',
     });
     expect(result.status).toBe('fail');
     expect((result as { error?: { code?: string } }).error?.code).toBe('BRAINDIR_EMPTY');
   });
 
   test('relative brainDir gets resolved to absolute before any reverse-write', async () => {
-    const opts = { brainDir: '.', dryRun: true };
+    const opts = { brainDir: '.', dryRun: true, sourceId: 'default' };
     // The phase will return early ('not_configured' — no corpus dir set on
     // this fresh engine) but the normalization runs unconditionally at entry.
     await runPhaseSynthesize(engine, opts);
@@ -71,7 +73,7 @@ describe('runPhaseSynthesize brainDir resolution (regression)', () => {
   });
 
   test('absolute brainDir is preserved unchanged', async () => {
-    const opts = { brainDir: tmpDir, dryRun: true };
+    const opts = { brainDir: tmpDir, dryRun: true, sourceId: 'default' };
     await runPhaseSynthesize(engine, opts);
     // Already absolute → no mutation.
     expect(opts.brainDir).toBe(tmpDir);

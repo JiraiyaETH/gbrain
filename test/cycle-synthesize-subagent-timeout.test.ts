@@ -62,6 +62,7 @@ describe('runPhaseSynthesize subagent timeout config', () => {
       const result = await runPhaseSynthesize(engine, {
         brainDir,
         dryRun: false,
+        sourceId: 'default',
       });
 
       expect(result.status).toBe('ok');
