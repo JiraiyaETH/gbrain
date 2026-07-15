@@ -1,29 +1,5 @@
 # TODOS
 
-## source-scoping / synthesize follow-ups (filed Codex QA 2026-07-15)
-
-Filed by Codex QA 2026-07-15 against commit 353fe97b (another session's
-source-scoping work) — NOT fixed in the QA-fix pass to avoid collision with that
-active session. Each is a real finding on 353fe97b's touched files.
-
-- [ ] **P2 — synthesize cooldown/job dedup keys need legacy fallback or migration
-  (synthesize.ts:710 / :1176).** After the source-scoping upgrade the cooldown /
-  job-dedup keys changed shape, so unchanged transcripts get resubmitted after
-  upgrade (the old key no longer matches). Needs a legacy-key fallback on lookup
-  or a one-time migration of existing keys. Where: `src/core/cycle/synthesize.ts`
-  around lines 710 and 1176.
-- [ ] **P1 — contradictions-trend-scope authorizes findings by slug alone
-  (contradictions-trend-scope.ts:35).** Authorization keys on slug only, which is
-  unsafe when sources share a slug (a cross-source authorization leak on a
-  multi-source brain). Needs the endpoint source IDs folded into the check.
-  Where: `src/core/cycle/contradictions-trend-scope.ts:35`.
-- [ ] **P2 — synthesize summary write-through skips dot-dirs on non-default
-  checkouts (synthesize.ts:1319).** For non-default checkouts it writes summaries
-  under `<checkout>/.sources/<source>/`, but `gbrain sync` skips dot-dirs, so those
-  files may never import (silent data loss). Needs a topology-aware write-through
-  (write where sync will actually pick it up). Where:
-  `src/core/cycle/synthesize.ts:1319`.
-
 ## provider-agnostic follow-ups (filed v0.42.58.0)
 
 Deferred from the provider-agnostic plumbing wave (#1249/#1250/#1292/#2271/#2209).
