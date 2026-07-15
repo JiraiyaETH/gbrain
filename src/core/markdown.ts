@@ -11,7 +11,8 @@ export type ParseValidationCode =
   | 'NULL_BYTES'
   | 'NESTED_QUOTES'
   | 'NON_STRING_FIELD'
-  | 'EMPTY_FRONTMATTER';
+  | 'EMPTY_FRONTMATTER'
+  | 'DUPLICATE_FRONTMATTER';
 
 export interface ParseValidationError {
   code: ParseValidationCode;
@@ -255,6 +256,71 @@ function collectValidationErrors(
       message: 'Frontmatter block is empty',
       line: firstNonEmpty + 1,
     });
+  }
+
+  // 4b. DUPLICATE_FRONTMATTER — a second frontmatter block after a valid first
+  //     one. The dream-cycle double-frontmatter corruption class: a page opens
+  //     with a well-formed `---` … `---` block, then the BODY leads directly
+  //     with more YAML `key:` lines that are closed by another `---`. gray-matter
+  //     only consumes the first block, so the residual `key:` lines + trailing
+  //     `---` silently pollute the compiled-truth body. Detect: after
+  //     `closeLine`, the first non-empty body line is EITHER a lone `---`
+  //     (second block re-opens explicitly) OR a `key: …` line, and a later lone
+  //     `---` closes the region with at least one `key:`-shaped line inside it.
+  //     False-positive guards: a body that leads with a horizontal rule (`---`
+  //     then prose, no `key:` lines before the next `---`) is NOT flagged; a
+  //     body leading with prose is NOT flagged (first non-empty line is neither
+  //     `---` nor a `key:` line).
+  {
+    let bodyFirstNonEmpty = -1;
+    for (let i = closeLine + 1; i < lines.length; i++) {
+      if (lines[i].trim().length > 0) {
+        bodyFirstNonEmpty = i;
+        break;
+      }
+    }
+    // A YAML key line — `word:` optionally followed by a value. Excludes
+    // markdown headings (`#`), list items (`-`), and bare prose.
+    const isKeyLine = (t: string) => /^[A-Za-z_][\w-]*\s*:(\s|$)/.test(t);
+    // Keys that only ever appear as page frontmatter, never as prose labels.
+    // A stray body block must name at least one of these to be treated as a
+    // second frontmatter block — an ordinary summary block of `key:` lines
+    // (e.g. `client:` / `fee:` above a `---` rule) is legitimate body content.
+    const RESERVED_FM_KEYS =
+      /^(type|title|aliases|tags|relevant_to|created|updated|timestamps|dream_generated|dream_cycle_date|captured_at|raw_source)\s*:(\s|$)/;
+    if (bodyFirstNonEmpty >= 0) {
+      const first = lines[bodyFirstNonEmpty].trim();
+      const startsSecondBlock = first === '---' || isKeyLine(first);
+      if (startsSecondBlock) {
+        let secondClose = -1;
+        let sawReservedKey = RESERVED_FM_KEYS.test(first);
+        // The region must be PURE YAML shape: key lines, list items, indented
+        // continuations, blanks. One column-0 prose line means this is a normal
+        // body that happens to open key-shaped (`status: active` … `---`
+        // Timeline separator) — abort, do not flag.
+        let pureYamlRegion = true;
+        for (let i = bodyFirstNonEmpty + 1; i < lines.length; i++) {
+          const raw = lines[i];
+          const t = raw.trim();
+          if (t === '---') {
+            secondClose = i;
+            break;
+          }
+          if (t.length === 0) continue;
+          if (RESERVED_FM_KEYS.test(t)) sawReservedKey = true;
+          if (isKeyLine(t) || /^\s/.test(raw) || t.startsWith('- ')) continue;
+          pureYamlRegion = false;
+          break;
+        }
+        if (secondClose >= 0 && sawReservedKey && pureYamlRegion) {
+          errors.push({
+            code: 'DUPLICATE_FRONTMATTER',
+            message: `Second frontmatter block after a valid first one (body YAML from line ${bodyFirstNonEmpty + 1}, closes at line ${secondClose + 1})`,
+            line: bodyFirstNonEmpty + 1,
+          });
+        }
+      }
+    }
   }
 
   // 5. NESTED_QUOTES — common breakage pattern: `title: "Name "Nick" Last"`.

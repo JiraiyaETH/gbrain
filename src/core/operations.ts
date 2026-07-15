@@ -890,8 +890,50 @@ const put_page: Operation = {
     const incomingParsed = parseMarkdown(
       content,
       slug + '.md',
-      activePack ? { activePack } : undefined,
+      {
+        validate: true,
+        ...(activePack ? { activePack } : {}),
+      },
     );
+    // put_page pre-write corruption guard (Phase 1 item 2b — the REAL boundary,
+    // since put_page's post-write lint is non-blocking). EXPLICIT CODES ONLY —
+    // we do NOT reject on the full validate surface (MISSING_OPEN etc.) because
+    // body-only pages (no frontmatter) are a historically-valid MCP calling
+    // convention; blanket rejection would break them. We reject exactly the two
+    // corruption classes that keep landing malformed pages:
+    //   (1) DUPLICATE_FRONTMATTER — the dream-cycle double-frontmatter class.
+    //   (2) escaped-JSON bodies — the MCP double-encode signature, where a
+    //       JSON-stringified markdown document (with literal `\n` escapes and a
+    //       leading `---\n`) is written verbatim into the body. gray-matter
+    //       parses the OUTER frontmatter fine, so validate won't flag it; we
+    //       detect the fingerprint directly on the raw body text.
+    const dupFrontmatter = (incomingParsed.errors ?? []).find(
+      (e) => e.code === 'DUPLICATE_FRONTMATTER',
+    );
+    if (dupFrontmatter) {
+      throw new OperationError(
+        'invalid_params',
+        `Refusing to write page '${slug}': ${dupFrontmatter.message}. ` +
+          `Merge the two frontmatter blocks into one before writing.`,
+      );
+    }
+    // Escaped-JSON body detection: a body that begins (after the parsed
+    // frontmatter) with the literal 4-char sequence `---\n` (backslash-n, not a
+    // real newline) is a JSON-stringified document written verbatim — the MCP
+    // double-encode fingerprint. We test the parsed body (compiled_truth) so a
+    // legitimate real-newline horizontal rule (`---` on its own line) is never
+    // matched; the escaped form has no real line break at all.
+    const escapedJsonBody =
+      /^\s*---\\n/.test(incomingParsed.compiled_truth) ||
+      /^\s*---\\n/.test(incomingParsed.timeline);
+    if (escapedJsonBody) {
+      throw new OperationError(
+        'invalid_params',
+        `Refusing to write page '${slug}': body appears to be a JSON-stringified ` +
+          `markdown document (literal '---\\n' escape sequence). Pass the decoded ` +
+          `markdown text, not a JSON.stringify'd string.`,
+      );
+    }
     const incomingBodyEmpty =
       incomingParsed.compiled_truth.trim().length === 0 &&
       incomingParsed.timeline.trim().length === 0;
