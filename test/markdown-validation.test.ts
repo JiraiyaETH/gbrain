@@ -319,5 +319,59 @@ describe('parseMarkdown validation surface', () => {
       const parsed = parseMarkdown(md, undefined, { validate: true });
       expect(parsed.errors).toEqual([]);
     });
+
+    // P1-2 (Codex QA): a documentation page whose BODY leads with an unfenced
+    // YAML example that happens to contain ONE reserved key (`type:`) plus
+    // domain keys, closing at `---`, must NOT be hard-rejected. The bare-key
+    // opener path now requires ≥2 DISTINCT reserved keys.
+    test('doc page with a single-reserved-key unfenced YAML example is ACCEPTED (P1-2)', () => {
+      const md =
+        `${fence}\ntype: guide\ntitle: How pages are typed\n${fence}\n\n` +
+        `A page's frontmatter looks like this:\n\n` +
+        `type: concept\nheading: Do Things That Don't Scale\naudience: founders\n` +
+        `---\n\nThat closing rule ends the example.`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).not.toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    // P1-2 corruption guard: a bare-key-led region with TWO reserved keys
+    // (`type:` + `title:`) is still the real dream corruption → REJECTED.
+    test('bare-key region with type: + title: IS still flagged (P1-2 corruption)', () => {
+      const md =
+        `${fence}\ntype: personal\ntitle: 'A'\ndream_generated: true\n${fence}\n\n` +
+        `type: personal\ntitle: A\n${fence}\n# A\n\nbody`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    // P1-2: the 3-fence explicit-opener dream corruption still rejected
+    // (covered above at line 309, re-asserted here for the P1-2 pairing).
+    test('explicit 3-fence dream corruption still REJECTED (P1-2 corruption)', () => {
+      const md =
+        `${fence}\ntype: personal\ntitle: hi\n${fence}\n\n` +
+        `---\ntype: personal\n---\n\n# Title\n\nbody`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    // P2-1 (Codex QA): `...` (YAML document-end) terminates the region just like
+    // `---`. Explicit `---`-opener + reserved key closed by `...` is flagged.
+    test('region terminated by ... (YAML doc-end) IS flagged (P2-1)', () => {
+      const md =
+        `${fence}\ntype: personal\ntitle: hi\n${fence}\n\n` +
+        `---\ntype: personal\ntitle: dup\n...\n\n# Title\n\nbody`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    // P2-1: `slug` is now a reserved key. Bare-key region with slug: + title:
+    // (two distinct reserved keys) is flagged.
+    test('slug is treated as a reserved frontmatter key (P2-1)', () => {
+      const md =
+        `${fence}\ntype: note\ntitle: hi\n${fence}\n\n` +
+        `slug: notes/dup\ntitle: dup\n${fence}\n# body`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).toContain('DUPLICATE_FRONTMATTER');
+    });
   });
 });

@@ -283,17 +283,34 @@ function collectValidationErrors(
     // markdown headings (`#`), list items (`-`), and bare prose.
     const isKeyLine = (t: string) => /^[A-Za-z_][\w-]*\s*:(\s|$)/.test(t);
     // Keys that only ever appear as page frontmatter, never as prose labels.
-    // A stray body block must name at least one of these to be treated as a
+    // A stray body block must name enough of these to be treated as a
     // second frontmatter block — an ordinary summary block of `key:` lines
     // (e.g. `client:` / `fee:` above a `---` rule) is legitimate body content.
+    // P2-1 (Codex QA): `slug` added — it's frontmatter-only like the rest.
     const RESERVED_FM_KEYS =
-      /^(type|title|aliases|tags|relevant_to|created|updated|timestamps|dream_generated|dream_cycle_date|captured_at|raw_source)\s*:(\s|$)/;
+      /^(type|title|slug|aliases|tags|relevant_to|created|updated|timestamps|dream_generated|dream_cycle_date|captured_at|raw_source)\s*:(\s|$)/;
+    // Extract the reserved key NAME from a line (or null) — used to count
+    // DISTINCT reserved keys (P1-2).
+    const reservedKeyName = (t: string): string | null => {
+      const m = t.match(/^([A-Za-z_][\w-]*)\s*:(\s|$)/);
+      return m && RESERVED_FM_KEYS.test(t) ? m[1] : null;
+    };
     if (bodyFirstNonEmpty >= 0) {
       const first = lines[bodyFirstNonEmpty].trim();
-      const startsSecondBlock = first === '---' || isKeyLine(first);
+      // An EXPLICIT second opener is a lone `---` re-opening a block; a BARE-KEY
+      // opener is a body that leads directly with `key:` lines. The explicit
+      // form is the observed dream corruption (3-fence) and keeps the loose
+      // ≥1-reserved-key rule; a bare-key region needs ≥2 DISTINCT reserved keys
+      // before we flag it, so a doc page whose body leads with an unfenced YAML
+      // EXAMPLE (one reserved key + prose-ish keys, closing `---`) is NOT
+      // hard-rejected (P1-2, Codex QA).
+      const explicitOpener = first === '---';
+      const startsSecondBlock = explicitOpener || isKeyLine(first);
       if (startsSecondBlock) {
         let secondClose = -1;
-        let sawReservedKey = RESERVED_FM_KEYS.test(first);
+        const reservedSeen = new Set<string>();
+        const firstKey = reservedKeyName(first);
+        if (firstKey) reservedSeen.add(firstKey);
         // The region must be PURE YAML shape: key lines, list items, indented
         // continuations, blanks. One column-0 prose line means this is a normal
         // body that happens to open key-shaped (`status: active` … `---`
@@ -302,17 +319,26 @@ function collectValidationErrors(
         for (let i = bodyFirstNonEmpty + 1; i < lines.length; i++) {
           const raw = lines[i];
           const t = raw.trim();
-          if (t === '---') {
+          // P2-1 (Codex QA): `...` (YAML document-end) is a region terminator
+          // alongside `---`.
+          if (t === '---' || t === '...') {
             secondClose = i;
             break;
           }
           if (t.length === 0) continue;
-          if (RESERVED_FM_KEYS.test(t)) sawReservedKey = true;
+          const k = reservedKeyName(t);
+          if (k) reservedSeen.add(k);
           if (isKeyLine(t) || /^\s/.test(raw) || t.startsWith('- ')) continue;
           pureYamlRegion = false;
           break;
         }
-        if (secondClose >= 0 && sawReservedKey && pureYamlRegion) {
+        // Explicit `---` opener → ≥1 reserved key (observed dream corruption).
+        // Bare-key opener → ≥2 DISTINCT reserved keys (avoid false-rejecting a
+        // single-reserved-key YAML doc example in a body).
+        const reservedThresholdMet = explicitOpener
+          ? reservedSeen.size >= 1
+          : reservedSeen.size >= 2;
+        if (secondClose >= 0 && reservedThresholdMet && pureYamlRegion) {
           errors.push({
             code: 'DUPLICATE_FRONTMATTER',
             message: `Second frontmatter block after a valid first one (body YAML from line ${bodyFirstNonEmpty + 1}, closes at line ${secondClose + 1})`,

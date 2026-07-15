@@ -75,13 +75,31 @@ describe('put_page corruption guard — REJECTED classes', () => {
     }
   });
 
-  test('rejects escaped-JSON body (MCP double-encode signature)', async () => {
-    // A JSON-stringified markdown document written verbatim into the body.
+  test('rejects escaped-JSON body — noncanonical fragment shape (MCP double-encode signature)', async () => {
+    // A raw escaped fragment written verbatim into the body (easier, non-quoted form).
     const content =
       `${fence}\ntype: note\ntitle: Smoke\n${fence}\n\n` +
       '---\\ntype: note\\ntitle: GBrain MCP smoke\\n---\\n\\n# smoke\\n';
     for (const remote of [false, true]) {
       const slug = `notes/smoke-${remote ? 'r' : 'l'}`;
+      const promise = put(slug, content, remote);
+      await expect(promise).rejects.toBeInstanceOf(OperationError);
+      await expect(promise).rejects.toMatchObject({ code: 'invalid_params' });
+      await expect(promise).rejects.toThrow(/JSON-stringified/);
+      expect(await engine.getPage(slug)).toBeNull();
+    }
+  });
+
+  test('rejects canonical JSON.stringify(markdown) body (double-encode corruption shape)', async () => {
+    // The REAL corruption shape (P1-1, Codex QA): the entire content is
+    // JSON.stringify() of a genuine markdown document — a single JSON string
+    // scalar whose decoded value carries real `---\n` frontmatter. The leading
+    // double-quote is what the old `/^\s*---\\n/` guard missed.
+    const realMarkdownDoc =
+      `${fence}\ntype: note\ntitle: GBrain MCP smoke\n${fence}\n\n# smoke\n\nbody text\n`;
+    const content = JSON.stringify(realMarkdownDoc);
+    for (const remote of [false, true]) {
+      const slug = `notes/stringify-${remote ? 'r' : 'l'}`;
       const promise = put(slug, content, remote);
       await expect(promise).rejects.toBeInstanceOf(OperationError);
       await expect(promise).rejects.toMatchObject({ code: 'invalid_params' });
