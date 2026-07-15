@@ -224,6 +224,14 @@ function parseNdjson(content: string): CapturedRow[] {
 /**
  * Set-Jaccard between two slug arrays. Order ignored, dupes collapsed.
  * Both empty → 1.0 (identical empty sets, no information lost).
+ *
+ * LIMITATION (P1-4, Codex QA): comparison is slug-only, NOT
+ * (source_id, slug) — replay is global and unscoped by source. This is why
+ * `gbrain eval gate --baseline` rejects a `--source` flag: the regression
+ * replay cannot honor a source scope, and on a multi-source brain a slug
+ * collision across sources would compare the wrong pages. Source-scoped
+ * baseline replay would need a sourceId threaded through replayCore/replayRow
+ * into the search calls AND a composite-key comparison here.
  */
 function jaccardSlugs(a: string[], b: string[]): number {
   const setA = new Set(a);

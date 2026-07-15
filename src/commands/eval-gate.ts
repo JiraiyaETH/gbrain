@@ -112,6 +112,18 @@ function parseArgs(args: string[]): GateOpts {
         i++;
         break;
       case '--source':
+        // P1-3 (Codex QA): validate the argument. A trailing `--source`,
+        // `--source ''`, or `--source --json` would otherwise swallow the next
+        // token (or undefined) and silently score the GLOBAL corpus — the exact
+        // no-op defect this flag exists to prevent.
+        if (next === undefined || next.length === 0) {
+          throw new GateUsageError('--source requires a non-empty source id');
+        }
+        if (next.startsWith('-')) {
+          throw new GateUsageError(
+            `--source requires a source id, got flag-like token '${next}'`,
+          );
+        }
         opts.source = next;
         i++;
         break;
@@ -466,6 +478,23 @@ export async function runEvalGate(engine: BrainEngine, args: string[]): Promise<
 
   if (!opts.baseline && !opts.qrels) {
     console.error('Error: at least one of --baseline or --qrels must be set\n');
+    printHelp();
+    process.exit(2);
+  }
+
+  // P1-4 (Codex QA): --source scopes ONLY the qrels correctness gate. The
+  // baseline regression replay (replayCore → eval-replay) searches globally and
+  // compares slug-only, so it cannot honor a source scope; threading it through
+  // would require non-trivial replay-internals changes AND the slug-only
+  // comparison would still be cross-source. Rather than half-scope silently,
+  // reject the combination outright.
+  if (opts.baseline && opts.source) {
+    console.error(
+      'Error: not yet supported: --source applies only to --qrels correctness ' +
+        'gates. The --baseline regression replay searches globally and compares ' +
+        'slug-only, so it cannot be scoped to one source. Run the baseline gate ' +
+        'without --source, or run the qrels gate separately with --source.\n',
+    );
     printHelp();
     process.exit(2);
   }
