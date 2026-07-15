@@ -94,7 +94,12 @@ rehashes. Gold standard: `people/tory-green` (~1 citation per prose bullet, ~0.6
 - **Re-compile, never stack.** On the UPDATE path, REWRITE the compiled-truth sections tighter
   (higher density as more is known) — do NOT append to them. Only the Timeline appends. Each
   re-enrichment makes the prose denser, not longer (per `maintain`: rewrite compiled_truth when it
-  falls behind the timeline).
+  falls behind the timeline). Nothing goes below the Timeline except the system-managed
+  `## Facts` block.
+- **Divider note.** The templates below show `---` before `## Timeline`; gbrain's serializer
+  canonically emits `<!-- timeline -->` there instead (`src/core/markdown.ts` `splitBody`
+  accepts either). Both are conformant — do not "fix" one into the other, and do not fail a
+  page review over which form it carries.
 - **Owner / central-node handling.** If the entity is the brain owner or a hub the user is in
   ~everywhere, do NOT dump every meeting into the Timeline (reach them via backlinks; Timeline =
   non-meeting milestones). Frame "Assessment" as an **Operating Profile** (how they work), not an
