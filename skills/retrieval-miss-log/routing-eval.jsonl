@@ -8,5 +8,5 @@
 {"intent": "let's promote the miss-log candidates into the goldset now", "expected_skill": "retrieval-miss-log"}
 {"intent": "can you review the retrieval-miss candidates from this week", "expected_skill": "retrieval-miss-log"}
 {"intent": "search didn't return the page I ended up using, that was a search miss", "expected_skill": "retrieval-miss-log"}
-{"intent": "run brain health maintenance and clean up the stale pages", "expected_skill": "maintain"}
+{"intent": "please extract links and populate timeline across the brain", "expected_skill": "maintain"}
 {"intent": "what do we know about the current consortium status", "expected_skill": "query"}

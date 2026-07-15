@@ -87,8 +87,8 @@ This skill guarantees:
 
 A miss is classified **per needed page**, against the sources that were actually
 searched. A single task can produce a `mixed` outcome (one page a retrieval-gap,
-another a coverage-gap) — log one line per needed page, or one line with a
-per-target class array; do not force a single verdict onto a multi-page miss.
+another a coverage-gap) — carry a per-target `class` ARRAY (one entry per
+`needed` ref, same order); do not force a single verdict onto a multi-page miss.
 
 | Class | Meaning | Eval-eligible? | Destination |
 |---|---|---|---|
@@ -129,8 +129,9 @@ but do NOT classify yet:
 - the **exact search query string(s)** you actually issued (often different from
   the prompt — a conversational prompt like "what about that one?" is not itself a
   reproducible query),
-- the ranked slugs each first search returned and the `k`/inspection depth you
-  read,
+- the ranked results each first search returned (as `{source_id, slug, rank}`),
+  the `k` you requested (the search limit), and the `read_depth` you actually
+  inspected,
 - the slug(s) you actually needed (or "none — concluded absent"),
 - the `source_id`(s) that were in scope for the search.
 
@@ -175,7 +176,7 @@ if missing; `<profile>` is the brain's qrels dir — `jiraiya` on this host). Do
 pretty-print; one object per line. Schema:
 
 ```json
-{"id":"rml-2026-07-15-a1b2","ts":"2026-07-15T14:32:00Z","brain_id":"host","searched_sources":["default"],"verbatim_prompt":"what's the current status of the consortium?","search_query":"consortium status","first_search_returned":["companies/acme-example","meetings/2026-04-03"],"read_depth":10,"needed":[{"source_id":"default","slug":"projects/consortium-status","observed_rank":null}],"class":"retrieval-gap","query_quality":"clean","trace":"live","status":"pending","notes":"exists under projects/, git log confirms live page; not returned in first search"}
+{"id":"rml-2026-07-15-a1b2","ts":"2026-07-15T14:32:00Z","brain_id":"host","searched_sources":["default"],"verbatim_prompt":"what's the current status of the consortium?","search_query":"consortium status","k":10,"first_search_returned":[{"source_id":"default","slug":"companies/acme-example","rank":1},{"source_id":"default","slug":"meetings/2026-04-03","rank":2}],"read_depth":10,"needed":[{"source_id":"default","slug":"projects/consortium-status","observed_rank":null}],"class":[{"source_id":"default","slug":"projects/consortium-status","class":"retrieval-gap"}],"query_quality":"clean","trace":"live","status":"pending","notes":"exists under projects/, git log confirms live page; not returned in first search"}
 ```
 
 Field rules:
@@ -191,15 +192,26 @@ Field rules:
   clean up, or summarize. The phrasing is preserved for context and audit.
 - `search_query` — the exact query string you issued (may equal the prompt; often
   doesn't). This is the reproducible retrieval input.
-- `first_search_returned` — the ranked slugs your FIRST search returned (order
-  preserved). `[]` if it returned nothing.
+- `k` — REQUIRED. The search limit you requested for the first search (the `k`
+  you passed, e.g. `10`). This is the retrieval budget, distinct from
+  `read_depth` (how far down you actually read). Recording it lets promotion
+  reproduce the exact search that missed.
+- `first_search_returned` — the ranked results of your FIRST search as
+  source-aware objects `{source_id, slug, rank}` (rank is 1-based, order
+  preserved), matching the `needed`-ref shape so a slug is never recorded
+  without its source. `[]` if it returned nothing.
 - `read_depth` — the rank cutoff you actually inspected (so `ranking-gap` is
-  distinguishable from `retrieval-gap`).
+  distinguishable from `retrieval-gap`). ≤ `k`.
 - `needed` — array of `{source_id, slug, observed_rank}` for each page you needed.
   `observed_rank` = its rank in `first_search_returned`, or `null` if not
   returned. For coverage-gap: the ref the page *should* have, with `notes` saying
   it's absent.
-- `class` — one of the six class values in the table.
+- `class` — a per-target ARRAY, one object `{source_id, slug, class}` per entry
+  in `needed`, in the SAME order as `needed` (element `i` classifies
+  `needed[i]`). `class` is one of the six class values in the table. A
+  single-page miss is a one-element array; a `mixed` multi-page miss carries one
+  class per needed ref (so one page can be `retrieval-gap` while another is
+  `coverage-gap` in the same line). Never collapse to a single scalar verdict.
 - `query_quality` — your honest read of the query (`clean` | `suspect_typo` |
   `wrong_entity` | `context_dependent` | `malformed`). Recorded, never used to
   suppress.
@@ -221,7 +233,8 @@ verbatim.
 When the operator says "promote the miss-log candidates" or during a goldset
 maintenance pass:
 1. Read `candidates.jsonl`. Consider only `status: "pending"` items; group by
-   `class`.
+   per-target `class` (a `mixed` line contributes each of its `class[]` entries
+   to the relevant group).
 2. For each **retrieval-gap / ranking-gap**: re-verify every `needed` ref still
    resolves to a live page in that `source_id` (`resolve_slugs`/`get_page`) AND
    still answers the query. If a ref was deleted/renamed, or the page was only
