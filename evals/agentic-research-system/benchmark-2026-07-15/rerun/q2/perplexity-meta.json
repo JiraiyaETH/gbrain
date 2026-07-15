@@ -1,0 +1,32 @@
+{
+  "status": 200,
+  "latency_seconds": 50.186,
+  "model": "sonar-pro",
+  "usage": {
+    "completion_tokens": 5592,
+    "cost": {
+      "input_tokens_cost": 0.00346,
+      "output_tokens_cost": 0.08388,
+      "request_cost": 0.006,
+      "total_cost": 0.09334
+    },
+    "prompt_tokens": 1154,
+    "search_context_size": "low",
+    "total_tokens": 6746
+  },
+  "citations": [
+    "https://trustgraph.ai/guides/key-concepts/what-is-a-context-backend/",
+    "https://zylos.ai/research/2026-05-09-knowledge-graph-world-models-ai-agents/",
+    "https://www.armalo.ai/learn/knowledge-graph-integrity-ai-agents",
+    "https://dev.to/the-hive-collective/concurrent-writes-to-a-shared-agent-memory-what-we-shipped-what-we-punted-on-b4l",
+    "https://arxiv.org/html/2603.02240v1",
+    "https://arxiv.org/html/2603.17244v1",
+    "https://fast.io/resources/ai-agent-supabase-storage/",
+    "https://medium.com/@saeedhajebi/building-ai-agents-with-knowledge-graph-memory-a-comprehensive-guide-to-graphiti-3b77e6084dec",
+    "https://www.agilesoftlabs.com/blog/2026/05/longterm-ai-agent-memory-with-langchain",
+    "https://www.softwareseni.com/how-postgres-became-the-ai-agent-substrate-for-memory-branching-and-modern-hosting/"
+  ],
+  "citations_count": 10,
+  "raw_bytes": 33727,
+  "output_bytes": 26532
+}

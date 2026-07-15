@@ -1,0 +1,25 @@
+{
+  "list.txt": {
+    "argv": [
+      "gbrain",
+      "list",
+      "-n",
+      "50"
+    ],
+    "exit_code": 0,
+    "latency_seconds": 2.600487,
+    "stdout_bytes": 4425,
+    "stderr_bytes": 0
+  },
+  "doctor.txt": {
+    "argv": [
+      "gbrain",
+      "doctor",
+      "--json"
+    ],
+    "exit_code": 1,
+    "latency_seconds": 19.407567,
+    "stdout_bytes": 22222,
+    "stderr_bytes": 3545
+  }
+}

@@ -1,0 +1,82 @@
+[
+  {
+    "query": "anchoring",
+    "file": "brain-search-anchoring.txt",
+    "exit_code": 0,
+    "latency_seconds": 6.528796,
+    "stdout_bytes": 1562,
+    "stderr_bytes": 0
+  },
+  {
+    "query": "confirmation bias",
+    "file": "brain-search-confirmation-bias.txt",
+    "exit_code": 0,
+    "latency_seconds": 6.548786,
+    "stdout_bytes": 282,
+    "stderr_bytes": 0
+  },
+  {
+    "query": "bias",
+    "file": "brain-search-bias.txt",
+    "exit_code": 0,
+    "latency_seconds": 6.483717,
+    "stdout_bytes": 1021,
+    "stderr_bytes": 0
+  },
+  {
+    "query": "novelty",
+    "file": "brain-search-novelty.txt",
+    "exit_code": 0,
+    "latency_seconds": 5.722297,
+    "stdout_bytes": 12,
+    "stderr_bytes": 0
+  },
+  {
+    "query": "factual accuracy",
+    "file": "brain-search-factual-accuracy.txt",
+    "exit_code": 0,
+    "latency_seconds": 5.808043,
+    "stdout_bytes": 12,
+    "stderr_bytes": 0
+  },
+  {
+    "query": "research workflow",
+    "file": "brain-search-research-workflow.txt",
+    "exit_code": 0,
+    "latency_seconds": 6.255452,
+    "stdout_bytes": 141,
+    "stderr_bytes": 0
+  },
+  {
+    "query": "brain first",
+    "file": "brain-search-brain-first.txt",
+    "exit_code": 0,
+    "latency_seconds": 6.263286,
+    "stdout_bytes": 1438,
+    "stderr_bytes": 0
+  },
+  {
+    "query": "external research",
+    "file": "brain-search-external-research.txt",
+    "exit_code": 0,
+    "latency_seconds": 6.321719,
+    "stdout_bytes": 605,
+    "stderr_bytes": 0
+  },
+  {
+    "query": "citation",
+    "file": "brain-search-citation.txt",
+    "exit_code": 0,
+    "latency_seconds": 6.493748,
+    "stdout_bytes": 568,
+    "stderr_bytes": 0
+  },
+  {
+    "query": "evidence",
+    "file": "brain-search-evidence.txt",
+    "exit_code": 0,
+    "latency_seconds": 6.616684,
+    "stdout_bytes": 141,
+    "stderr_bytes": 0
+  }
+]

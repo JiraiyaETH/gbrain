@@ -1,0 +1,37 @@
+[0.4598] docs/architecture/key_files -- `title_boost` resolved from the mode bundle and threaded in.
+- `docs/eval-capture.md` — stable NDJSO
+[0.3789] src-core-skillopt-apply-edits-ts -- [TypeScript] src/core/skillopt/apply-edits.ts:121-162 function applyAdd
+
+function applyAdd(body: str
+[0.3769] src-commands-think-ts -- [TypeScript] src/commands/think.ts:23-175 export statement runThinkCli
+
+export async function runThi
+[0.3714] src-core-search-two-pass-ts -- [TypeScript] src/core/search/two-pass.ts:51-180 export statement expandAnchors
+
+export async functio
+[0.3714] test-two-pass-test-ts -- [TypeScript] test/two-pass.test.ts:1-73 module
+
+'src-a-ts', page_id: 0, title: 'a', type: 'code',
+  
+[0.3676] test-readme-hero-anchors-test-ts -- [TypeScript] test/readme-hero-anchors.test.ts:1-58 module
+
+/**
+ * v0.36.0.0 (D9) — README hero ancho
+[0.3566] claude -- A written rule caused this disease; a guard
+  cures it.
+- **After any CLAUDE.md or reference-doc edi
+[0.3462] test-skillopt-adversarial-malformed-markdown-test-ts -- [TypeScript] test/skillopt/adversarial/malformed-markdown.test.ts:1-102 module
+
+/**
+ * Adversarial: 
+[0.3462] src-core-operations-ts -- [TypeScript] src/core/operations.ts:1858-1925 lexical declaration
+
+const think: Operation = {
+  name
+[0.3425] test-content-sanity-test-ts -- [TypeScript] test/content-sanity.test.ts:1-115 module
+
+Are Human',
+      // Existing matches still w
+[0.3310] src-core-conversation-parser-parse-ts -- [TypeScript] src/core/conversation-parser/parse.ts:386-397 function scoreFromLines
+
+function scoreFr

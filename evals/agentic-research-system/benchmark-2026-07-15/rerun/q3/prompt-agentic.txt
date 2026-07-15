@@ -1,0 +1,101 @@
+You are the lead researcher executing the canonical Agentic Research System v1.1.0 Brain-first workflow. The supplied Brain packet is the actual context input. Treat it as thin and indirect: it contains implementation/design claims and no direct empirical answer to the question. Run bounded read-only external evidence acquisition, then a critic/competing-hypotheses pass, claim-level source mapping, and citation audit. Scouts collect evidence; the lead owns synthesis. Do not write to Brain or any shared artifact.
+
+EXACT QUESTION:
+Does supplying existing Brain context before external research improve novelty and factual accuracy, or does it anchor the researcher and reinforce existing beliefs? Evaluate the evidence and propose safeguards for a Brain-first research workflow.
+
+BRAIN CONTEXT PACKET (pass through losslessly; use it before external research):
+```yaml
+brain_context:
+  retrieved_at: "2026-07-15T00:34:58.626830+00:00"
+  brain_id: "gbrain default read-only instance resolved by gbrain CLI"
+  source_id: "gbrain current repository/index; retrieval via gbrain search/query/get"
+  query: "Does supplying existing Brain context before external research improve novelty and factual accuracy, or does it anchor the researcher and reinforce existing beliefs? Evaluate the evidence and propose safeguards for a Brain-first research workflow."
+  brain_context_status: "thin_and_indirect"
+  lookup_chain:
+    - command: "gbrain search Brain-first research anchoring confirmation bias novelty factual accuracy safeguards"
+      result: "empty"
+      artifact: "brain-search.txt"
+    - command: "gbrain query <exact question>"
+      result: "empty"
+      artifact: "query.txt"
+    - command: "gbrain search <broadened terms>"
+      result: "returned code/architecture/testing pages; no direct empirical study on Brain-first research, novelty, or factual accuracy"
+      artifacts:
+        - "brain-search-anchoring.txt"
+        - "brain-search-confirmation-bias.txt"
+        - "brain-search-bias.txt"
+        - "brain-search-research-workflow.txt"
+        - "brain-search-brain-first.txt"
+        - "brain-search-external-research.txt"
+        - "brain-search-citation.txt"
+        - "brain-search-evidence.txt"
+    - command: "gbrain list -n 50"
+      result: "repository/index pages available; relevant agentic-research and brain-first implementation pages identified"
+      artifact: "list.txt"
+    - command: "gbrain get <relevant slugs>"
+      result: "read-only page bodies preserved in brain-page-*.txt artifacts"
+      artifact: "brain-get-receipt.json"
+  pages:
+    - slug: "skills/agentic-research-system/skill"
+      title: "Skill"
+      retrieved_via: "search|get"
+      last_known_at: "2026-07-02"
+      claims:
+        - "The intended research protocol is Brain-first: protocol-lite brief, Brain/internal context check, source acquisition, scout fan-out, source/claim ledgers, critic/competing-hypotheses gate, citation audit, constrained synthesis, run receipt, and promotion decision."
+        - "The contract requires delta classification against the injected packet as new, changed, missing, contradictory, or confirming."
+        - "The contract forbids snippet-only citations and requires claim-level evidence mapping and provenance."
+        - "The contract recommends an ACH-style competing-hypotheses check for judgment-heavy questions and confidence downgrades for bias, inconsistency, indirectness, stale evidence, missing primary sources, and weak methodology."
+        - "The write-back gate is explicit and benchmark runs must leave write-back not_run."
+      evidence_boundary: "Design claims/instructions in the Brain; not empirical evidence that Brain-first improves novelty or accuracy."
+    - slug: "skills/agentic-research-system/changelog"
+      title: "Agentic Research System Changelog"
+      retrieved_via: "get"
+      last_known_at: "2026-07-01"
+      claims:
+        - "The skill added protocol-lite brief, scout contracts, source/claim/citation templates, run receipt, eval report, and gates after an earlier cross-modal review found sourcing/specificity/usefulness issues."
+      evidence_boundary: "Implementation history, not a controlled outcome comparison."
+    - slug: "src-core-skill-brain-first-ts"
+      title: "src/core/skill-brain-first.ts"
+      retrieved_via: "search|get"
+      last_known_at: "2026-07-14"
+      claims:
+        - "Brain-first compliance is detected by canonical callout, explicit phase/step heading, or brain-reference appearing before the first external-reference in a skill body."
+        - "The module motivation cites a prior incident where existing Brain context could have caught a risky external claim; it is a rationale/example, not a measured workflow result."
+      evidence_boundary: "Local implementation and rationale only."
+    - slug: "test-think-with-calibration-test-ts"
+      title: "test/think-with-calibration.test.ts"
+      retrieved_via: "search|get"
+      last_known_at: "2026-07-14"
+      claims:
+        - "The codebase has optional calibration-aware prompt rules named PRIOR and COUNTER-PRIOR, with bias-tag references, and tests that preserve the non-calibration baseline."
+        - "The test fixture places retrieval before calibration before question in calibration mode, while the default path keeps question before retrieval."
+      evidence_boundary: "Prompt/test structure; no measured debiasing effect."
+    - slug: "test-regressions-v0-36-1-0-iron-rule-test-ts"
+      title: "test/regressions/v0.36.1.0-iron-rule.test.ts"
+      retrieved_via: "search|get"
+      last_known_at: "2026-07-14"
+      claims:
+        - "Regression tests preserve existing search/list/get behavior and default prompt behavior when optional calibration is absent."
+      evidence_boundary: "Regression intent, not outcome evidence."
+  known_decisions:
+    - "Canonical refactored agentic-research-system SKILL.md v1.1.0 is the workflow under test; no skill or Brain edits are permitted in this benchmark."
+    - "Perplexity is a baseline/backend candidate, not assumed superior or redundant."
+    - "Benchmark write-back is prohibited; write_back_gate: not_run."
+  gaps:
+    - "No Brain page retrieved by exact question or direct terms that supplies empirical evidence about context-induced anchoring, confirmation bias, novelty, or factual accuracy."
+    - "No controlled Brain-first versus Brain-blind comparison exists in the retrieved Brain context."
+    - "No direct Brain claim supports or refutes the question's causal alternatives."
+  contradictions: []
+  safe_broadening_note: "Because the direct lookup was thin, retrieval was broadened to adjacent implementation, prompt-calibration, citation, and testing pages. These are context about the system's intended safeguards and implementation—not evidence of their effectiveness. Novelty relative to Brain must therefore be reported only as 'not found in checked Brain sources' unless external sources directly establish it."
+```
+
+Execution contract:
+- Search both hypotheses and actively seek disconfirming evidence.
+- Use original papers/benchmarks/systematic reviews and primary technical sources where possible; read source bodies, not snippets.
+- Classify each material finding relative to the packet as new, changed, missing, contradictory, confirming, or not found in checked sources.
+- Never claim novelty merely because Brain did not contain a claim.
+- Separate empirical evidence, Brain design claims, judgment, hypotheses, and safeguards.
+- Preserve URL/title/publisher/author/date/access time/retrieval method/source class/authority and exact claims supported.
+- End with an ACH-style comparison of: H1 context improves novelty/accuracy; H2 context anchors/reinforces beliefs; H3 effects are task- and protocol-dependent.
+- Provide concrete safeguards and an evaluation protocol for Brain-first research.
+- Return complete evidence artifacts and a concise synthesis; no score.

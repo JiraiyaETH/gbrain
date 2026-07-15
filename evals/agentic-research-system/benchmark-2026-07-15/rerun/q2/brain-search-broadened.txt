@@ -1,0 +1,8 @@
+[0.8673] test-migrations-v0_12_0-test-ts -- [TypeScript] test/migrations-v0_12_0.test.ts:1-76 module
+
+/**
+ * Tests for the v0.12.0 Knowledge Gra
+[0.6387] scripts-e2e-test-map-ts -- [TypeScript] scripts/e2e-test-map.ts:17-108 export statement
+
+export const E2E_TEST_MAP: Record<stri
+[0.5507] docs/architecture/key_files -- - `src/commands/upgrade.ts` — self-update CLI. `runPostUpgrade()` enumerates migrations from the TS 

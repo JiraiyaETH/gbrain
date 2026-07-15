@@ -1,0 +1,3193 @@
+DuMate-DeepResearch: An Auditable Multi-Agent System with Recursive Search and Rubric-Grounded Reasoning
+Report GitHub Issue
+×
+Title:
+Content selection saved. Describe the issue below:
+Description:
+Submit without GitHub
+Submit in GitHub
+arXiv is now an independent nonprofit!
+Learn more
+×
+Back to arXiv
+Why HTML?
+Report Issue
+Back to Abstract
+Download PDF
+Abstract
+1
+Introduction
+Core Workflow of Deep Research
+The Key Challenges
+2
+DuMate-DeepResearch Framework
+Problem Formulation.
+2.1
+Qianfan Agent Foundry
+2.1.1
+DuMate-DeepResearch Core
+Router (Task Understanding and Analysis)
+Planner (Task Thinking and Planning)
+Execution Module (Planner-Following Task Scheduling and Execution)
+2.1.2
+DuMate-DeepResearch Extension: The Tool Ecosystem
+Baidu Search Integration
+Report Rendering Tools
+2.2
+Dynamic Planning and Test-Time Optimization
+2.2.1
+Graph-Based Dynamic Planning
+Coarse-to-Fine Expansion for Dynamic Scope
+Far-Sighted Re-Planning over a Dynamic Graph
+2.2.2
+Recursive Two-Level Execution
+2.2.3
+Rubric-Based Test-Time Optimization
+From Evaluation to Reasoning Scaffold
+Dynamic Rubric Generation
+Rubrics in Multi-Agent Collaboration
+3
+Experiments and Evaluation
+Implementation Details
+Evaluation Protocol
+3.1
+Overall Performance
+DeepResearch Bench
+DeepResearch Bench II
+3.2
+Detailed Analysis
+Ablation Study
+Effect of Rubric Guidance
+Effect of Report-Stage Model
+3.3
+Qualitative Case Study
+3.3.1
+Coarse-to-Fine Expansion and Dynamic Boundary Definition
+Coarse Phase.
+Fine Phase.
+3.3.2
+Graph-Based Dynamic Planning and Reflection
+Reflective Evaluation.
+3.3.3
+Multi-Turn Retrieval within Search Agents
+3.3.4
+Rubric-Based Test-Time Optimization
+Rubric as Reasoning Scaffold.
+3.3.5
+Report Quality and Synthesis Capability
+4
+Background and Related Work
+4.1
+Retrieval-Augmented Generation and Agentic Search
+4.2
+Deep Research
+5
+Conclusions
+References
+A
+Prompt Templates
+A.1
+Planner Prompt
+A.2
+Rubric-Generation Prompts
+License: CC BY-NC-ND 4.0
+arXiv:2606.07299v1 [cs.AI] 05 Jun 2026
+DuMate-DeepResearch: An Auditable Multi-Agent System with Recursive Search and Rubric-Grounded Reasoning
+DuMate Team, Baidu AI Cloud
+Abstract
+Deep Research (DR) has emerged as a new agentic paradigm to tackle complex, open-ended research tasks, demanding systems that can iteratively frame problems, acquire evidence, verify sources, and synthesize long-form reports.
+In practice, however, current DR systems are constrained by four interrelated limitations: long-horizon planning over an underspecified scope, the bottleneck of decomposing and scheduling such tasks within a single agent, hallucination risk in long-form synthesis, and limited process auditability. This technical report presents
+DuMate-DeepResearch
+, a multi-agent DR framework built on the Qianfan Agent Foundry. The framework decouples the Agent Core—which handles task understanding, planning, and scheduling—from an extensible Tool Ecosystem for retrieval, evidence acquisition, and report rendering, making every intermediate decision and tool invocation explicitly traceable. Building on this infrastructure, DuMate-DeepResearch further introduces three mechanisms: (i) a
+graph-based dynamic planning
+strategy expands the research roadmap coarse-to-fine and continuously revises it through reflection, re-planning, backtracking, and parallel branching; (ii) a
+recursive two-level execution
+design delegates each complex search sub-task to an inner Search Agent that runs its own planning loop, isolating noisy retrieval and stabilizing long-horizon execution; (iii) a
+rubric-based test-time optimization
+mechanism dynamically generates task-specific quality criteria and uses them as live reasoning scaffolds for evidence-grounded synthesis and adaptive stopping.
+Across two deep research benchmarks, DuMate-DeepResearch establishes new state-of-the-art results: the best overall score (58.03%) on DeepResearch Bench, and the best overall score (61.95%) on DeepResearch Bench II while ranking first in information recall and analysis. These results demonstrate the value of pairing auditable multi-agent infrastructure with adaptive planning and rubric-guided reasoning for high-quality deep research.
+1
+Introduction
+The rapid advancement of artificial intelligence has catalyzed a paradigm shift from passive, single-turn question-answering systems to autonomous, agentic systems
+(Yao
+et al.
+,
+2023b
+; Wang
+et al.
+,
+2024
+)
+, enabling users to initiate complex research workflows from a research question. In this context,
+Deep Research (DR)
+(Zheng
+et al.
+,
+2025
+; Shi
+et al.
+,
+2025
+; Zhang
+et al.
+,
+2025
+; Du
+et al.
+,
+2025
+; Wang
+et al.
+,
+2025
+)
+has emerged as a crucial and highly challenging frontier to bridge the gap between human inquiry and systematic knowledge discovery.
+While traditional retrieval-augmented workflows are confined to
+single-shot or rule-based retrieval over static corpora
+(Lewis
+et al.
+,
+2020
+; Gao
+et al.
+,
+2023
+)
+, DR aims to replicate the rigorous, systematic investigative methodologies of human researchers. To address complex, open-ended problems, DR requires sophisticated long-horizon reasoning, strategic decision-making, and large-scale information synthesis
+(Shinn
+et al.
+,
+2023
+; Yao
+et al.
+,
+2023a
+)
+.
+To operationalize such demanding workflows, recent efforts have explored a spectrum of architectural paradigms. Early systems adopted
+monolithic architectures
+(e.g., OpenAI’s DeepResearch), which tightly integrate all modules around a central reasoning engine, ensuring unified control flow but limiting scalability and tool extensibility. Alternatively,
+pipeline architectures
+(e.g., n8n workflows) decompose the process into sequentially connected stages, facilitating component reuse but struggling with complex iteration and global feedback. In response,
+agentic architectures
+have become a natural direction for DR systems. By decomposing overarching research tasks and distributing them among autonomous agents with specialized roles, this collaborative paradigm improves scalability, parallel efficiency, and functional specialization for complex research scenarios.
+Core Workflow of Deep Research
+Operating under this collaborative paradigm, the core workflow of modern agentic DR systems transcends a rigid linear pipeline, functioning instead as a closed-loop, tool-augmented process. Given a complex, open-ended research question, such a system transforms the high-level request into a comprehensive report through a set of tightly coupled capabilities that typically include, but are not limited to, the following:
+1.
+Problem Framing and Adaptive Planning:
+The system parses an underspecified research question into structured objectives and formulates a dynamic research roadmap, continuously revising its strategy as evidence accrues through sub-goal refinement, query reformulation, and backtracking from informational dead-ends.
+2.
+Evidence Acquisition and Verification:
+Driven by this roadmap, the system invokes a heterogeneous toolkit (e.g., web search engines, scholarly databases, domain-specific APIs) to acquire information, while assessing source credibility and cross-validating claims across sources to safeguard factual integrity.
+3.
+Synthesis and Report Generation:
+The validated evidence is finally integrated into a cohesive, logically structured report that weaves multi-source findings into a coherent narrative with nuanced analysis and verifiable citations.
+The Key Challenges
+However, realizing this idealized workflow in practice remains far from solved. Current agentic DR systems still confront open challenges that limit their reliability for real-world deployment:
+•
+Long-Horizon Planning and Dynamic Scope Definition:
+A research question unfolds into a long horizon of dozens of interdependent sub-questions whose scope is underspecified at the outset and only crystallizes as evidence accrues. Reactive, step-by-step policies that commit to a single next action—as in ReAct-style agents—are inherently myopic: they optimize locally without a global representation of the trajectory, oscillate between unbounded exploration and premature convergence, and cannot coherently revise their strategy when a tool fails or newly retrieved evidence invalidates an earlier premise. Effective DR therefore demands a planning formalism that maintains a global, far-sighted model of the entire roadmap and continuously re-delineates scope and re-plans as the information state evolves.
+•
+Complex Task Decomposition and Scheduling:
+Even given a sound plan, decomposing and scheduling it for execution is where long trajectories most often break down. A single flat agent can rarely reconcile high-level task decomposition with the finer sub-task decomposition, scheduling, and noise handling that each sub-task in turn demands, since every sub-question may itself entail many multi-step retrieval actions over a stochastic web rife with dead links, API failures, and irrelevant or contradictory returns. Folding global strategy and low-level retrieval into one policy entangles the two and lets a single local failure propagate and cascade into the global trajectory. Reliable DR thus requires an execution scheme that separates high-level decomposition and scheduling from local sub-task completion, confines noise and errors within sub-task boundaries, and robustly carries out each sub-task without destabilizing the overall process.
+•
+Hallucination Mitigation and Factual Grounding:
+Sustaining strict factual fidelity during long-form synthesis over dynamic, multi-source evidence streams is notoriously difficult, and the agent must additionally possess a principled criterion for when accumulated evidence is sufficient to halt exploration. This calls for rigorous inference-time scaffolds that calibrate every salient assertion against verifiable evidence as it is generated, and that terminate retrieval precisely when—and only when—the evidence demonstrably suffices, rather than relying on post-hoc verification or fixed exploration budgets.
+•
+Process Explainability and Auditability:
+For DR to be trusted in high-stakes domains, its autonomous reasoning must be rendered inspectable. Systems should externalize their decision traces, tool invocations, and action paths as explicit, auditable artifacts—as transparent as the methodology appendix of a rigorous study—so that users can scrutinize not only the final report but the very process by which it was produced.
+To address these challenges, we present
+DuMate-DeepResearch
+, an end-to-end multi-agent research framework. Built on top of the
+Qianfan Agent Foundry
+, our system decouples the central cognitive brain (Agent Core) from the versatile execution layer (Tool Ecosystem).
+This decoupling not only enables independent evolution of cognition and tooling, but also exposes every planning decision and tool invocation as an inspectable artifact, directly targeting the transparency and auditability challenge.
+Furthermore, we equip the framework with three cognitive mechanisms tailored to DR:
+(i) a
+graph-based dynamic planner
+that casts the research roadmap as an evolving directed acyclic graph, expanded coarse-to-fine and continuously revised through reflection, re-planning, backtracking, and parallel branching. Unlike myopic step-by-step ReAct-style reasoning, this graph maintains a global, far-sighted view of the entire trajectory and re-thinks its strategy whenever a tool fails or new evidence overturns an earlier assumption—jointly delivering long-horizon foresight and dynamic scope control;
+(ii) a
+recursive two-level execution
+design, in which the outer Research Agent delegates every complex search sub-task to an inner
+Search Agent
+that is itself a complete Foundry Agent running its own planning–execution cycle. This nesting isolates noisy, multi-step retrieval from high-level research strategy, so that a single failed search cannot destabilize the global trajectory—the key to stable execution under stochastic web conditions;
+and (iii) a
+rubric-based test-time optimization
+mechanism that synthesizes question-specific evaluation rubrics dynamically and uses them as inference-time reasoning scaffolds to ground generated claims in retrieved evidence, while also providing an adaptive termination criterion.
+We conduct extensive experiments on two deep research benchmarks. On DeepResearch Bench, DuMate-DeepResearch attains the best overall score among strong commercial and open baselines, establishing new state-of-the-art performance. On DeepResearch Bench II, which evaluates reports through fine-grained expert-derived rubrics, DuMate-DeepResearch also achieves the best overall score and leads on the information recall and analysis dimensions. Together, these results provide consistent evidence that the proposed architecture improves both broad report quality and rubric-grounded evidence acquisition and synthesis.
+In summary, the main contributions of this report are summarized as follows:
+•
+A decoupled multi-agent infrastructure for auditable DR:
+We introduce the Qianfan Agent Foundry, a highly scalable architecture that implements a transparent
+understanding–planning–execution
+cyclic paradigm by separating the reasoning core from the tool ecosystem, yielding a DR pipeline whose entire trajectory is auditable.
+•
+A graph-based dynamic planning algorithm:
+We represent the research roadmap as a dynamic directed acyclic graph expanded in a coarse-to-fine manner and equipped with reflection, re-planning, backtracking, and parallel branching. In contrast to myopic ReAct-style reasoning that commits to one next action at a time, this graph sustains a global, far-sighted view of the trajectory and self-revises as evidence accumulates, jointly delivering long-horizon foresight and adaptive scope control.
+•
+A recursive two-level execution framework:
+We instantiate the Foundry paradigm
+recursively
+: the outer planning agent decomposes the deep-research task into sub-tasks, and each complex search sub-task is in turn solved by an inner search agent that is itself a complete Foundry Agent with its own planning–execution cycle. This nesting isolates noisy, multi-step retrieval from high-level strategy, preventing a single failed search from destabilizing the global trajectory and substantially improving execution stability.
+•
+Rubrics as test-time reasoning scaffolds:
+We adapt dynamically generated rubrics from evaluation signals into inference-time scaffolds that calibrate generation against retrieved evidence, supporting factual grounding and bounding exploration through an adaptive stopping criterion.
+•
+State-of-the-art empirical performance:
+We conduct extensive experiments on DeepResearch Bench and DeepResearch Bench II. The results demonstrate that DuMate-DeepResearch outperforms existing commercial and open baselines on both benchmarks, establishing new state-of-the-art performance across overall report quality, information recall, and analysis.
+2
+DuMate-DeepResearch Framework
+DuMate-DeepResearch is an end-to-end Deep Research Agent built upon the Qianfan Agent Foundry. It follows an agentic loop of task understanding, planning, and execution to carry out complex, long-horizon research tasks.
+Problem Formulation.
+DuMate-DeepResearch organizes each research session as an auditable, evidence-grounded state-transition process. Given a user query
+q
+q
+, the Router produces a structured task specification; the Planner maintains an evolving research plan; the Execution Module invokes tools or Search Agents and accumulates evidence; and a rubric-guidance signal steers planning, stopping, and writing. This design allows the system to revise its research path while preserving the global report structure and the evidence trail.
+We formalize this loop as a state-transition system over long-horizon research trajectories. At iteration
+t
+t
+, the agent maintains a research state
+s
+t
+=
+⟨
+z
+,
+p
+t
+,
+e
+t
+,
+ρ
+t
+⟩
+,
+s_{t}=\langle z,\;p_{t},\;e_{t},\;\rho_{t}\rangle,
+(1)
+where
+z
+=
+(
+x
+,
+𝒪
+)
+z=(x,\mathcal{O})
+is the fixed task context that bundles the research topic
+x
+x
+and the report outline
+𝒪
+\mathcal{O}
+;
+p
+t
+p_{t}
+is the current research plan;
+e
+t
+e_{t}
+is the accumulated evidence base collected from completed actions; and
+ρ
+t
+\rho_{t}
+is the current guidance signal. Later subsections instantiate
+p
+t
+p_{t}
+as a graph-structured plan (Section
+2.2.1
+) and
+ρ
+t
+\rho_{t}
+as a rubric-based control signal (Section
+2.2.3
+). The increment
+Δ
+​
+e
+t
+\Delta e_{t}
+contains newly collected evidence lists and evidence summaries returned by direct tool actions or Search Agents, including source-grounded records and consolidated findings for executed sub-tasks; the global evidence base is their accumulation over cycles. Starting from
+s
+0
+=
+⟨
+z
+,
+p
+0
+,
+∅
+,
+ρ
+0
+⟩
+s_{0}=\langle z,p_{0},\varnothing,\rho_{0}\rangle
+, each cycle plans a set of executable actions
+a
+t
+a_{t}
+, executes them to obtain newly collected evidence
+Δ
+​
+e
+t
+\Delta e_{t}
+, and folds the new information and updated guidance back into the state,
+s
+t
++
+1
+=
+𝒯
+​
+(
+s
+t
+,
+a
+t
+,
+Δ
+​
+e
+t
+)
+.
+s_{t+1}=\mathcal{T}\bigl(s_{t},\,a_{t},\,\Delta e_{t}\bigr).
+(2)
+The loop continues until a stopping predicate
+Stop
+​
+(
+s
+t
+)
+\textsc{Stop}(s_{t})
+holds—for example, when the plan is fully explored or the current guidance signal reports no outstanding evidence gap—after which the Writer synthesizes the long-form report
+y
+y
+from the accumulated evidence. The three subsequent parts instantiate this loop: Section
+2.1.1
+details the Router, Planner, and Execution modules; Section
+2.2.1
+specifies the graph-structured transition; and Section
+2.2.3
+defines the rubric mechanism that implements the guidance signal. Algorithm
+1
+states the overall control loop.
+Figure 1:
+The illustration for the Qianfan Agent Foundry.
+2.1
+Qianfan Agent Foundry
+As a foundational infrastructure designed for general LLM-based agent construction, the Qianfan Agent Foundry consists of two decoupled components (illustrated in Figure
+1
+): the Agent Core and the Agent Extension (Tool Ecosystem). While the Agent Core functions as the central cognitive brain—orchestrating reasoning, planning, and task scheduling—the Agent Extension serves as the versatile execution layer. It provides a comprehensive suite of tools that empower the agent to interact with external environments, gather empirical evidence, and render final deliverables. This decoupled architecture ensures both robust cognitive control and highly extensible execution capabilities.
+Algorithm 1
+DuMate-DeepResearch Agent Loop
+1:
+user query
+q
+q
+, max iterations
+T
+max
+T_{\max}
+2:
+x
+←
+𝒰
+​
+(
+q
+)
+x\leftarrow\mathcal{U}(q)
+⊳
+\triangleright
+Router: task understanding and analysis
+3:
+𝒪
+←
+Outline
+​
+(
+x
+,
+e
+t
+c
+)
+\mathcal{O}\leftarrow\textsc{Outline}(x,e_{t_{c}})
+;
+z
+←
+(
+x
+,
+𝒪
+)
+z\leftarrow(x,\mathcal{O})
+⊳
+\triangleright
+Writer builds the outline from coarse-exploration evidence
+e
+t
+c
+e_{t_{c}}
+; then fixed
+4:
+p
+0
+←
+InitPlan
+​
+(
+x
+,
+𝒪
+)
+p_{0}\leftarrow\textsc{InitPlan}(x,\mathcal{O})
+;
+e
+0
+←
+∅
+e_{0}\leftarrow\varnothing
+;
+ρ
+0
+←
+InitGuidance
+​
+(
+x
+,
+𝒪
+)
+\rho_{0}\leftarrow\textsc{InitGuidance}(x,\mathcal{O})
+5:
+s
+0
+←
+⟨
+z
+,
+p
+0
+,
+e
+0
+,
+ρ
+0
+⟩
+s_{0}\leftarrow\langle z,p_{0},e_{0},\rho_{0}\rangle
+;
+t
+←
+0
+t\leftarrow 0
+6:
+while
+t
+≤
+T
+max
+t\leq T_{\max}
+and
+not
+Stop
+​
+(
+s
+t
+)
+\textsc{Stop}(s_{t})
+do
+7:
+a
+t
+←
+𝒫
+​
+(
+s
+t
+)
+a_{t}\leftarrow\mathcal{P}(s_{t})
+⊳
+\triangleright
+Planner: graph-based dynamic planning
+8:
+Δ
+​
+e
+t
+←
+𝒳
+​
+(
+s
+t
+,
+a
+t
+)
+\Delta e_{t}\leftarrow\mathcal{X}(s_{t},a_{t})
+⊳
+\triangleright
+Execution: evidence collection
+9:
+s
+t
++
+1
+←
+𝒯
+​
+(
+s
+t
+,
+a
+t
+,
+Δ
+​
+e
+t
+)
+s_{t+1}\leftarrow\mathcal{T}(s_{t},a_{t},\Delta e_{t})
+⊳
+\triangleright
+fold in evidence and updated guidance
+10:
+t
+←
+t
++
+1
+t\leftarrow t+1
+11:
+end
+while
+12:
+return
+y
+←
+𝒲
+​
+(
+x
+,
+𝒪
+,
+e
+t
+,
+ρ
+p
+)
+y\leftarrow\mathcal{W}(x,\mathcal{O},e_{t},\rho^{p})
+⊳
+\triangleright
+Writer: guidance-conditioned synthesis
+2.1.1
+DuMate-DeepResearch Core
+The core of DuMate-DeepResearch comprises several specialized modules that collaborate seamlessly to effectively handle deep research tasks.
+Router (Task Understanding and Analysis)
+The Router module is responsible for the initial comprehension and deconstruction of the research task. Given a user query, the Router extracts salient information and identifies the core research topic. This information is consolidated into a structured representation (e.g., a standardized JSON format), which is crucial for downstream planning and execution.
+Furthermore, the Router serves as an intelligent interface for user interaction: if the initial query is ambiguous or incomplete, the Router proactively prompts the user for clarification. This design ensures that the research trajectory remains rigorously aligned with user expectations. In the global loop, the Router produces the topic specification
+x
+x
+, and the Planner schedules the Writer to generate the outline
+𝒪
+\mathcal{O}
+; together they define the context
+z
+=
+(
+x
+,
+𝒪
+)
+z=(x,\mathcal{O})
+for all downstream planning.
+Planner (Task Thinking and Planning)
+The Planner module acts as the strategic engine, responsible for formulating the research methodology, reasoning through the investigative path, and planning future steps. Utilizing the structured task representation from the Router, the Planner analyzes the current knowledge state to identify critical epistemic gaps. It then strategically decomposes the overarching objective into tractable key research questions and actionable sub-problems. Based on this reasoning, the Planner selects the specific tools to be utilized and generates the corresponding parameters required for execution. Its graph-structured policy is developed in detail in Section
+2.2.1
+.
+Execution Module (Planner-Following Task Scheduling and Execution)
+The Execution Module realizes the actions issued by the Planner, manages execution context, and collects the returned evidence; unlike the Router and Planner, it sets no research strategy of its own. Depending on the action type, it routes execution to one of four targets: a
+direct tool call
+, whose interface it invokes and whose output it normalizes; a
+Search Agent
+, dispatched for open-ended retrieval sub-tasks and itself a Foundry Agent with a local planning loop (Section
+2.2.2
+) rather than a single black-box query; the
+Writer
+, a generation agent invoked with two prompts—an outline prompt that turns the early coarse-exploration evidence into the fixed outline
+𝒪
+\mathcal{O}
+, and a report prompt that synthesizes the accumulated evidence into the final long-form report; and a
+lightweight reasoning
+(
+llm
+) action that deduplicates, merges, and cross-validates collected evidence without issuing new retrieval. Supporting serial and parallel fan-out across these targets, it acts as a scheduling and dispatch layer that carries out the Planner’s decisions while leaving every high-level research choice to the Planner.
+The collaboration among these modules makes the research trajectory explicitly inspectable. The Router maintains the structured task representation, the Planner records decision traces and sub-task decompositions, and the Execution Module logs tool invocations and retrieved evidence. As a result, users can inspect not only the final report but also the intermediate reasoning and action paths that produced it.
+2.1.2
+DuMate-DeepResearch Extension: The Tool Ecosystem
+Complementing the cognitive core, DuMate-DeepResearch integrates a comprehensive Tool Ecosystem. Driven by the Execution Module, this ecosystem serves as the versatile execution layer for the ”task scheduling and execution” phase, encompassing diverse tools for information retrieval, data analysis, and report generation.
+These tools are seamlessly integrated into the agentic execution framework, allowing for efficient coordination and utilization throughout the research process. By leveraging this tool ecosystem, DuMate-DeepResearch can effectively handle the diverse and complex requirements of deep research tasks, further enhancing its capabilities and performance in delivering high-quality research outcomes. We introduce two key tools in DuMate-DeepResearch’s tool ecosystem as follows.
+Baidu Search Integration
+Baidu Search provides the primary retrieval substrate for evidence acquisition in DuMate-DeepResearch. Rather than treating search as a single black-box query, the Execution Module exposes retrieval as a set of structured actions, including query expansion, web search, direct URL crawling, page-content extraction, and evidence normalization. Returned snippets and pages are converted into evidence records that preserve source metadata, URLs, timestamps when available, and short summaries for downstream verification and citation-aware synthesis. This design separates retrieval infrastructure from research policy: the Planner and Search Agents decide what information is needed and how queries should evolve, while the Tool Ecosystem supplies traceable evidence for cross-source checking and final report grounding.
+Report Rendering Tools
+To ensure the high quality and formatting diversity of the final deliverables, DuMate-DeepResearch employs a decoupled, two-stage report rendering mechanism. Initially, the system generates a unified ”pivot report,” utilizing robust reasoning capabilities to guarantee logical coherence and content comprehensiveness. Subsequently, specialized rendering tools translate this pivot report into multiple user-desired formats (e.g., Markdown, HTML, PPT), ensuring adaptability across various presentation contexts.
+Figure 2:
+The illustration for dynamic planning and test-time optimization.
+2.2
+Dynamic Planning and Test-Time Optimization
+On top of the Foundry infrastructure, DuMate-DeepResearch introduces three mechanisms that shape the long-horizon research process. First,
+graph-based dynamic planning
+(Section
+2.2.1
+) rewrites the evolving plan as evidence accumulates, maintaining a global, self-revising roadmap instead of committing to a single next-action chain. Second,
+recursive two-level execution
+(Section
+2.2.2
+) lets the outer Research Agent delegate complex search sub-tasks to inner Search Agents that run their own local Foundry cycles, keeping noisy retrieval separate from high-level research strategy. Third,
+rubric-based test-time optimization
+(Section
+2.2.3
+) turns the guidance signal into active rubric instructions for planning, retrieval, stopping, and final synthesis. We develop the three mechanisms in turn, introducing notation only where it sharpens the mechanism being described (as shown in Figure
+2
+).
+2.2.1
+Graph-Based Dynamic Planning
+Figure 3:
+The illustration of deep execution path graph planning and reflection.
+Coarse-to-Fine Expansion for Dynamic Scope
+DuMate-DeepResearch expands the research path in a coarse-to-fine manner. Complex tasks often begin with vague intent, making it difficult to balance broad exploration with premature convergence. The system therefore starts with a macro-level exploratory retrieval phase that maps the research space and establishes a preliminary cognitive framework.
+We use
+t
+c
+t_{c}
+to denote the checkpoint at which this initial coarse-exploration phase completes; the corresponding evidence base
+e
+t
+c
+e_{t_{c}}
+is used by the Writer to construct the fixed outline
+𝒪
+\mathcal{O}
+in Algorithm
+1
+.
+Guided by the graph-based dynamic planner, the system then transitions to a granular phase, systematically diving into defined sub-topics to collect targeted evidence. This progressive decomposition and integration mechanism refines the research scope as evidence accumulates, calibrating the boundary between breadth and depth without losing focus.
+We formalize this roadmap at planning iteration
+t
+t
+as a DAG-structured plan
+p
+t
+=
+(
+V
+t
+,
+E
+t
+)
+p_{t}=(V_{t},E_{t})
+, the planning component of the global state
+s
+t
+s_{t}
+in Algorithm
+1
+. Each node
+v
+∈
+V
+t
+v\in V_{t}
+is a sub-task carrying a tuple
+⟨
+d
+​
+(
+v
+)
+,
+χ
+​
+(
+v
+)
+⟩
+\langle d(v),\,\chi(v)\rangle
+, where
+d
+​
+(
+v
+)
+∈
+ℤ
++
+d(v)\in\mathbb{Z}^{+}
+is its depth in the coarse-to-fine hierarchy (smaller values denote broader, exploratory sub-tasks), and
+χ
+​
+(
+v
+)
+∈
+{
+0
+,
+1
+}
+\chi(v)\in\{0,1\}
+is a binary execution status; a directed edge
+(
+u
+,
+v
+)
+∈
+E
+t
+(u,v)\in E_{t}
+records that
+v
+v
+depends on
+u
+u
+. The coarse-to-fine principle then becomes a depth-ordered expansion in which the scheduler only ever dispatches the
+ready frontier
+,
+ℱ
+t
+=
+{
+v
+∈
+V
+t
+:
+χ
+​
+(
+v
+)
+=
+0
+∧
+∀
+(
+u
+,
+v
+)
+∈
+E
+t
+,
+χ
+​
+(
+u
+)
+=
+1
+}
+,
+\mathcal{F}_{t}=\bigl\{\,v\in V_{t}\;:\;\chi(v)=0\;\wedge\;\forall(u,v)\in E_{t},\;\chi(u)=1\,\bigr\},
+(3)
+i.e. the unexecuted sub-tasks whose dependencies are all satisfied. Confining execution to
+ℱ
+t
+\mathcal{F}_{t}
+guarantees that broad, low-depth probes are resolved before their finer descendants are instantiated, so that boundary definition reduces to a monotone, dependency-respecting expansion rather than an unbounded search.
+Far-Sighted Re-Planning over a Dynamic Graph
+The dynamic graph also gives the Planner a global structure for revising its strategy as evidence arrives (as shown in Figure
+3
+). Myopic, step-by-step ReAct-style reasoning commits to one next action at a time and lacks a global view of the trajectory; in highly stochastic web environments it can stall on dead links, API errors, or contradictory evidence. Representing the roadmap as a dynamic graph instead gives the Planner a far-sighted view of the entire trajectory: at each milestone (node) the agent evaluates intermediate outcomes against expectations, and when anomalies surface it prunes dead ends, adjusts subsequent strategy, and re-plans alternative paths rather than greedily extending a single chain. This graph-level re-planning lets the system revise earlier assumptions whenever a tool fails or new evidence overturns them, yielding resilience over long horizons.
+Formally, at each iteration the Planner emits a set of parallel actions
+a
+t
+a_{t}
+over the ready frontier, where each action
+α
+∈
+a
+t
+\alpha\in a_{t}
+binds a frontier sub-task
+v
+∈
+ℱ
+t
+v\in\mathcal{F}_{t}
+to a tool and its parameters. Once the Execution Module returns the newly collected evidence
+Δ
+​
+e
+t
+\Delta e_{t}
+and folds it into the accumulated evidence base
+e
+t
++
+1
+e_{t+1}
+, the roadmap is regenerated by a single re-planning operator
+p
+t
++
+1
+=
+Π
+​
+(
+p
+t
+,
+e
+t
++
+1
+,
+ρ
+t
++
+1
+)
+,
+p_{t+1}=\Pi\bigl(p_{t},\,e_{t+1},\,\rho_{t+1}\bigr),
+(4)
+which updates only the plan component of the global state; the full transition additionally folds in the fresh evidence and updated guidance. Conditioned on the current plan, the accumulated evidence, and the latest guidance signal
+ρ
+t
++
+1
+\rho_{t+1}
+,
+Π
+\Pi
+may
+expand
+the frontier with finer sub-tasks,
+prune
+unproductive branches—backtracking away from dead links or contradictory evidence—or
+rewire
+dependencies, while it always preserves executed nodes so that
+χ
+​
+(
+v
+)
+=
+1
+\chi(v){=}1
+is monotone and no evidence is recomputed. To curb error propagation, every candidate action first passes a lightweight reflection gate before any tool is invoked; rejected actions are revised under the critic’s feedback for a bounded number of rounds. The loop halts and yields to report synthesis once the frontier is exhausted (
+ℱ
+t
+=
+∅
+\mathcal{F}_{t}=\varnothing
+) or the Planner emits a terminal synthesis action, under a hard iteration bound
+t
+≤
+T
+max
+t\leq T_{\max}
+—exactly the stopping predicate of the global loop. Casting expansion, reflective re-planning, and adaptive stopping as the single operator
+Π
+\Pi
+turns the long-horizon trajectory into one auditable update rule, summarized in Algorithm
+2
+.
+Algorithm 2
+Graph-Based Dynamic Planning with Reflection
+1:
+research topic
+x
+x
+, report outline
+𝒪
+\mathcal{O}
+, max iterations
+T
+max
+T_{\max}
+2:
+p
+0
+←
+InitPlan
+​
+(
+x
+,
+𝒪
+)
+p_{0}\leftarrow\textsc{InitPlan}(x,\mathcal{O})
+;
+e
+0
+←
+∅
+e_{0}\leftarrow\varnothing
+;
+ρ
+0
+←
+InitGuidance
+​
+(
+x
+,
+𝒪
+)
+\rho_{0}\leftarrow\textsc{InitGuidance}(x,\mathcal{O})
+;
+t
+←
+0
+t\leftarrow 0
+3:
+while
+t
+≤
+T
+max
+t\leq T_{\max}
+do
+4:
+ℱ
+t
+←
+{
+v
+∈
+V
+t
+:
+χ
+​
+(
+v
+)
+=
+0
+∧
+deps
+​
+(
+v
+)
+​
+satisfied
+}
+\mathcal{F}_{t}\leftarrow\{\,v\in V_{t}:\chi(v){=}0\wedge\text{deps}(v)\ \text{satisfied}\,\}
+⊳
+\triangleright
+ready frontier
+5:
+a
+t
+←
+Planner
+​
+(
+p
+t
+,
+𝒪
+,
+e
+t
+,
+ρ
+t
+)
+a_{t}\leftarrow\textsc{Planner}(p_{t},\mathcal{O},e_{t},\rho_{t})
+restricted to
+ℱ
+t
+\mathcal{F}_{t}
+⊳
+\triangleright
+select parallel actions
+6:
+if
+a
+t
+=
+∅
+a_{t}=\varnothing
+or
+a
+t
+a_{t}
+is a synthesis action
+then
+7:
+break
+⊳
+\triangleright
+adaptive stopping
+8:
+end
+if
+9:
+while
+reflection gate returns
+revise
+for
+a
+t
+a_{t}
+and
+bounded rounds not reached
+do
+10:
+revise
+a
+t
+a_{t}
+under critic feedback
+11:
+end
+while
+12:
+Δ
+​
+e
+t
+←
+ExecuteParallel
+​
+(
+a
+t
+)
+\Delta e_{t}\leftarrow\textsc{ExecuteParallel}(a_{t})
+⊳
+\triangleright
+via tools or bounded Search Agent dispatch
+13:
+update
+χ
+​
+(
+⋅
+)
+\chi(\cdot)
+for executed nodes
+14:
+e
+t
++
+1
+←
+e
+t
+∪
+Δ
+​
+e
+t
+e_{t+1}\leftarrow e_{t}\cup\Delta e_{t}
+⊳
+\triangleright
+accumulate evidence for subsequent planning
+15:
+ρ
+t
++
+1
+←
+UpdateGuidance
+​
+(
+𝒪
+,
+e
+t
++
+1
+)
+\rho_{t+1}\leftarrow\textsc{UpdateGuidance}(\mathcal{O},e_{t+1})
+16:
+p
+t
++
+1
+←
+Π
+​
+(
+p
+t
+,
+e
+t
++
+1
+,
+ρ
+t
++
+1
+)
+p_{t+1}\leftarrow\Pi(p_{t},e_{t+1},\rho_{t+1})
+⊳
+\triangleright
+expand / prune / rewire
+17:
+t
+←
+t
++
+1
+t\leftarrow t+1
+18:
+end
+while
+19:
+return
+y
+←
+𝒲
+​
+(
+x
+,
+𝒪
+,
+e
+t
+,
+ρ
+p
+)
+y\leftarrow\mathcal{W}\bigl(x,\mathcal{O},e_{t},\ \rho^{p}\bigr)
+⊳
+\triangleright
+Writer: guidance-conditioned synthesis
+A desensitized excerpt of the actual planner prompt that drives this procedure—retaining its DAG legality, depth-bounding, and re-planning constraints while omitting the output schema and other sensitive details—is provided in Appendix
+A.1
+.
+2.2.2
+Recursive Two-Level Execution
+Even with a sound graph-based plan, execution remains difficult because each open-ended sub-task may itself require many noisy, multi-step retrieval actions. Folding high-level strategy and local search into one flat agent lets a single failed retrieval cascade into the global trajectory. DuMate-DeepResearch instead applies the Qianfan Agent Foundry
+recursively
+, instantiating the same Router–Planner–Execution cycle at two nested levels with a clean division of labor.
+At the
+outer
+level, the Research Agent owns the global state
+s
+t
+s_{t}
+and the plan
+p
+t
+p_{t}
+: it decides
+what to research
+next and advances the research-planning loop of Algorithm
+1
+. Whenever a planned action is an open-ended retrieval sub-task, the outer Execution Module does not call a search tool directly; it dispatches an
+inner
+Search Agent. Crucially, this agent follows the same Foundry abstraction—with its own Router, Planner, and Execution Module—but operates over a local search state for a single sub-task. It decides
+how to search
+: formulating and reformulating queries, invoking the retrieval tools of the Tool Ecosystem, and consolidating the returned evidence until that sub-task is sufficiently covered, then returns evidence lists and summaries that are appended to the current cycle’s
+Δ
+​
+e
+t
+\Delta e_{t}
+.
+We capture this nesting with a compact level-indexed notation. Let
+𝒜
+(
+ℓ
+)
+​
+(
+q
+)
+\mathcal{A}^{(\ell)}(q)
+denote a complete Foundry Agent that solves query
+q
+q
+at nesting level
+ℓ
+∈
+{
+0
+,
+1
+}
+\ell\in\{0,1\}
+and returns evidence lists and summaries; the outer Research Agent is
+𝒜
+(
+0
+)
+\mathcal{A}^{(0)}
+. Applied to an open-ended retrieval action
+a
+v
+a_{v}
+targeting sub-task
+v
+v
+, the outer execution step instantiates an inner Agent on the sub-task query
+q
+​
+(
+v
+)
+q(v)
+one level down and folds the returned evidence into
+Δ
+​
+e
+t
+\Delta e_{t}
+.
+The inner Agent
+𝒜
+(
+1
+)
+\mathcal{A}^{(1)}
+unfolds into the same Router–Planner–Execution cycle, subject to a single restriction that bounds the recursion: at the inner level, execution invokes the retrieval tools of the Tool Ecosystem directly rather than dispatching a further Agent. The nesting is therefore exactly two levels deep and terminates by construction, while the same execution abstraction appears at both levels, which is exactly what lets a complex search be carried out without conflating it with high-level planning.
+The research process therefore unfolds as two nested loops—an outer research-planning loop wrapped around many parallel inner search loops—rather than one flat trajectory, and it is this recursion that stabilizes execution. It
+isolates failure
+: a stalled or unproductive search is contained within a single Search Agent and cannot derail the global plan, while the outer Research Agent simply re-dispatches or re-plans around it. It
+separates concerns
+: the outer Planner reasons over a compact graph of sub-tasks while each inner Agent reasons only within its own sub-task, so neither conflates strategy with search nor confronts the full combinatorial horizon. And because every level logs its own understanding–planning–execution trace, the recursive decomposition remains inspectable end to end.
+2.2.3
+Rubric-Based Test-Time Optimization
+From Evaluation to Reasoning Scaffold
+DuMate-DeepResearch further uses rubrics as test-time guidance for planning and synthesis. The concept of a rubric originates from long-form output evaluation. In standard RLVR (Reinforcement Learning with Verifiable Rewards), reward signals are typically binary, which is too coarse for open-ended report generation. Rubrics provide a more structured alternative by decomposing quality into fine-grained criteria such as evidence grounding, logical coherence, and multi-source cross-validation. Rather than using rubrics only as post-hoc evaluators, we inject them into the agents’ reasoning process. This turns the rubric into a live scaffold that provides explicit criteria for source calibration and evidence-grounded synthesis.
+We make this shift precise. A rubric is a set of criteria
+ρ
+=
+{
+c
+1
+,
+…
+,
+c
+k
+}
+\rho=\{c_{1},\dots,c_{k}\}
+in which each criterion
+c
+=
+⟨
+name
+,
+description
+,
+guidance
+⟩
+c=\langle\text{name},\text{description},\text{guidance}\rangle
+has its
+guidance
+field phrased as an actionable reasoning instruction rather than a numeric score. Whereas a conventional evaluator consumes a finished report and emits a scalar reward post hoc, we inject rubric context into generation itself before outputs are produced, compelling the agent to ground claims as it reasons rather than to be penalized afterward.
+Dynamic Rubric Generation
+Because deep research is an evolving process, the rubric cannot remain entirely static. While the research goal is fixed, the information state changes as new evidence accumulates; criteria specified at initialization may become incomplete or misaligned with the current frontier. We therefore generate and update rubrics iteratively conditioned on the accumulated knowledge. The system uses two types of rubrics:
+Persistent Rubrics
+, which define stable, topic-level quality dimensions applied uniformly across the session; and
+Ephemeral Rubrics
+, which capture transient criteria derived from the latest retrieved information.
+Let
+ρ
+p
+\rho^{p}
+denote the persistent rubric and
+ρ
+t
+e
+\rho^{e}_{t}
+denote the ephemeral rubric available at cycle
+t
+t
+. Concretely, the rubric-guidance signal
+ρ
+t
+\rho_{t}
+introduced in Algorithms
+1
+and
+2
+is instantiated as an active rubric,
+ρ
+t
+=
+(
+ρ
+p
+,
+ρ
+t
+e
+)
+.
+\rho_{t}=(\rho^{p},\rho^{e}_{t}).
+(5)
+The initialization operator
+InitGuidance
+first generates the persistent rubric from the research topic and the report outline,
+ρ
+p
+=
+𝒢
+p
+​
+(
+x
+,
+𝒪
+)
+,
+ρ
+0
+e
+=
+∅
+,
+\rho^{p}=\mathcal{G}_{p}(x,\mathcal{O}),\qquad\rho^{e}_{0}=\varnothing,
+(6)
+where
+ρ
+p
+\rho^{p}
+is then held fixed to anchor stable, topic-level quality dimensions. The update operator
+UpdateGuidance
+refreshes the ephemeral rubric at the end of every cycle for use in the next,
+ρ
+t
++
+1
+e
+=
+𝒢
+e
+​
+(
+𝒪
+,
+e
+t
++
+1
+)
+,
+ρ
+t
++
+1
+=
+(
+ρ
+p
+,
+ρ
+t
++
+1
+e
+)
+,
+\rho^{e}_{t+1}=\mathcal{G}_{e}(\mathcal{O},e_{t+1}),\qquad\rho_{t+1}=(\rho^{p},\rho^{e}_{t+1}),
+(7)
+conditioned on the accumulated evidence base
+e
+t
++
+1
+e_{t+1}
+, so as to target the most decision-relevant gaps exposed by the current evidence state and track the moving information frontier in lockstep with the evolving plan. Under this instantiation, the Writer consumes the persistent component
+ρ
+p
+\rho^{p}
+for final synthesis, while the Planner and Search Agents use the full active rubric during iterative research:
+a
+t
+∼
+π
+𝒫
+(
+⋅
+∣
+x
+,
+𝒪
+,
+p
+t
+,
+e
+t
+,
+ρ
+p
+,
+ρ
+t
+e
+)
+,
+y
+∼
+π
+𝒲
+(
+⋅
+∣
+x
+,
+𝒪
+,
+e
+t
+,
+ρ
+p
+)
+,
+a_{t}\sim\pi_{\mathcal{P}}\bigl(\,\cdot\mid x,\,\mathcal{O},\,p_{t},\,e_{t},\,\rho^{p},\,\rho^{e}_{t}\,\bigr),\qquad y\sim\pi_{\mathcal{W}}\bigl(\,\cdot\mid x,\,\mathcal{O},\,e_{t},\,\rho^{p}\,\bigr),
+(8)
+where
+a
+t
+a_{t}
+is the Planner action at cycle
+t
+t
+,
+y
+y
+is the final long-form report,
+π
+𝒫
+\pi_{\mathcal{P}}
+and
+π
+𝒲
+\pi_{\mathcal{W}}
+denote the Planner and Writer policies, and
+(
+x
+,
+𝒪
+,
+p
+t
+,
+e
+t
+)
+(x,\mathcal{O},p_{t},e_{t})
+is the current task context: the topic, fixed report outline, evolving plan, and accumulated evidence. The active rubric components thereby cease to be graders and become a
+live scaffold
+for planning, while the persistent component provides the stable report-stage scaffold for prose generation.
+Rubrics in Multi-Agent Collaboration
+Since DuMate-DeepResearch orchestrates the Agent Core and dispatched Search Agents in a hierarchical manner, with each level serving distinct objectives, the rubric strategy is designed accordingly. At the orchestration level, the active rubric
+(
+ρ
+p
+,
+ρ
+t
+e
+)
+(\rho^{p},\rho^{e}_{t})
+is refreshed after each planning-execution cycle and provided to the Planner for subsequent research decisions. At the search level, each Search Agent also receives active rubric guidance conditioned on its sub-task context and returned tool evidence. By contrast, the Writer consumes only the persistent report-stage rubric
+ρ
+p
+\rho^{p}
+during final synthesis, so that dynamic evidence-gap guidance steers research control without becoming an additional moving constraint on report writing. Upon completing its search, the Search Agent returns evidence lists and summaries to the orchestration level, where they are incorporated into the accumulated evidence base.
+This upward evidence flow closes the loop: the orchestrator feeds the updated evidence base into the next ephemeral rubric, so that the orchestration-level rubric stays aligned with what the search level actually uncovered. Crucially, the refreshed ephemeral rubric
+ρ
+t
++
+1
+e
+\rho^{e}_{t+1}
+also serves as the adaptive termination signal: once it reports no outstanding gap, the stopping predicate
+Stop
+of Algorithm
+1
+halts the loop, tying factual sufficiency directly to the stopping rule. Algorithm
+3
+summarizes a single rubric-scaffolded reasoning step.
+Algorithm 3
+Rubric-Scaffolded Test-Time Reasoning
+1:
+topic
+x
+x
+, report outline
+𝒪
+\mathcal{O}
+, plan
+p
+t
+p_{t}
+, evidence base
+e
+t
+e_{t}
+, newly collected evidence
+Δ
+​
+e
+t
+\Delta e_{t}
+, persistent rubric
+ρ
+p
+\rho^{p}
+, active ephemeral rubric
+ρ
+t
+e
+\rho^{e}_{t}
+(
+ρ
+0
+e
+=
+∅
+\rho^{e}_{0}=\varnothing
+)
+2:
+inject
+ρ
+p
+,
+ρ
+t
+e
+\rho^{p},\rho^{e}_{t}
+into the Planner / Search Agent context and
+ρ
+p
+\rho^{p}
+into the Writer context
+3:
+generate Planner action
+a
+t
+a_{t}
+conditioned on the active rubric
+4:
+during synthesis, generate the Writer’s report
+y
+y
+conditioned on the persistent rubric
+5:
+ρ
+t
++
+1
+e
+←
+𝒢
+e
+​
+(
+𝒪
+,
+e
+t
+∪
+Δ
+​
+e
+t
+)
+\rho^{e}_{t+1}\leftarrow\mathcal{G}_{e}(\mathcal{O},e_{t}\cup\Delta e_{t})
+⊳
+\triangleright
+ephemeral rubric: refreshed for the next cycle
+6:
+if
+ρ
+t
++
+1
+e
+\rho^{e}_{t+1}
+reports no outstanding gap
+or
+reach max plan iteration
+then
+7:
+signal
+stop
+to the Planner
+⊳
+\triangleright
+adaptive termination
+8:
+end
+if
+9:
+return
+a
+t
+a_{t}
+during planning or
+y
+y
+during synthesis, together with
+ρ
+p
+,
+ρ
+t
++
+1
+e
+\rho^{p},\rho^{e}_{t+1}
+Desensitized excerpts of the two-level rubric-generation prompts—both the orchestration-level prompt and the search-level prompt—are provided in Appendix
+A.2
+. They elicit the two rubric types, constrain the ephemeral criteria to the most decision-relevant evidence gaps, require the
+guidance
+of each criterion to be an actionable instruction rather than a numeric score, and ask the generator to flag when no further retrieval is warranted, which yields the adaptive stopping signal.
+3
+Experiments and Evaluation
+To assess the performance of the DuMate-DeepResearch system, we conducted comprehensive experiments on two deep research benchmarks:
+•
+DeepResearch Bench
+(Du
+et al.
+,
+2025
+)
+: A comprehensive benchmark specifically designed for deep research agents or systems. It includes a total of 100 tasks across 22 domains in both Chinese and English. The generated report for each task is evaluated using the Reference-based and Adaptive Criteria-driven Evaluation framework, which leverages LLM-as-a-judge for evaluation.
+•
+DeepResearch Bench II
+(Li
+et al.
+,
+2026a
+)
+: An extension of DeepResearch Bench, focusing on diagnosing deep research agents via rubrics derived from expert reports. It includes 132 tasks across 22 domains, with a total of 9,430 fine-grained binary rubrics for evaluation. The evaluation is conducted in an end-to-end manner, assessing the dimensions of Information Recall, Analysis, and Presentation.
+Implementation Details
+Key hyperparameters are set as follows: the outer planning loop runs up to 15 iterations; each inner Search Agent performs up to 10 retrieval rounds, generating up to 3 sub-queries per round with 3 results returned per query; fan-out parallel execution is enabled so that independent sub-tasks on the ready frontier execute concurrently. Baidu Search serves as the primary retrieval backend. To account for variance in generation, all reported results for DuMate-DeepResearch are averaged over 3 independent runs.
+Evaluation Protocol
+For both benchmarks, baseline scores are taken from the official benchmark sources and leaderboards, and DuMate-DeepResearch is evaluated under the corresponding official evaluation protocols. During report generation, the system is given only the benchmark queries and does not access benchmark reference reports, expert reports, or evaluation rubrics. This is particularly important for DeepResearch Bench II, whose evaluation rubrics are derived from expert reports; the rubrics generated by DuMate-DeepResearch are produced independently at test time and are not derived from the benchmark’s hidden evaluation rubrics.
+3.1
+Overall Performance
+Model/System
+Comprehensiveness
+Insight
+Instruction Following
+Readability
+Overall
+DR-Tulu
+44.08
+44.65
+49.56
+42.30
+45.49
+UESTC-MBSE-RAAA
+43.77
+48.34
+47.21
+43.78
+46.13
+OpenAI DeepResearch*
+46.46
+43.73
+49.39
+47.22
+46.45
+Gemini 2.5 Pro DeepResearch*
+49.51
+49.45
+50.12
+50.00
+49.71
+LangChain Open Deep Research
+(GPT-5 + Gensee Search)
+50.06
+50.76
+51.31
+49.72
+50.60
+Salesforce AIR
+50.00
+51.09
+50.77
+50.32
+50.65
+ThinkDepth.ai
+52.02
+53.88
+52.04
+50.12
+52.43
+Tavily Research
+52.84
+53.59
+51.92
+49.21
+52.44
+LiAuto Mind DeepResearch 1.5
+51.54
+55.30
+50.45
+51.26
+52.54
+RecallRadar Intelligence
+53.91
+53.53
+52.18
+52.38
+53.19
+Deep Dog 1
+53.14
+56.10
+51.83
+51.18
+53.52
+Bodhi Deep Research
+54.23
+56.09
+52.86
+51.81
+54.22
+Onyx Deep Research
+54.67
+56.43
+53.08
+52.02
+54.54
+TrajectoryKit
+54.10
+57.90
+52.91
+52.72
+54.92
+CMCC-DeepInsight
+55.66
+58.70
+52.53
+50.94
+55.24
+MS-Agent DeepResearch
+56.76
+56.79
+53.10
+52.28
+55.31
+Cellcog
+55.41
+58.21
+52.50
+53.12
+55.31
+NVIDIA-AIQ
+56.90
+58.49
+52.89
+53.43
+55.95
+Grep Deep Research
+56.82
+58.92
+53.38
+53.44
+56.23
+Octen DeepResearch
+56.89
+59.00
+53.39
+53.83
+56.31
+1688AILab-DeepResearch
+57.32
+59.27
+53.51
+53.36
+56.53
+Cellcog-Max
+57.40
+60.01
+53.25
+53.21
+56.67
+Xiaoyi DeepResearch 6.0
+58.58
+59.38
+53.58
+53.99
+57.00
+Zhipu Deep Research
+58.15
+60.14
+53.47
+53.88
+57.06
+iFlow-Researcher
+58.24
+59.74
+53.24
+55.05
+57.08
+ZTE Nebula DeepResearch
+58.37
+59.76
+54.06
+54.66
+57.27
+DuMate-DeepResearch
+59.48
+61.48
+53.87
+54.34
+58.03
+Table 1:
+Performance of different deep research models/systems on the DeepResearch Bench. The scores are presented in percentage, and the best and second-best performances are highlighted in bold and underline, respectively. The models/systems marked with an * represent results reproduced by the DeepResearch Bench paper. We report the performance of DuMate-DeepResearch based on average scores across multiple runs.
+DeepResearch Bench
+We report the results of our DuMate-DeepResearch system and baselines on the DeepResearch Bench in Table
+1
+.
+Table
+1
+demonstrates that DuMate-DeepResearch achieves the best overall score of 58.03%, outperforming the second-best ZTE Nebula DeepResearch (57.27%).
+As for the individual evaluation dimensions, DuMate-DeepResearch ranks first in both Comprehensiveness (59.48%) and Insight (61.48%), improving over the second-best system by 0.90% and 1.34%, respectively. It ranks second on Instruction Following (53.87%) and remains highly competitive on Readability (54.34%), staying within 0.2–0.7% of the top systems on these two dimensions. These results indicate that DuMate-DeepResearch can effectively acquire and synthesize information during the deep research process, and generate high-quality reports that are comprehensive, insightful, and well-structured.
+DeepResearch Bench II
+We further evaluate on DeepResearch Bench II, which diagnoses deep research agents via fine-grained binary rubrics derived from expert reports. The benchmark assesses three dimensions:
+Information Recall
+(whether the system retrieves all key facts),
+Analysis
+(whether the system performs correct reasoning and synthesis), and
+Presentation
+(whether the report is well-structured and readable). Results are reported in Table
+2
+.
+Model/System
+Information Recall
+Analysis
+Presentation
+Overall
+Tongyi Deep Research
+22.95
+35.89
+86.13
+29.89
+Perplexity Research
+33.05
+44.47
+79.34
+38.58
+Grok Deep Search
+33.52
+42.50
+91.42
+39.23
+Qwen3-Max Deep Research
+34.18
+48.04
+74.59
+39.25
+Doubao Deep Research
+34.83
+49.43
+83.51
+40.99
+Gemini-2.5-Pro Deep Research
+34.91
+51.91
+90.24
+41.98
+Gemini-3-Pro Deep Research
+39.09
+48.94
+91.85
+44.60
+OpenAI-GPT-o3 Deep Research
+39.98
+49.85
+89.16
+45.40
+NVIDIA-AIQ
+49.23
+61.55
+93.15
+54.50
+CMCC-DeepInsight
+49.60
+62.95
+92.94
+55.39
+Xiaoyi DeepResearch 6.0
+53.05
+69.90
+91.12
+58.72
+iFlow-Researcher
+54.99
+69.54
+92.56
+59.91
+DuMate-DeepResearch
+57.58
+71.70
+89.89
+61.95
+Table 2:
+Performance on DeepResearch Bench II. Scores are percentages. The best and second-best performances are highlighted in bold and underline, respectively.
+Table
+2
+shows that, under our evaluation on DeepResearch Bench II, DuMate-DeepResearch achieves the best overall score of 61.95%, outperforming the strongest baseline iFlow-Researcher by 2.04%. It also ranks first in Information Recall (57.58%) and Analysis (71.70%), improving over the second-best systems by 2.59% and 1.80%, respectively. The rubric-based evaluation indicates that our system excels particularly in acquiring key evidence and performing evidence-grounded synthesis—the two capabilities most directly impacted by our graph-based dynamic planning and multi-turn retrieval mechanisms—while maintaining competitive Presentation quality (89.89%).
+3.2
+Detailed Analysis
+Ablation Study
+To understand the contribution of key design choices in DuMate-DeepResearch, we conduct ablation studies on DeepResearch Bench, examining the impact of rubric-guided generation and the choice of report-stage model. Average results from 3 runs are reported in Table
+3
+.
+Variant
+Comprehensiveness
+Insight
+Instruction Following
+Readability
+Overall
+DuMate-DeepResearch (Full)
+59.48
+61.48
+53.87
+54.34
+58.03
+Rubric Ablation
+w/o Rubric (Report Stage)
+59.01
+60.73
+53.62
+53.82
+57.61
+w/o Rubric (Full Pipeline)
+58.95
+60.78
+53.71
+53.91
+57.53
+Report-Stage Model Replacement
+DeepSeek V4 Pro
+58.73
+60.66
+53.53
+52.64
+57.21
+GLM 5.1
+57.92
+60.02
+52.93
+53.93
+56.69
+MiniMax-M3
+55.91
+58.75
+51.75
+51.64
+55.21
+Qwen-3.7 Max
+56.20
+58.48
+52.41
+52.80
+55.55
+Table 3:
+Ablation study results on DeepResearch Bench. “w/o Rubric (Report Stage)” removes rubric guidance only during report generation; “w/o Rubric (Full Pipeline)” removes rubric from all stages including planning and research. The report-stage model replacement variants substitute the default report generation model with the specified alternative while keeping all other components unchanged.
+Effect of Rubric Guidance
+Removing the rubric from the report stage alone causes a modest but consistent drop across all dimensions (Overall: 58.03
+→
+\to
+57.61,
+−
+-
+0.42), with the largest degradation on Insight (
+−
+-
+0.75) and Comprehensiveness (
+−
+-
+0.47). Notably, further removing the rubric from planning and research stages yields only marginal additional decline (Overall: 57.53, a further
+−
+-
+0.08 over report-only removal). This asymmetry indicates that the rubric’s primary value materializes during report synthesis—where it serves as a live scaffold for evidence-grounded claim generation—rather than during earlier information-gathering stages. The finding aligns with our design intent (Section
+2.2.3
+): persistent rubrics condition the Writer policy to ground claims in retrieved evidence at generation time, and this conditioning effect dominates the rubric’s contribution to overall quality.
+Effect of Report-Stage Model
+Replacing the default report-generation model produces substantially larger quality differences than rubric removal, confirming that the synthesis model is the single most impactful component in the pipeline. DeepSeek V4 Pro comes closest to the full system (
+−
+-
+0.82 overall) but exhibits a notable Readability deficit (
+−
+-
+1.70), suggesting weaker long-form formatting and structural coherence despite competitive analytical ability. GLM 5.1 maintains strong Readability (53.93, only
+−
+-
+0.41) yet shows marked drops in Comprehensiveness (
+−
+-
+1.56) and Insight (
+−
+-
+1.46), indicating difficulty in fully leveraging the retrieved evidence base. MiniMax-M3 and Qwen-3.7 Max incur the largest overall degradations (
+−
+-
+2.82 and
+−
+-
+2.48, respectively), with broad declines across all dimensions; both models appear to struggle with the long-context, multi-source synthesis demands of deep research reports. Across all substitutions, the strongest models preserve Insight more robustly than Comprehensiveness, suggesting that information coverage—assembling all relevant evidence into a coherent narrative—is particularly sensitive to model capability and benefits most from scale.
+3.3
+Qualitative Case Study
+3.3.1
+Coarse-to-Fine Expansion and Dynamic Boundary Definition
+Case A:
+“How do low-code/no-code platforms impact traditional software development?” This ambiguous query embeds four interleaved sub-problems: impact magnitude, efficiency vs. maintenance cost, developer vs. business perspectives, and future trends. Rather than immediately committing to fine-grained investigation, the system executes a two-phase expansion strategy.
+Coarse Phase.
+The
+initial_planner
+(the Planner’s first-stage coarse expansion) issues two parallel exploratory search tasks to map the macro landscape, followed by an outline generation task (executed by the Writer) that depends on both:
+"task_graph": [
+{"subtask_id":"T-1", "subtask_type":"search",
+"subtask_title":"LCNC market status and impact on SDLC",
+"subtask_dependencies":[], "subtask_depth":1},
+{"subtask_id":"T-2", "subtask_type":"search",
+"subtask_title":"Efficiency gains vs. maintenance costs:
+empirical evidence and controversies",
+"subtask_dependencies":[], "subtask_depth":1},
+{"subtask_id":"T-3", "subtask_type":"outline",
+"subtask_title":"Generate structured research outline",
+"subtask_dependencies":["T-1","T-2"], "subtask_depth":2}
+]
+Fine Phase.
+Upon completion of T-1 and T-2, the Writer synthesizes an 8-chapter structured outline covering background, restructuring mechanisms, efficiency verification, hidden costs, stakeholder perspectives, platform comparison, boundaries, and future trends. This outline then triggers the
+planner
+to expand the research into 14 targeted subtasks (T-4 through T-17) across three depth layers:
+Depth-1 (parallel): T-4..T-13 (10 search tasks)
+- Market background, traditional dev pain points,
+6-dimension restructuring, efficiency data,
+hidden costs, stakeholder views, platform comparison,
+industry cases, capability boundaries, future trends
+Depth-2 (dependent): T-14 (llm), T-15 (llm), T-16 (search)
+- T-14: Cross-validate efficiency vs. cost data
+- T-15: Build scenario-platform matching matrix
+- T-16: Supplement opposing viewpoints
+Depth-3: T-17 (report) [deps: T-4..T-16]
+Figure
+4
+illustrates this two-phase expansion. The coarse phase establishes cognitive boundaries (“what is the research space?”) before the fine phase commits computational resources to depth-first investigation.
+Figure 4:
+Coarse-to-fine expansion in Case A. The coarse phase (router
+→
+\to
+planner
+→
+\to
+2 searches
+→
+\to
+outline generation) establishes research boundaries; the fine phase (14 subtasks across 3 depth layers) performs targeted investigation.
+3.3.2
+Graph-Based Dynamic Planning and Reflection
+Case B:
+“Constructing a three-dimensional evaluation framework for NEV powertrain commercialization thresholds.” The
+planner
+constructs a four-layer DAG with 18 nodes, where edges encode strict execution dependencies (Figure
+5
+).
+Figure 5:
+Task execution DAG for Case B. Depth-1: 11 parallel search tasks; depth-2: 4
+llm
+tasks for integration and cross-validation; depth-3: cross-dimension synthesis (
+llm
+, T-16) and gap-filling search (T-17); depth-4: final report. T-17 depends on the integration tasks (T-13–T-15) and recovers the sub-segment data deferred from T-9; T-10–T-11 skip depth-2 and feed directly into T-16.
+Reflective Evaluation.
+At each scheduling cycle, the planner performs explicit quality assessment before deciding next actions:
+"last_task_revision":
+"T-1 (methodology): HIGH. Provides S-curve (10%/16%/50%),
+AHP+entropy weighting, TCO five-dimension framework.
+T-2 (800V+SiC): HIGH. Covers 40+ production models,
+substrate price curves, 5-10% efficiency gain data.
+T-3 (solid-state battery): HIGH. Covers three routes,
+350-500 Wh/kg density, 2025/2027/2030 milestones.
+...
+T-9 (enterprise cases): ADEQUATE. Missing Hongqi/Lantu/
+Toyota-Mirai sub-segment data -- defer to T-17.
+T-11 (scenario forecasts): HIGH. Three-scenario matrix,
+BNEF/McKinsey/Ouyang cross-validated projections.
+Assessment: 11 search tasks complete, three-dimensional
+data coverage balanced. T-9 gap handled by T-17.
+Proceeding to T-12..T-15 (parallel llm integration)."
+This reflection-before-action loop enables the system to: (1) confirm sufficient evidence before advancing to dependent tasks; (2) dynamically inject additional searches when gaps are detected; and (3) prune unnecessary branches when early results already satisfy requirements. The
+llm
+-type tasks (T-12–T-16) serve dedicated integration and cross-validation roles—synthesizing per-dimension indicators, computing composite scores, and verifying consistency across multiple search results rather than performing new searches.
+3.3.3
+Multi-Turn Retrieval within Search Agents
+Case C:
+“Manufacturing technology options for hollow motor shafts in NEV electric drive units.” Beyond planner-level re-planning, each search task executes a multi-turn retrieval loop internally. The
+Search Agent
+operates as a plan-execute cycle with up to 10 iterations, progressively refining queries based on intermediate results.
+A single search task (T-1) in this case executes 6 internal rounds with 40+ queries:
+Round 1 (broad): 3 search tools, 9 queries
+"hollow motor shaft NEV electric drive unit application"
+"hollow rotor shaft electric vehicle e-axle requirements"
+"hollow shaft rotor cooling 800V high speed motor NEV"
+Round 2 (manufacturing-focused): 3 search tools, 9 queries
+"rotary swaging hollow rotor shaft EV production"
+"EV motor shaft material steel grade 42CrMo4 20MnCr5"
+"hairpin motor hollow shaft oil spray cooling rotor"
+Round 3 (OEM-specific): 3 search tools, 9 queries
+"BYD 8-in-1 e-axle hollow rotor shaft 800V spec"
+"Tesla Model S Plaid drive unit hollow rotor shaft"
+"Hirschvogel multi-piece hollow rotor shaft laser welded"
+Rounds 4-5: Progressively narrower (ISO standards, balance
+grades, specific tolerance specs)
+Round 6: Final answer synthesis
+The multi-turn mechanism enables three retrieval strategies: (1)
+multi-formulation query expansion
+(varying terminology, synonyms, and technical jargon to maximize recall); (2)
+progressive specificity
+(broad domain
+→
+\to
+manufacturing process
+→
+\to
+OEM/supplier names
+→
+\to
+ISO standards); and (3)
+tool diversification
+(search engine queries + direct URL crawling for authoritative sources).
+3.3.4
+Rubric-Based Test-Time Optimization
+Case A:
+“How do low-code/no-code platforms impact traditional software development?” The outline’s chapter descriptions function as
+persistent rubrics
+that scaffold all downstream agents. Figure
+6
+illustrates the rubric propagation pathway.
+Figure 6:
+Rubric propagation in multi-agent collaboration. Persistent rubrics (from the Writer) are injected into both the Search Agents and the Writer. Ephemeral rubrics generated during search are returned to the Planner for next-cycle calibration.
+Rubric as Reasoning Scaffold.
+Chapter 3’s rubric specifies:
+“The study shall cross-validate LCNC efficiency claims using multi-source data: comparing delivery cycles, headcount, and ROI between vendor claims, third-party research (Forrester TEI, Gartner Peer Insights), and hands-on testing of 5–7 mainstream platforms; reveal the differentiated realization degree of efficiency gains across scenarios.”
+This rubric propagates to Search Agents (guiding query formulation toward multi-source evidence) and to the Writer (enforcing evidence grounding). The effect is directly observable in the final output, where the system produces
+conditional, source-calibrated conclusions
+:
+“The ‘300%–500% efficiency improvement’ should be treated as the upper bound of vendor claims, not the median actually achievable by enterprises—this gap will be critically examined in Chapter 3. […] IDC’s 40.3B RMB (2024) with 26.4% CAGR provides the most rigorous baseline; Gartner’s 131B RMB figure includes broader aPaaS integration.”
+3.3.5
+Report Quality and Synthesis Capability
+Table
+4
+summarizes the output quality metrics across all three cases.
+Metric
+Case A (LCNC)
+Case B (NEV)
+Case C (Shaft)
+Word count
+†
+151K (zh)
+261K (zh)
+68K (en)
+Chapters / sections
+8 / 53
+10 / 62
+8 / 71
+Citations
+114
+196
+21
+Plan iterations
+2
+3
+11
+Total subtasks
+17
+18
+27
+Structural elements in final report:
+Analytical frameworks
+Mermaid,
+AHP-entropy
+Multi-criteria
+matrices
+formulas
+decision matrix
+Conditional conclusions
+per-scenario
+per-route
+per-process
+†
+Chinese counts are in characters; English count is in words.
+Table 4:
+Output quality metrics for all three case studies.
+All reports exhibit key quality characteristics enabled by the proposed mechanisms: (1)
+Multi-source cross-validation
+: the system explicitly distinguishes vendor claims from third-party measurements (e.g., “Forrester TEI validates 45% cost reduction—notably more conservative than vendor-claimed 60–80%”); (2)
+Conditional conclusions
+: every major finding is bounded by scenario applicability (e.g., “efficiency gains of 500–600% in simple form/approval scenarios, but only 60% in high-complexity projects”); (3)
+Quantitative modeling
+: Case B autonomously constructs a three-dimensional, 13-indicator evaluation framework with explicit formulas (
+S
+​
+c
+​
+o
+​
+r
+​
+e
+k
+=
+∑
+i
+W
+i
+×
+∑
+j
+W
+i
+​
+j
+×
+x
+i
+​
+j
+,
+k
+n
+​
+o
+​
+r
+​
+m
+Score_{k}=\sum_{i}W_{i}\times\sum_{j}W_{ij}\times x_{ij,k}^{norm}
+) and combined AHP-entropy weighting; (4)
+Adaptive depth
+: Case C demonstrates that the system scales plan iterations to 11 and total subtasks to 27 in response to retrieval difficulty, while maintaining report quality; (5)
+Full citation trails
+: most evidence-backed claims link to a retrievable URL, enabling broad auditability.
+These qualitative observations align with the quantitative gains on DeepResearch Bench, particularly the leading performance in Comprehensiveness (59.48%, +0.9% over second-best) and Insight (61.48%, +1.34% over second-best), which directly reflect the system’s ability to acquire diverse evidence and synthesize it into structured, evidence-grounded analysis.
+4
+Background and Related Work
+4.1
+Retrieval-Augmented Generation and Agentic Search
+Before deep research systems, the dominant paradigm for connecting LLMs with external knowledge was retrieval-augmented generation (RAG), where a system retrieves a small set of relevant passages and conditions the generator on them to produce a concise answer. Early RAG-style systems showed that non-parametric retrieval can substantially improve knowledge-intensive generation
+(Lewis
+et al.
+,
+2020
+)
+, and later work further integrated retrieval into language model pre-training and few-shot learning
+(Guu
+et al.
+,
+2020
+; Borgeaud
+et al.
+,
+2022
+; Izacard
+et al.
+,
+2023
+)
+. In these systems, the search component is usually optimized for short-answer question answering: retrieve evidence, optionally rerank or filter it, and generate an answer grounded in the retrieved context. The retriever itself has evolved from lexical retrieval such as BM25
+(Robertson and Zaragoza,
+2009
+)
+to dense passage retrieval
+(Karpukhin
+et al.
+,
+2020
+)
+, while broader RAG surveys summarize this line as a standard way to mitigate the static-knowledge limitation of LLMs
+(Gao
+et al.
+,
+2023
+)
+.
+A central limitation of conventional RAG is that retrieval quality depends heavily on the input query. To address this, many systems introduce LLM-based query rewriting, decomposition, or planning before retrieval
+(Li
+et al.
+,
+2025c
+; Chen
+et al.
+,
+2025a
+; Li
+et al.
+,
+2026c
+)
+. Rewrite-Retrieve-Read trains a query rewriter with reinforcement learning so that the rewritten query improves downstream answer accuracy
+(Ma
+et al.
+,
+2023
+; Chen
+et al.
+,
+2026
+)
+. Subsequent work extends this idea by optimizing retrieval-oriented planning with richer reward signals or multi-agent training, such as DeepRetrieval and multi-agent RAG optimization
+(Jiang
+et al.
+,
+2025
+; Chen
+et al.
+,
+2025b
+)
+. Beyond one-shot rewriting, iterative systems decompose complex questions into multiple dependent sub-queries. LLatrieval repeatedly generates supplementary queries when current evidence fails verification
+(Li
+et al.
+,
+2023
+)
+, while DRAGIN uses the model’s generation state to dynamically reformulate retrieval queries
+(Su
+et al.
+,
+2024
+)
+. Tree- or graph-based methods further expand the search space: RAG-Star uses retrieval-augmented verification and refinement over deliberative reasoning paths
+(Jiang
+et al.
+,
+2024
+)
+, DeepRAG decides step by step whether to rely on parametric knowledge or retrieval
+(Guan
+et al.
+,
+2025
+)
+, and MAO-ARAG orchestrates multiple retrieval modules through a multi-agent adaptive RAG framework
+(Chen
+et al.
+,
+2025c
+)
+.
+Another line of work focuses on
+when
+LLMs should search. Fixed retrieval can be inefficient and may introduce irrelevant or misleading evidence, so adaptive retrieval methods let the model decide whether additional evidence is needed. IR-CoT interleaves retrieval with chain-of-thought reasoning for multi-step questions
+(Trivedi
+et al.
+,
+2022
+)
+, while FLARE triggers retrieval based on uncertainty during generation
+(Jiang
+et al.
+,
+2023
+)
+. Self-RAG trains models to retrieve, generate, and critique their outputs through self-reflection tokens
+(Asai
+et al.
+,
+2024
+)
+. Other adaptive methods estimate retrieval necessity through model confidence, internal states, or consistency, including DRAGIN, Rowen, and SEAKR
+(Su
+et al.
+,
+2024
+; Ding
+et al.
+,
+2024
+; Yao
+et al.
+,
+2024
+)
+. This direction connects naturally to tool-using agents: ReAct frames search as an action interleaved with reasoning
+(Yao
+et al.
+,
+2023b
+)
+, Search-o1 introduces agentic search for large reasoning models
+(Li
+et al.
+,
+2025a
+)
+, and Search-R1/R1-Searcher optimize when and what to search through reinforcement learning
+(Jin
+et al.
+,
+2025
+; Song
+et al.
+,
+2025
+)
+.
+Overall, LLM-augmented search and agentic RAG form the short-answer foundation of deep research. They improve evidence acquisition through retrieval, query planning, adaptive search timing, and tool-augmented reasoning. However, their primary objective is still usually localized answer accuracy or multi-hop question answering efficiency. Deep research extends this foundation from short, evidence-grounded answers to long-form, report-level synthesis, requiring broader tool orchestration, persistent memory, global planning, source calibration, and structured report generation.
+4.2
+Deep Research
+Moving beyond short-answer RAG and agentic search, recent deep research systems aim to generate long-form, evidence-grounded reports for complex and open-ended user queries. Compared with conventional RAG systems, they usually require broader information exploration, longer-horizon planning, iterative reflection, source-level verification, and structured report writing. Therefore, the core challenge shifts from retrieving sufficient evidence for a localized answer to coordinating an end-to-end research workflow that can acquire, organize, and synthesize information across multiple steps.
+MiroThinker
+(Team
+et al.
+,
+2025
+)
+is designed to enhance the tool-augmented reasoning ability and information-seeking capabilities of research agents. Operating on the ReAct
+(Yao
+et al.
+,
+2023b
+)
+paradigm, it supports up to 600 tool calls within a 256K context window by retaining the most recent tool responses during exploration.
+WebThinker
+(Li
+et al.
+,
+2025b
+)
+introduces autonomous deep web exploration and operates in problem solving mode and report generation mode.
+DR-Tulu
+(Shao
+et al.
+,
+2025
+)
+addresses the drawback of static evaluation metrics in optimizing open-ended and long-form deep research tasks by introducing evolving rubrics. Rubrics provide measurable reward signals for RL and adapt dynamically to the policy model’s behaviors.
+TTD-DR
+(Han
+et al.
+,
+2025
+)
+conceptualizes report generation as an iterative diffusion process, which includes planning, drafting, revision, and supplementary search. To enhance the quality of individual agentic components, TTD-DR introduces a self-evolution strategy that merges multiple revised variants into a single high-quality output.
+Step-DeepResearch
+(Hu
+et al.
+,
+2025
+)
+adopts an Atomic Capability-based Data Synthesis Strategy for fine-tuning. The strategy targets several bottlenecks in deep research systems, including planning, information seeking, reflection, and report writing. Before SFT and RL, it introduces Agentic Mid-training to adapt medium-sized models to long-context and tool-augmented reasoning.
+FS-Researcher
+(Zhu
+et al.
+,
+2026b
+)
+builds the research task as the collaboration between two agents: context builder and report writer. The system maintains a file-system workspace, which serves as the durable external memory for both agents. The context builder performs tool calls and knowledge base construction, while the report writer interacts with the file system and writes from section to section.
+More recent systems further emphasize verification, scalable training data, and efficient long-horizon search. MiroThinker-1.7 and H1
+(Team
+et al.
+,
+2026a
+)
+improve heavy-duty research agents through verification-enhanced data construction, scalable reinforcement learning, and inference-time verification. Marco DeepResearch
+(Zhu
+et al.
+,
+2026a
+)
+similarly adopts a verification-centric design, using a dedicated verification agent and reinforcement learning for compact models. RedSearch
+(Chu
+et al.
+,
+2026
+)
+targets scalable and cost-efficient long-horizon search agents by combining decentralized multi-agent data synthesis, compact agentic supervised fine-tuning, and reinforcement learning. LiteResearcher
+(Li
+et al.
+,
+2026b
+)
+also focuses on scalable agentic RL for deep research, highlighting the importance of efficient trajectory generation and policy optimization.
+Another emerging direction is to democratize deep research agents through open data and reproducible pipelines. OpenSeeker
+(Du
+et al.
+,
+2026
+)
+fully open-sources its training data for frontier search agents, covering prompt sets, cold-start trajectories, and reinforcement learning data. OpenResearcher
+(Li
+et al.
+,
+2026d
+)
+proposes a fully open pipeline for long-horizon deep research trajectory synthesis, including synthetic task generation, high-quality trajectory construction, and agent tuning. OffSeeker
+(Zhou
+et al.
+,
+2026
+)
+argues that online reinforcement learning is not the only path to strong deep research agents, showing the effectiveness of offline data construction and training. AgentFounder
+(Su
+et al.
+,
+2025
+)
+scales agents through continual pre-training over large-scale agentic data, while DR-Venus
+(Team
+et al.
+,
+2026b
+)
+explores edge-scale deep research agents trained from only 10K open data examples.
+Overall, existing deep research systems highlight several complementary directions: scaling tool-augmented exploration, separating problem-solving and report-generation modes, using rubrics and verifiers as optimization signals, improving test-time writing through iterative refinement, synthesizing capability-specific training data, open-sourcing reproducible training pipelines, and introducing external workspaces as persistent memory. These studies demonstrate that deep research is not merely a longer version of RAG, but a broader agentic workflow that couples search, planning, verification, memory, and long-form synthesis.
+5
+Conclusions
+In this technical report, we presented
+DuMate-DeepResearch
+, a multi-agent deep research framework built on the Qianfan Agent Foundry. By decoupling the Agent Core, which handles task understanding, planning, and scheduling, from an extensible Tool Ecosystem for retrieval, evidence acquisition, and report rendering, the framework exposes every planning decision and tool invocation as an inspectable artifact, directly addressing the transparency and auditability challenge of agentic deep research. On top of this infrastructure, we introduced three cognitive mechanisms tailored to the open challenges of the task: a graph-based dynamic planner that supports coarse-to-fine exploration, reflection, re-planning, backtracking, and parallel branching for far-sighted long-horizon research; a recursive two-level execution design that delegates each complex search sub-task to an inner Search Agent running its own planning loop, isolating noisy retrieval so that the global trajectory stays stable; and a rubric-based test-time optimization mechanism that dynamically generates task-specific quality criteria and uses them as live reasoning scaffolds for evidence-grounded synthesis and adaptive stopping.
+Experiments on DeepResearch Bench and DeepResearch Bench II show consistent gains across complementary evaluation protocols, with DuMate-DeepResearch achieving the best overall scores on both benchmarks. These results demonstrate the effectiveness of combining auditable multi-agent infrastructure with adaptive planning and rubric-guided reasoning for high-quality deep research. In future work, we plan to extend the evaluation to additional live and multimodal deep research benchmarks, broaden the Tool Ecosystem with richer domain-specific capabilities, and further investigate rubric-based optimization as a training-time as well as test-time signal.
+Contributions and Acknowledgments
+Contributors:
+Lingyong Yan
+🖂
+,
+Can Xu
+*
+,
+Yukun Zhao,
+Wenxuan Li,
+Qingyang Chen,
+Jiulong Wu,
+Wenli Song,
+Xiangnan Li,
+Weixian Shi,
+Yiqun Chen
+*
+,
+Xuchen Ma
+*
+,
+Yuchen Li,
+Jiashu Zhao,
+Shuaiqiang Wang,
+Jianmin Wu,
+and Dawei Yin.
+🖂
+Corresponding author:
+yanlingyong@baidu.com
+.
+*
+Work done during an internship at Baidu AI Cloud.
+We would like to thank our colleagues at Baidu AI Cloud and across Baidu for their continuous support throughout this project. We are also grateful to the colleagues who participated in internal evaluations and provided valuable feedback that helped shape the design and improve the quality of the system. Finally, we thank the broader open-source and deep research community, whose benchmarks, baselines, and prior work have been instrumental in guiding our research and development efforts.
+References
+A. Asai, Z. Wu, Y. Wang, A. Sil, and H. Hajishirzi (2024)
+Self-RAG: learning to retrieve, generate, and critique through self-reflection
+.
+In
+The Twelfth International Conference on Learning Representations
+,
+Cited by:
+§4.1
+.
+S. Borgeaud, A. Mensch, J. Hoffmann, T. Cai, E. Rutherford, K. Millican, G. van den Driessche, J. Lespiau, B. Damoc, A. Clark, D. de Las Casas, A. Guy, J. Menick, R. Ring, T. Hennigan, S. Huang, L. Maggiore, C. Jones, A. Cassirer, A. Brock, M. Paganini, G. Irving, O. Vinyals, S. Osindero, K. Simonyan, J. W. Rae, E. Elsen, and L. Sifre (2022)
+Improving language models by retrieving from trillions of tokens
+.
+Cited by:
+§4.1
+.
+X. Chen, Y. Li, H. Cai, Z. Ma, X. Chen, H. Xiong, S. Wang, B. He, L. Sun, and D. Yin (2025a)
+Multi-agent proactive information seeking with adaptive llm orchestration for non-factoid question answering
+.
+In
+Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining V. 2
+,
+pp. 4341–4352
+.
+Cited by:
+§4.1
+.
+X. Chen, Y. Li, Y. Bi, S. Wang, L. Kong, and D. Yin (2026)
+ReflectRAG: enhancing retrieval-augmented generation with grpo-optimized iterative reflection
+.
+Neurocomputing
+,
+pp. 134047
+.
+Cited by:
+§4.1
+.
+Y. Chen, L. Yan, W. Sun, X. Ma, Y. Zhang, S. Wang, D. Yin, Y. Yang, and J. Mao (2025b)
+Improving retrieval-augmented generation through multi-agent reinforcement learning
+.
+arXiv preprint arXiv:2501.15228
+.
+Cited by:
+§4.1
+.
+Y. Chen, E. Zhang, L. Yan, S. Wang, J. Huang, D. Yin, and J. Mao (2025c)
+MAO-arag: multi-agent orchestration for adaptive retrieval-augmented generation
+.
+arXiv preprint arXiv:2508.01005
+.
+Cited by:
+§4.1
+.
+Z. Chu, X. Wang, J. Hong, H. Fan, Y. Huang, Y. Yang, G. Xu, C. Zhao, C. Xiang, S. Hu,
+et al.
+(2026)
+Redsearcher: a scalable and cost-efficient framework for long-horizon search agents
+.
+arXiv preprint arXiv:2602.14234
+.
+Cited by:
+§4.2
+.
+H. Ding, L. Pang, Z. Wei, H. Shen, and X. Cheng (2024)
+Retrieve only when it needs: adaptive retrieval augmentation for hallucination mitigation in large language models
+.
+arXiv preprint arXiv:2402.10612
+.
+Cited by:
+§4.1
+.
+M. Du, B. Xu, C. Zhu, X. Wang, and Z. Mao (2025)
+DeepResearch bench: a comprehensive benchmark for deep research agents
+.
+External Links:
+2506.11763
+,
+Link
+Cited by:
+§1
+,
+1st item
+.
+Y. Du, R. Ye, S. Tang, X. Zhu, Y. Lu, Y. Cai, and S. Chen (2026)
+OpenSeeker: democratizing frontier search agents by fully open-sourcing training data
+.
+arXiv preprint arXiv:2603.15594
+.
+Cited by:
+§4.2
+.
+Y. Gao, Y. Xiong, X. Gao, K. Jia, J. Pan, Y. Bi, Y. Dai, J. Sun, H. Wang, H. Wang,
+et al.
+(2023)
+Retrieval-augmented generation for large language models: a survey
+.
+arXiv preprint arXiv:2312.10997
+2
+(
+1
+),
+pp. 32
+.
+Cited by:
+§1
+,
+§4.1
+.
+X. Guan, J. Zeng, F. Meng, C. Xin, Y. Lu, H. Lin, X. Han, L. Sun, and J. Zhou (2025)
+DeepRAG: thinking to retrieve step by step for large language models
+.
+arXiv preprint arXiv:2502.01142
+.
+Cited by:
+§4.1
+.
+K. Guu, K. Lee, Z. Tung, P. Pasupat, and M. Chang (2020)
+REALM: retrieval-augmented language model pre-training
+.
+In
+Proceedings of the 37th International Conference on Machine Learning
+,
+Cited by:
+§4.1
+.
+R. Han, Y. Chen, Z. CuiZhu, L. Miculicich, G. Sun, Y. Bi, W. Wen, H. Wan, C. Wen, S. Maître, G. Lee, V. Tirumalashetty, E. Xue, Z. Zhang, S. Haykal, B. Gokturk, T. Pfister, and C. Lee (2025)
+Deep researcher with test-time diffusion
+.
+External Links:
+2507.16075
+,
+Link
+Cited by:
+§4.2
+.
+C. Hu, H. Du, H. Wang, L. Lin, M. Chen, P. Liu, R. Miao, T. Yue, W. You, W. Ji, W. Yuan, W. Deng, X. Yuan, X. Zhang, X. Liu, X. Liu, Y. Xu, Y. Cao, Y. Zhang, Y. Wang, Y. Shu, Y. Zhang, Y. Zhang, Z. Gong, Z. Chang, B. Li, D. Ma, F. Jia, H. Wang, J. Liu, J. Bai, J. Liu, M. Liu, N. Wang, Q. Wu, Q. Du, S. Li, W. Sun, Y. Gong, Y. Chen, Y. Zhao, Y. Lin, Z. Ren, Z. Wang, A. Zhang, B. Li, B. Ma, K. An, L. Xie, M. Li, P. Li, S. Yang, X. Chen, X. Liu, Y. Luo, Y. Song, Y. Ding, Y. Liang, Z. Li, Z. Zhang, Z. Zhang, B. Jiao, D. Jiang, J. Chen, J. Li, X. Zhang, and Y. Zhu (2025)
+Step-deepresearch technical report
+.
+External Links:
+2512.20491
+,
+Link
+Cited by:
+§4.2
+.
+G. Izacard, P. Lewis, M. Lomeli, L. Hosseini, F. Petroni, T. Schick, J. Dwivedi-Yu, A. Joulin, S. Riedel, and E. Grave (2023)
+Atlas: few-shot learning with retrieval augmented language models
+.
+Cited by:
+§4.1
+.
+J. Jiang, J. Chen, J. Li, R. Ren, S. Wang, W. X. Zhao, Y. Song, and T. Zhang (2024)
+Rag-star: enhancing deliberative reasoning with retrieval augmented verification and refinement
+.
+arXiv preprint arXiv:2412.12881
+.
+Cited by:
+§4.1
+.
+P. Jiang, J. Lin, L. Cao, R. Tian, S. Kang, Z. Wang, J. Sun, and J. Han (2025)
+Deepretrieval: hacking real search engines and retrievers with large language models via reinforcement learning
+.
+arXiv preprint arXiv:2503.00223
+.
+Cited by:
+§4.1
+.
+Z. Jiang, F. F. Xu, L. Gao, Z. Sun, Q. Liu, J. Dwivedi-Yu, Y. Yang, J. Callan, and G. Neubig (2023)
+Active retrieval augmented generation
+.
+In
+Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing
+,
+pp. 7969–7992
+.
+Cited by:
+§4.1
+.
+B. Jin, H. Zeng, Z. Yue, J. Yoon, S. Arik, D. Wang, H. Zamani, and J. Han (2025)
+Search-r1: training llms to reason and leverage search engines with reinforcement learning
+.
+arXiv preprint arXiv:2503.09516
+.
+Cited by:
+§4.1
+.
+V. Karpukhin, B. Oguz, S. Min, P. Lewis, L. Wu, S. Edunov, D. Chen, and W. Yih (2020)
+Dense passage retrieval for open-domain question answering
+.
+In
+Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing
+,
+Cited by:
+§4.1
+.
+P. Lewis, E. Perez, A. Piktus, F. Petroni, V. Karpukhin, N. Goyal, H. Küttler, M. Lewis, W. Yih, T. Rocktäschel,
+et al.
+(2020)
+Retrieval-augmented generation for knowledge-intensive nlp tasks
+.
+Advances in neural information processing systems
+33
+,
+pp. 9459–9474
+.
+Cited by:
+§1
+,
+§4.1
+.
+R. Li, M. Du, B. Xu, C. Zhu, X. Wang, and Z. Mao (2026a)
+DeepResearch bench ii: diagnosing deep research agents via rubrics from expert report
+.
+External Links:
+2601.08536
+,
+Link
+Cited by:
+2nd item
+.
+W. Li, B. Qu, B. Pan, J. Zhang, Z. Liu, P. Zhang, W. Chen, and B. Zhang (2026b)
+LiteResearcher: a scalable agentic rl training framework for deep research agent
+.
+arXiv preprint arXiv:2604.17931
+.
+Cited by:
+§4.2
+.
+X. Li, C. Zhu, L. Li, Z. Yin, T. Sun, and X. Qiu (2023)
+Llatrieval: llm-verified retrieval for verifiable generation
+.
+arXiv preprint arXiv:2311.07838
+.
+Cited by:
+§4.1
+.
+X. Li, G. Dong, J. Jin, Y. Zhang, Y. Zhou, Y. Zhu, P. Zhang, and Z. Dou (2025a)
+Search-o1: agentic search-enhanced large reasoning models
+.
+arXiv preprint arXiv:2501.05366
+.
+Cited by:
+§4.1
+.
+X. Li, J. Jin, G. Dong, H. Qian, Y. Wu, J. Wen, Y. Zhu, and Z. Dou (2025b)
+WebThinker: empowering large reasoning models with deep research capability
+.
+External Links:
+2504.21776
+,
+Link
+Cited by:
+§4.2
+.
+Y. Li, H. Cai, R. Kong, X. Chen, J. Chen, J. Yang, H. Zhang, J. Li, J. Wu, Y. Chen,
+et al.
+(2025c)
+Towards ai search paradigm
+.
+arXiv preprint arXiv:2506.17188
+.
+Cited by:
+§4.1
+.
+Y. Li, J. Chen, X. Chen, Z. Li, H. Zhang, R. Kong, J. Li, X. Ma, H. Cai, L. Su,
+et al.
+(2026c)
+Retain to refine: adaptive online question answering via query routing and long-short memory
+.
+In
+Proceedings of the 32nd ACM SIGKDD Conference on Knowledge Discovery and Data Mining V. 1
+,
+pp. 2312–2322
+.
+Cited by:
+§4.1
+.
+Z. Li, D. Jiang, X. Ma, H. Zhang, P. Nie, Y. Zhang, K. Zou, J. Xie, Y. Zhang, and W. Chen (2026d)
+Openresearcher: a fully open pipeline for long-horizon deep research trajectory synthesis
+.
+arXiv preprint arXiv:2603.20278
+.
+Cited by:
+§4.2
+.
+X. Ma, Y. Gong, P. He, H. Zhao, and N. Duan (2023)
+Query rewriting in retrieval-augmented large language models
+.
+In
+Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing
+,
+Cited by:
+§4.1
+.
+S. Robertson and H. Zaragoza (2009)
+The probabilistic relevance framework: bm25 and beyond
+.
+Now Publishers Inc.
+.
+Cited by:
+§4.1
+.
+R. Shao, A. Asai, S. Z. Shen, H. Ivison, V. Kishore, J. Zhuo, X. Zhao, M. Park, S. G. Finlayson, D. Sontag, T. Murray, S. Min, P. Dasigi, L. Soldaini, F. Brahman, W. Yih, T. Wu, L. Zettlemoyer, Y. Kim, H. Hajishirzi, and P. W. Koh (2025)
+DR tulu: reinforcement learning with evolving rubrics for deep research
+.
+External Links:
+2511.19399
+,
+Link
+Cited by:
+§4.2
+.
+Z. Shi, Y. Chen, H. Li, W. Sun, S. Ni, Y. Lyu, R. Fan, B. Jin, Y. Weng, M. Zhu, Q. Xie, X. Guo, Q. Yang, J. Wu, J. Zhao, X. Tang, X. Ma, C. Wang, J. Mao, Q. Ai, J. Huang, W. Wang, Y. Zhang, Y. Yang, Z. Tu, and Z. Ren (2025)
+Deep research: a systematic survey
+.
+External Links:
+2512.02038
+,
+Link
+Cited by:
+§1
+.
+N. Shinn, F. Cassano, E. Berman, A. Gopinath, K. Narasimhan, and S. Yao (2023)
+Reflexion: language agents with verbal reinforcement learning
+.
+In
+Advances in Neural Information Processing Systems
+,
+Cited by:
+§1
+.
+H. Song, J. Jiang, Y. Min, J. Chen, Z. Chen, W. X. Zhao, L. Fang, and J. Wen (2025)
+R1-searcher: incentivizing the search capability in llms via reinforcement learning
+.
+arXiv preprint arXiv:2503.05592
+.
+Cited by:
+§4.1
+.
+L. Su, Z. Zhang, G. Li, Z. Chen, C. Wang, M. Song, X. Wang, K. Li, J. Wu, X. Chen,
+et al.
+(2025)
+Scaling agents via continual pre-training
+.
+arXiv preprint arXiv:2509.13310
+.
+Cited by:
+§4.2
+.
+W. Su, Y. Tang, Q. Ai, Z. Wu, and Y. Liu (2024)
+DRAGIN: dynamic retrieval augmented generation based on the information needs of large language models
+.
+arXiv preprint arXiv:2403.10081
+.
+Cited by:
+§4.1
+,
+§4.1
+.
+M. Team, S. Bai, L. Bing, L. Lei, R. Li, X. Li, X. Lin, E. Min, L. Su, B. Wang,
+et al.
+(2026a)
+Mirothinker-1.7 & h1: towards heavy-duty research agents via verification
+.
+arXiv preprint arXiv:2603.15726
+.
+Cited by:
+§4.2
+.
+M. Team, S. Bai, L. Bing, C. Chen, G. Chen, Y. Chen, Z. Chen, Z. Chen, J. Dai, X. Dong, W. Dou, Y. Deng, Y. Fu, J. Ge, C. Han, T. Huang, Z. Huang, J. Jiao, S. Jiang, T. Jiao, X. Jian, L. Lei, R. Li, R. Luo, T. Li, X. Lin, Z. Liu, Z. Li, J. Ni, Q. Ren, P. Sun, S. Su, C. Tao, B. Wang, H. Wang, H. Wang, J. Wang, J. Wang, J. Wang, L. Wang, S. Wang, W. Wang, Z. Wang, J. Xu, S. Xing, C. Yang, H. Ye, J. Yu, Y. Yu, M. Zhong, T. Zhao, X. Zhu, Y. Zhou, Y. Zhang, and Z. Zhu (2025)
+MiroThinker: pushing the performance boundaries of open-source research agents via model, context, and interactive scaling
+.
+External Links:
+2511.11793
+,
+Link
+Cited by:
+§4.2
+.
+V. Team, S. Dai, Y. Deng, J. Lin, Y. Song, G. Wang, X. Wu, Y. Zhou, S. Yang, Z. Ying,
+et al.
+(2026b)
+DR-venus: towards frontier edge-scale deep research agents with only 10k open data
+.
+arXiv preprint arXiv:2604.19859
+.
+Cited by:
+§4.2
+.
+H. Trivedi, N. Balasubramanian, T. Khot, and A. Sabharwal (2022)
+Interleaving retrieval with chain-of-thought reasoning for knowledge-intensive multi-step questions
+.
+arXiv preprint arXiv:2212.10509
+.
+Cited by:
+§4.1
+.
+J. Wang, Y. Ming, R. Dulepet, Q. Chen, A. Xu, Z. Ke, F. Sala, A. Albarghouthi, C. Xiong, and S. Joty (2025)
+LiveResearchBench: a live benchmark for user-centric deep research in the wild
+.
+External Links:
+2510.14240
+,
+Link
+Cited by:
+§1
+.
+L. Wang, C. Ma, X. Feng, Z. Zhang, H. Yang, J. Zhang, Z. Chen, J. Tang, X. Chen, Y. Lin,
+et al.
+(2024)
+A survey on large language model based autonomous agents
+.
+Frontiers of Computer Science
+18
+(
+6
+),
+pp. 186345
+.
+Cited by:
+§1
+.
+S. Yao, D. Yu, J. Zhao, I. Shafran, T. L. Griffiths, Y. Cao, and K. Narasimhan (2023a)
+Tree of thoughts: deliberate problem solving with large language models
+.
+In
+Advances in Neural Information Processing Systems
+,
+Cited by:
+§1
+.
+S. Yao, J. Zhao, D. Yu, N. Du, I. Shafran, K. R. Narasimhan, and Y. Cao (2023b)
+ReAct: synergizing reasoning and acting in language models
+.
+In
+The Eleventh International Conference on Learning Representations
+,
+External Links:
+Link
+Cited by:
+§1
+,
+§4.1
+,
+§4.2
+.
+Z. Yao, W. Qi, L. Pan, S. Cao, L. Hu, W. Liu, L. Hou, and J. Li (2024)
+Seakr: self-aware knowledge retrieval for adaptive retrieval augmented generation
+.
+arXiv preprint arXiv:2406.19215
+.
+Cited by:
+§4.1
+.
+W. Zhang, X. Li, Y. Zhang, P. Jia, Y. Wang, H. Guo, Y. Liu, and X. Zhao (2025)
+Deep research: a survey of autonomous research agents
+.
+External Links:
+2508.12752
+,
+Link
+Cited by:
+§1
+.
+Y. Zheng, D. Fu, X. Hu, X. Cai, L. Ye, P. Lu, and P. Liu (2025)
+DeepResearcher: scaling deep research via reinforcement learning in real-world environments
+.
+In
+Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing
+,
+C. Christodoulopoulos, T. Chakraborty, C. Rose, and V. Peng (Eds.)
+,
+Suzhou, China
+,
+pp. 414–431
+.
+External Links:
+Link
+,
+Document
+,
+ISBN 979-8-89176-332-6
+Cited by:
+§1
+.
+Y. Zhou, K. Zheng, Q. Chen, M. Hu, Q. Sun, C. Xu, and J. Chen (2026)
+OffSeeker: online reinforcement learning is not all you need for deep research agents
+.
+arXiv preprint arXiv:2601.18467
+.
+Cited by:
+§4.2
+.
+B. Zhu, Q. Jia, T. Lan, J. Ren, F. Gu, F. Jiang, L. Wang, Z. Xu, and W. Luo (2026a)
+Marco deepresearch: unlocking efficient deep research agents via verification-centric design
+.
+arXiv preprint arXiv:2603.28376
+.
+Cited by:
+§4.2
+.
+C. Zhu, B. Xu, M. Du, S. Wang, X. Wang, Z. Mao, and Y. Zhang (2026b)
+FS-researcher: test-time scaling for long-horizon research tasks with file-system-based agents
+.
+External Links:
+2602.01566
+,
+Link
+Cited by:
+§4.2
+.
+Appendix A
+Prompt Templates
+To make the cognitive mechanisms of Section
+2.2
+concrete and reproducible, this appendix reproduces desensitized excerpts of the core prompts that drive them.
+Due to product and safety constraints, we release only high-level control logic: the full output schemas, field-level definitions, tool list, and other sensitive engineering details are omitted (marked in-line by a bracketed ellipsis), while the reasoning logic and control structure are retained.
+A.1
+Planner Prompt
+The following desensitized excerpt corresponds to the graph-based dynamic planner of Section
+2.2.1
+. It maintains and updates the research DAG, enforces the structural constraints, governs when to re-plan, and emits the next batch of parallel actions.
+A.2
+Rubric-Generation Prompts
+The rubric generator of Section
+2.2.3
+operates at two levels. The
+orchestration-level
+prompt (below) is invoked after each planning–execution cycle to assess cross-sub-task integration quality and to decide whether further retrieval is warranted; the
+search-level
+prompt is invoked by each inner Search Agent after every tool response to steer its next retrieval step.
+Experimental support, please
+view the build logs
+for errors. Generated by
+L
+A
+T
+E
+xml
+.
+Instructions for reporting errors
+We are continuing to improve HTML versions of papers, and your feedback helps enhance accessibility and mobile
+support. To report errors in the HTML that will help us improve conversion and rendering, choose any of the
+methods listed below:
+Click the "Report Issue"
+(
+)
+button, located in the page header.
+Tip:
+You can select the relevant text first, to include it in your report.
+Our team has already identified
+the following issues
+. We appreciate your time reviewing and reporting rendering errors we
+may not have found yet. Your efforts will help us improve the HTML versions for all readers, because disability
+should not be a barrier to accessing research. Thank you for your continued support in championing open access for
+all.
+Have a free development cycle? Help support accessibility at arXiv! Our collaborators at LaTeXML maintain a
+list of packages that need conversion
+, and welcome
+developer contributions
+.
+We gratefully acknowledge support from
+our
+major funders
+,
+member institutions
+,
+,
+and all contributors.
+About
+·
+Help
+·
+Contact
+·
+Subscribe
+·
+Copyright
+·
+Privacy
+·
+Accessibility
+·
+Operational Status
+(opens in new tab)
+Major funding support from

@@ -1,0 +1,14 @@
+[0.3874] src-core-think-prompt-ts -- [TypeScript] src/core/think/prompt.ts:40-70 export statement
+
+export const THINK_SYSTEM_PROMPT_BASE 
+[0.3752] src-core-think-index-ts -- [TypeScript] src/core/think/index.ts:226-521 export statement runThink
+
+export async function runThi
+[0.3744] src-core-think-cite-render-ts -- [TypeScript] src/core/think/cite-render.ts:65-102 export statement normalizeStructuredCitations
+
+exp
+[0.3676] skills/agentic-research-system/skill -- For judgment-heavy questions, add an ACH-style competing-hypotheses check:
+
+```text
+Hypothesis A:
+Ev

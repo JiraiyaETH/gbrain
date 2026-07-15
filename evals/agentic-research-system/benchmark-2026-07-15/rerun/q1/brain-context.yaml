@@ -1,0 +1,44 @@
+brain_context:
+  retrieved_at: 2026-07-15T00:36:45Z
+  brain_id: default
+  source_id: default
+  query: "What important advances in agentic ‘deep research’ systems from the last 90 days should change how GBrain’s Agentic Research System works? Focus on source discovery, parallel investigation, evidence tracking, critique, synthesis, and memory write-back. Distinguish genuinely new mechanisms from repackaged patterns."
+  brain_context_status: thin_but_present
+  lookup_boundary:
+    targeted_searches:
+      - "agentic research deep research evidence memory parallel critique synthesis"
+      - "citation audit"
+      - "write-back"
+    broadened_searches:
+      - "agentic"
+      - "research"
+      - "memory"
+    hybrid_query: "How should an agentic research system handle source discovery, parallel scouts, claim ledgers, citation audits, critique, synthesis, and controlled Brain write-back?"
+  pages:
+    - slug: skills/agentic-research-system/skill
+      title: Agentic Research System
+      retrieved_via: search|query|get
+      claims:
+        - "The current Brain-known workflow is protocol-lite brief → Brain lookup → source acquisition router → bounded scout fan-out → search/source/claim ledgers → critic and competing-hypotheses gate → citation audit → constrained synthesis → cross-model eval → run receipt → promotion decision."
+        - "The current skill requires Brain-first lookup, bounded read-only scouts, no snippet citations, claim-level evidence mapping, separate evidence confidence and recommendation strength, cross-model evaluation for high-stakes output, and promotion discipline."
+        - "The current source basis cites Anthropic multi-agent research, OpenAI deep research/Agents SDK, STORM, PaperQA2, Self-RAG/CRAG/RAGChecker, realistic tool-use benchmarks, and PRISMA/GRADE/Cochrane/ACH."
+        - "The current skill prohibits Brain write-back for unapproved research and requires a controlled write-back gate plus post-write readback when approved."
+      last_known_at: 2026-07-02
+    - slug: skills/agentic-research-system/changelog
+      title: Agentic Research System Changelog
+      retrieved_via: get
+      claims:
+        - "Version 1.0.0 was created 2026-07-01 from the agentic research system memo."
+        - "The first cross-modal eval failed on sourcing, specificity, and usefulness; hard gates, source basis, material-claim definitions, reviewer reconciliation, and example artifacts were then added."
+        - "The skill was tightened around mutating frontmatter, separate skillification versus run-output evals, trigger ambiguity, and explicit tool capabilities."
+      last_known_at: 2026-07-01
+  known_decisions:
+    - "Canonical refactored skill is skills/agentic-research-system/SKILL.md v1.1.0; this benchmark must not edit it."
+    - "Perplexity remains an optional backend/baseline; this benchmark compares pre-refactor sonar-pro against an actually executed Brain-first workflow."
+    - "No Brain writes are permitted in this benchmark; write-back gate remains not_run."
+  gaps:
+    - "No Brain page found that records last-90-day external advances specifically; novelty relative to Brain is therefore bounded by the two retrieved skill pages and checked public sources, not claimed globally."
+    - "No prior Q1 Agentic completed output is available; the prior agentic-q1.txt is only a dispatch acknowledgement."
+    - "Provider-internal tool counts and costs for the web/research tool lane may be unobservable."
+  contradictions:
+    - "No direct contradiction found in the retrieved Brain pages; the thin context is mostly a workflow baseline rather than a current-state literature record."

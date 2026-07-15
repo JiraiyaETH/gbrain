@@ -1,0 +1,751 @@
+Journal of Computational Social Science (2026) 9:11
+https://doi.org/10.1007/s42001-025-00435-2
+RESEARCH ARTICLE
+
+Anchoring bias in large language models: an experimental
+study
+Jiaxu Lou1
+
+· Yifan Sun1
+
+Received: 31 March 2025 / Accepted: 28 September 2025 / Published online: 5 December 2025
+© The Author(s) 2025
+
+Abstract
+Large Language Models (LLMs) like GPT-4 and Gemini have significantly advanced
+artificial intelligence by enabling machines to generate and comprehend human-like
+text. Despite their impressive capabilities, LLMs are not without limitations. They
+exhibit various biases. Although much research has explored demographic biases,
+cognitive biases in LLM have not been equally studied. This study delves into anchoring bias, a cognitive bias in which initial information disproportionately influences judgment. Using an experimental data set, we examine how anchoring bias
+manifests in LLM and verify the effectiveness of various mitigation strategies. Our
+findings highlight the sensitivity of LLM responses to biased prompts. At the same
+time, our experiments show that to mitigate anchoring bias, one needs to collect
+information from comprehensive angles to prevent the LLMs from being anchored
+to individual pieces of information, as simple algorithms such as Chain-of-Thought,
+Thoughts of Principles, Ignoring Anchor Hints, and Reflection are insufficient.
+Keywords Large language model · LLM · Anchoring bias · Cognitive bias ·
+Mitigation strategy
+
+The authors do not have any Google Scholar profile.
+Jiaxu Lou
+jiaxulou@hotmail.com
+Yifan Sun
+sunyifan@bnds.cn
+1
+
+Beijing National Day School, Beijing, China
+
+13
+
+11 Page 2 of 24
+
+Journal of Computational Social Science (2026) 9:11
+
+1 Introduction
+Nowadays, large language models (LLMs) such as GPT4 and Gemini have revolutionized the field of artificial intelligence by enabling machines to understand and generate human-like text. Furthermore, they have also shown remarkable performance in
+many common sense reasoning tasks. Many researchers and industry professionals
+have started to apply LLMs to decision-making processes to support their day-to-day
+business. For example, in addition to being used to generate articles, stories, and
+even code, LLMs are also used as chatbots and virtual assistants for instant customer
+service support, to help with medical research, diagnostics, and patient communication in healthcare [1, 2], and many other decision-making scenarios. Despite their
+impressive capabilities, LLMs are not without limitations. In fact, a set of studies
+have shown that LLMs have social or stereotype bias problems [3], and these biases
+can have negative impacts. Quite a lot of attention has been paid to better understand
+and eliminate the negative impact of demographic bias in LLMs, by both the research
+community and industry.
+Unlike demographic biases of LLMs based on sensitive characteristics such as
+race and gender that have been widely studied by researchers [4], cognitive biases
+of LLMs have not received much attention yet. There are very few research papers
+focusing on cognitive biases in LLMs. Cognitive biases in LLMs can affect the fairness and accuracy of their outputs [5, 6]. It is especially important when we use
+LLMs in decision-making tasks, as they may lead to unreasonable recommendations.
+As LLMs become more and more popular in decision making scenarios, there is a
+high demand for a comprehensive understanding of LLMs’ cognitive biases and for
+practitioners to be cautious about them to avoid irrational decision-making output.
+This paper aims to focus on a specific type of cognitive biases—anchoring bias,
+and study its manifestation in LLMs and possible mitigation strategies. Unlike [7],
+where only a few financial questions are examined, we conducted a more comprehensive and quantitative study on the anchoring bias of LLMs based on the experimental dataset designed by Taha Yasseri [8]. By changing the magnitude of bias hints,
+we found that the answers of LLMs are sensitive to the biased hints. We further
+conducted a comparative study on several mitigation strategies. Our study shows
+that simple algorithms such as Chain-of-Thought, Thoughts of Principles, Ignoring
+Anchor Hints, and Reflection are insufficient to mitigate anchoring bias. One needs
+to collect hints from comprehensive angles to prevent the LLMs from being anchored
+to individual pieces of information.
+
+2 Related work
+2.1 Cognitive bias
+Cognitive bias refers to systematic mental patterns that influence our thinking and
+decision-making, leading us to process information in a selective and subjective manner, often resulting in inaccurate or irrational judgments [9]. It is a systematic error
+in thinking that affects how we process information, perceive the environment, and
+
+13
+
+Journal of Computational Social Science (2026) 9:11
+
+Page 3 of 24 11
+
+make decisions. It can lead to irrational thoughts or judgments and is often based
+on our perceptions, memories, or individual and societal beliefs. Cognitive bias is
+often an unconscious and automatic process—a result of the brain’s attempt to simplify information processing, which is designed to make decision-making quicker
+and more efficient. Individuals are often unaware of their attitudes and behaviors
+resulting from cognitive bias [9]. Unlike demographic bias, where behavior occurs
+due to social and cultural influences, cognitive bias lies in the information processing
+mechanisms of the human decision-making process, often influenced by the setup of
+the task or emotional factors.
+There are many cognitive bias patterns that have been studied in Psychology. For
+example, confirmation bias, hindsight bias, the mere exposure effect, self-serving
+bias, the base rate fallacy, anchoring bias, availability bias, the framing effect, inattentional blindness, and the ecological fallacy are some of the most common examples of cognitive bias [9].
+In this study, we mainly focus on anchoring bias [10]. Anchoring bias means that
+our judgments are often significantly influenced by the first piece of information
+encountered. For instance, once an anchor (i.e., the first piece of information encountered) is established from a previous message, people often insufficiently adjust away
+from it to arrive at their final answer, making their final guess or decision closer to the
+anchor than it otherwise would have been.
+2.2 Cognitive biases in LLMs
+LLMs are trained by a next-token prediction task based on the text data collected
+from the Internet. Therefore, LLMs are susceptible to various biases because the data
+they are trained on inherently includes biases. Additionally, the algorithms used to
+train these models can exacerbate or introduce new biases depending on their design
+and the assumptions they make during learning. The interaction between users and
+the model can further entrench these biases, as frequent user inputs may reinforce
+certain patterns that the model learns to replicate. These biases can potentially manifest in several ways at the LLM inference time, impacting the reliability and fairness
+of the model’s outputs.
+A few existing research studies have shown that LLMs can show cognitive biases
+in many different decision-making processes [3, 11, 12]. For example, Chen et al.
+[12] pointed out that LLM’s judgments are influenced by threshold priming biases.
+In [11], the authors detected several cognitive biases (confirmation bias, anchoring
+bias, status quo bias, framing bias, primacy bias, group attribution bias, etc.) in LLMs
+by using a framework called BIASBUSTER. Samuel et al. [6] assessed cognitive
+biases in LLMs used for medical tasks by using a benchmark called BiasMedQA,
+and showed that LLMs are vulnerable to cognitive biases, while GPT4 is demonstrating significant resistance to bias. However, the research of [13, 14] showed that
+although GPT models are frequently subject to cognitive biases, the way these biases
+are displayed does not reflect that shown by humans. Ross et al. [15] also evaluate the
+cognitive biases of LLMs quantitively using a utility theory in the financial domain
+and found that the financial behavior of current LLMs is neither entirely human-like
+nor entirely homo-economicus-like.
+
+13
+
+11 Page 4 of 24
+
+Journal of Computational Social Science (2026) 9:11
+
+In this paper, we focus on the anchoring bias of LLMs including its behavior and
+mitigation strategies. There are a few existing works focusing on anchoring bias of
+LLMs. Li et al. [16] studied LLMs’ anchoring bias on answering multiple-choice
+questions (MCQs). To mitigate it, the authors identified the Multi-Layer Perceptron
+(MLP) and attention neural vectors that are responsible for this bias and updated these
+vectors to neutralize the bias to the anchored choice ‘A’. However, their approach
+can only be applied to limited scenarios i.e., MCQs. The most related work to our
+research in this paper is from [7] where the authors tested whether LLMs are subject
+to anchoring bias and studied two naïve mitigation prompting strategies. They found
+that two naïve mitigation prompting strategies including Chain of Thought (CoT)
+and an “ignore previous” strategy (using a prompt: “Ignore our previous conversation but remember your role”) cannot consistently reduce biases for different LLMs.
+However, this study is only based on 5 questions in the financial domain. Different
+from these existing ones, our study includes 62 questions from different domains and
+gives a quantitative analysis about the effects of anchoring bias with different hints.
+
+3 Our approach
+In this study, we conduct a systematic experiment to assess anchoring bias of LLMs
+through an in depth quantitative analysis and explore potential mitigation strategies
+based on the dataset from [8].
+3.1 Data set
+In order to systematically evaluate the anchoring effects of LMMs, we use a dataset
+from [8] which was originally collected for a quantitative analysis of human anchoring biases. To make the data representative and closer to everyday life, the data is collected from the community of the “Play the Future” (PTF) game, where users make
+digital predictions about the outcomes of various economic, social, sports, entertainment, and other events. Figure 1 gives three typical examples. Each sample contains
+a question Q requiring a numerical answer, and three hint messages H1 , H2 , and
+H3 . For example, “Over 250 craft, import, and domestic beers will be presented at
+Ottawa’s Beer Fest this weekend. The entry fee covers 10 drink tickets and a sampling cup. What will the weather be like at 1 PM in Ottawa, Ontario, on Sunday?” is
+the question of the second sample in Fig. 1, which is asking for a temperature value.
+The first hint H1 of this sample (“Temperature last Sunday at 1 PM: 68◦ F”) is a
+fact that usually provides a useful reference information for answering the numerical question Q of this sample. H2 and H3 are two different anchoring hints that may
+potentially trigger the LLMs to give biased answers about the question topic. In this
+case, H2 (“Tom from PTF’s prediction: 60 F”) gives a lowvalue anchor (i.e. 60 F) and
+H3 gives a highvalue anchor (i.e. 76 F). The whole dataset contains 62 samples (and
+their corresponding hints) covering multiple aspects of daily life, including some
+natural, economic, social, sports, and entertainment events, such as weather, stock
+prices, and flight times.
+
+13
+
+Journal of Computational Social Science (2026) 9:11
+
+Page 5 of 24 11
+
+Fig. 1 Question Examples
+
+There are three different types of anchoring hints included in the dataset to assess
+different types of anchoring situations: fact anchoring, “expert-opinion” anchoring,
+irrelevant anchoring. Different types of anchoring questions may trigger different
+bias behaviors of LLMs. These different types of questions and hints allow us to
+evaluate how LLMs predictions are influenced by these different anchoring facts.
+
+13
+
+11 Page 6 of 24
+
+Journal of Computational Social Science (2026) 9:11
+
+Figure 1 shows three typical question samples. In the first row of Fig. 1, the hints of
+H2 and H3 demonstrate a fact anchoring situation, where the H2 and H3 anchoring
+hints are factual descriptions of the highest and lowest stock prices last Tuesday.
+Although neither hint can directly provide the answer to the question (next Tuesday’s
+stock price at 1 PM), seeing different hints ( H2 and H3 ) may lead to different LLM
+answers. In other words, these two hints may cause the models to show anchoring
+effects. In the second row of Fig. 1, the H2 and H3 hints provide two different expert
+opinions, which we can use to evaluate the impact of expert opinions on LLM predictions. In the dataset of [8], there are also 8 cases whose H1 hints do not directly
+relevant to the answers of the corresponding questions. For example, in the third row
+of Fig. 1, the question is asking the number of upvotes to a post, but it’s H1 hint of
+“Number of subscribers to the subreddit: 25.200” is not directly relevant to the question. We try to use these cases to test the robustness of bias effect (refer to Fig. 4).
+3.2 Experiment design
+To evaluate the anchoring effects of LLMs, we also need to prompt a LLM M to
+answer question Q under different anchoring hints. For each question Q, we design
+three experiments: control C, treatment A, and treatment B. In a control experiment,
+Q’s first hint H1 is shown to LLM M along with the question Q as a part of the
+prompt string. In treatment experiment A, besides the question Q, the anchoring hints
+H1 and H2 are both shown to LLM M. Similarly, hints H1 and H3 are shown to M
+in treatment experiment B. Through systematically manipulating the visibility of the
+anchoring hints H2 and H3 to LLM M, we can examine the influence of anchoring
+hints on the answers from LLM M.
+The results generated by LLM are often sensitive to the prompt that guides the
+LLM to answer our questions. In this study, we follow the CO-STAR format [17]
+to compose our prompt and guide the LLM towards the desired outcome, which
+often consists of Context, Objective (i.e., the description of a task), Style & Tone,
+Audience, and Response (i.e., output format). Because our task is relatively simple,
+it only needs LLMs to output a numerical value rather than a long passage. So, we
+ignore the Style & Tone and Audience parts because these parts are mainly used to
+specify the desired writing style and emotional tone for your LLM’s response. Our
+prompt mainly consists of a context for background details including role playing, an
+objective of task description, and a specification of output format. Our basic prompt
+template is presented in Appendix A. As the provided hints often do not give enough
+information for an accurate answer to the question, we found that, if we simply ask a
+strong LLM (e.g., GPT4) to predict a value to answer our questions, the model sometimes directly refuses to give any answers. Instead, it replies to us with “no enough
+information for prediction”. In the prompt template, we ask the LLM to generate an
+educated guess to answer our question rather than a prediction, which can mitigate
+the refuse-answering issue. We ask the LLM to generate an answer with a numerical
+value and its unit using a JSON like format. In our experiments, all Control and Treatments A & B share the same prompt template through replacing the placeholders of
+“user_question”, “hint_1”, and “hint_2” at runtime. For each question Q, we replace
+
+13
+
+Journal of Computational Social Science (2026) 9:11
+
+Page 7 of 24 11
+
+“user_question”, “hint_1” by Q and H1 . In a Control experiment, “hint_2” is empty,
+and it is replaced by H2 and H3 respectively for different Treatment experiments.
+In our study, we evaluate anchoring bias on several series of LLMs from different
+vendors:
+1.
+2.
+3.
+4.
+
+GPT4o, GPT4, GPT3.5 Turbo, and GPT-o3 models from OpenAI.
+DeepSeek-R1-QWen-32B model from DeepSeek.
+Gemini2.5-flash and Gemini2.5-flash-lite models from Google.
+Claud3-haiku, Claud3.5-haiku from Anthropic.
+
+Here, DeepSeek-R1-QWen-32B, GPT-o3, Gemini2.5-flash, and Gemini2.5-flash-lite
+are Reasoning models that are especially trained for deep thinking capability.
+For each question, we ask every LLM model using a prompt composed based on
+the prompt template, collect, and parse the answer from the LLM model to extract
+a numerical result. In the answer parsing step, we convert datetime values in the
+format of “HH:MM” or “MM:SS” to a decimal value in the corresponding minimal
+unit, because decimal values are easy to be used in statistical analysis. For example,
+’2:00’ with the format of “HH:MM” will be converted to a decimal value of ’120’
+with a unit of ’minute’. Similarly, “2:00 of MM:SS” will be converted to ’120’ with
+a unit of ’seconds’. For each question, we run it 30 times in every language model to
+obtain enough data for statistical analysis. In the experiments, we set the temperature
+value as 0.8.
+
+4 Result analysis
+4.1 The effect of hint 1
+Figure 2 shows the standard variation values of responses from different LLM models (i.e., GPT4, GPT4o, and GPT3.5) on Control experiments. From the figure, we
+found that many LLM responses of strong models (GPT4 and GPT4o) only have
+very small variations although a relatively large temperature (i.e. 0.8) is used in the
+experiments. For example, in 78 experiments (out of 108 total experiments) from
+GPT4 and GPT4o, the standard variation values are almost zero, which means the
+LLMs precisely repeat the same numerical answer 30 times. At the same time, for a
+weaker model GPT3.5, only one fourth of experiments have zero variation values.
+A reasonable explanation for this is that a weak model (i.e., GPT3.5) is often not
+confident about its output.
+As mentioned in Sect. 3, there are eight samples in the dataset, where each sample’s H1 is irrelevant to its question. We can use these samples to check whether the
+models only blindly copy the number from hint H1 as their outputs without understanding the user question and the content of hint H1 , Fig. 3 shows the standard variation values of the responses from all LLMs. We can see that all these 8 cases have
+large variation values on both GPT4 and GPT4o, which are quite different from other
+samples in Fig. 2. It means that LLMs do answer the questions based on the content
+
+13
+
+11 Page 8 of 24
+
+Journal of Computational Social Science (2026) 9:11
+
+Fig. 2 Standard deviations of answers from different GPT models given fact hint H1
+
+Fig. 3 Standard deviations of answers from different GPT models given irrelevant hints
+
+understanding of hint H1 , and they cannot give confident responses when they are
+given an irrelevant hint H1 .
+4.2 Anchoring effect evaluation
+To evaluate the anchoring bias effect, we need to check whether the answers of LLMs
+are significantly influenced by hint H2 or H3 in the experiments. If anchoring effect
+exists, we are able to expect those answers with a high hint figure to obtain higher
+answer values than those who were provided with low hint figures. In other words, if
+the answers of a LLM under H2 and H3 are significantly different and the sign of the
+difference between them is the same as that of the difference between the original H2
+and H3 values, we can claim that the answers of the LLM are biased by the anchors
+H2 and H3 .
+In our experiments, for each question, we obtain two value sets from every language model: one set contains 30 answers for Treatment A (i.e. answer set A), and
+the other contains 30 for Treatment B (i.e. answer set B). We evaluate the bias effect
+by estimating the average difference between two underlined distributions of answer
+
+13
+
+Journal of Computational Social Science (2026) 9:11
+
+Page 9 of 24 11
+
+Fig. 4 T-test results of biased answers on GPT models with fact hints
+
+Fig. 5 T-test results of biased answers on GPT models with expert hints
+
+in set A and set B and measure the confidence of this average difference with p-value
+using t-test analysis. For example, Figs. 4 and 5 show the t-test results on different
+GPT models’ responses to questions with different hint types of fact anchoring and
+expert opinion anchoring, respectively. Here, the column “Hint Difference” shows
+
+13
+
+11 Page 10 of 24
+
+Journal of Computational Social Science (2026) 9:11
+
+the difference between the original values in two anchoring hints H2 and H3 for each
+question, namely (H3 − H2 ). The columns “diff”, “diff_4o”, and “diff_35” are the
+average difference values between the two distributions from treatment experiment
+A and B (e.g., (B − A)) on the GPT4 model, GPT4o, and GPT3.5 respectively. And,
+“p_value”, “p_value_4o”, and “p_value_35” are their corresponding t-test confidence values. A smaller p-value (i.e., less than 0.05) often means a higher confidence
+on the hypothesis that two distributions are different.
+In order to measure the level of the influence caused by anchoring hints, we adopt
+Average Anchoring Index (AI) from [18], which is defined as follows:
+AI =
+
+medianhigh anchor − medianlow anchor
+(1)
+high anchor − low anchor
+
+4.2.1 Observation 1: stronger models show more consistent bias behavior under
+anchoring hints
+From Figs. 4, 6, 7, 8 , we can see that the answers to many questions are biased by the
+anchoring hints. Specifically, in Figs. 4, 5, most distribution differences (i.e., “diff”,
+“diff_4o”, and “diff_35” values in the figure) share the same signs with their corresponding “Hint Difference” values. There are only 11 exception cases (highlighted
+with red color in the tables) among the total 162 distribution difference values, whose
+signs are not consistent with the signs of their corresponding “Hint Difference” values.
+It provides a strong evidence to the anchoring effect of LLMs, although a few p-values show that the corresponding differences are not statistically significant enough. It
+also shows that the answers from stronger models (i.e., GPT4 and GPT4o) are more
+consistently influenced by anchoring bias. On the contrary, the anchoring effects on
+GPT-3.5 are not as stable as that of stronger models (i.e., GPT4 and GPT4o). Among
+the 11 exceptions, 9 of them come from the answers of GPT-3.5. However, this does
+not mean the weaker model has a high resistance to the influence of anchoring effects.
+The reason behind of this phenomenon is that a weaker model may introduce a lot of
+randomness or hallucinations in answer generation, which leads to a high fluctuation
+of the results and potentially hides the underlying anchoring effects, while stronger
+models perform consistent behavior.
+Similar results can also be observed from Gemini models (refer to Figs. 7 and 8),
+Claud models (refer to Figs. 10 and 11), and the comparison between DeepSeek and
+GPTo3 models (refer to Fig. 13). In Figs. 7 and 8, we can see that, Gemini-2.5 Flash-
+
+Fig. 6 T-test results of biased answers on GPT models when H1 is irrelevant to the question
+
+13
+
+Journal of Computational Social Science (2026) 9:11
+
+Page 11 of 24 11
+
+Fig. 7 T-test results of biased answers on Gemini models with fact hints
+
+Fig. 8 T-test results of biased answers on Gemini models with expert hints
+
+lite model has more exception cases than Gemini-2.5 Flash model, and in Figs. 10
+and 12, Claud Haiku3 model has more exception cases than Claud Haiku3.5 model.
+In Fig. 13, compared to GPT-o3, a weaker model called DeepSeek-R1-Qwen-32B
+also triggers more exception cases.
+4.2.2 Observation 2: models with strong reasoning capability have higher
+resistance to anchoring biases
+It is noteworthy that the difference columns (i.e., diff_o3 and diff_gemini-2.5-flash)
+for advanced reasoning models such as GPT-o3 and Gemini-2.5 Flash in Figs. 13
+and 7 display a significant number of zero values. For any given question, a zero-val-
+
+13
+
+11 Page 12 of 24
+
+Journal of Computational Social Science (2026) 9:11
+
+ued difference between experiments A and B indicates that the model produced identical responses to the question despite exposure to different anchoring hints. In other
+words, the model’s responses are not influenced by different anchoring hints, and
+more zero-valued differences often indicate its higher resistance to anchoring biases.
+As depicted in Fig. 13, GPT-o3 demonstrates 13 zero-valued differences, which is
+substantially higher than the 3 observed for DeepSeek-R1-QWen-32B. This finding
+aligns with the well known fact that GPT-o3 exhibits superior reasoning capabilities
+compared to DeepSeek-R1-QWen-32B. Similar trends are evident in Fig. 7, where
+Gemini-2.5 Flash achieves 14 zero-valued differences, whereas Gemini-2.5 Flashlite records only 5 such cases. From the figures, we can find that, for other models
+not specifically optimized for reasoning tasks, their frequency of zero-valued differences remains significantly lower than those exhibited by GPT-o3 and Gemini-2.5
+Flash-lite.
+This trend highlights the crucial link between robust reasoning abilities and
+reduced susceptibility to anchoring effects.
+4.2.3 Observation 3: anchoring effects on time-related questions not significant
+By looking into cases in Fig. 4, we have an interesting observation that the questions
+with time-period answers are not easy to be biased. For example, in Fig. 2, we have
+7 questions (no.3, no.22, no.40, no.26, no.44, no.52, no.61) expecting time-period
+answers, which are about 17% (7 of 42) of the questions, but they bring about 54%
+(6 of 11) out of total exceptions. Our hypothesis is that the capability of LLM’s timeperiod prediction is slightly worse than its capability on normal numbers. A similar
+conclusion can also be obtained from other two series of models in Figs. 7 and 10.
+4.2.4 Observation 4: LLMs are much easier to be biased by expert anchors
+Figure 5 shows that the answers from GPT models are biased by expert anchors with
+high confidence. For example, there is no exception in the answers of 12 questions
+whose anchoring hints come from a PTF (Play The Future) expert. Furthermore,
+their corresponding p-values are also very small, which means that the test has a very
+high level of confidence. A similar phenomenon can be found in Figs. 8, 11, and 14
+for both Gemini, Claud models, and DeepSeek models. These results show that all
+models including strong and weak models tend to strongly adherent to the expert
+hints from PTF.
+4.2.5 Observation 5: anchoring effects are not significant when given irrelevant
+hints
+Figures 6, 9, 12, and 15 illustrate a high rate of exception cases in which all GPT
+models, Gemini models, Claud models, and DeepSeek models do not exhibit consistent behaviors when the H1 hint lacks relevant information for the question.
+A plausible explanation is as follows: Under the prompt condition H1 , where the
+input includes information that is irrelevant to the task, large language models tend to
+produce a broader distribution of answers. In other words, their outputs become more
+
+13
+
+Journal of Computational Social Science (2026) 9:11
+
+Page 13 of 24 11
+
+Fig. 9 T-test results of biased answers on Gemini models when H1 is irrelevant to the question
+
+dispersed and the variance across samples increases. This suggests that irrelevant
+hint inflates the model’s uncertainty. At first glance, this might seem to conflict with
+the previous literature showing that irrelevant information systematically influences
+decisions [19]. On closer inspection, however, we can see that there is no contradiction. Both findings indicate both human and LLM’s susceptibility to irrelevant cues;
+they simply differ in how that susceptibility manifests because the experiment setups
+are different. In classic human experiments, irrelevant cues are used as anchoring
+hints that often introduce a directional bias–such as an anchoring effect–that consistently shifts judgments in a particular direction. By contrast, in our experiment, the
+irrelevant content H1 is used as a distraction information from anchoring hints of H2
+and H3 , which tends to destabilize the inference process of large language models.
+As a result, it increases dispersion in question answering, and the variability induced
+by irrelevant information can mask or outweigh any subtle underlying anchoring
+effect caused by H2 or H3 .
+
+5 Mitigation strategies
+As cognitive bias may largely influence the correctness of decision making, it is
+important to know whether we can mitigate the anchoring bias of LLMs during inference. In this section, we list several potential strategies and test whether they can
+mitigate anchoring bias effectively.
+
+13
+
+11 Page 14 of 24
+
+Journal of Computational Social Science (2026) 9:11
+
+Here is a list of strategies we try to study in this paper:
+● Chain-of-Thought (CoT): it is well known that chain-of-thought can significantly improve reasoning accuracies of LLM models [20]. It is reasonable to ask
+whether CoT can mitigate anchoring bias of LLMs.
+● Thoughts of Principles: some previous studies [21] have shown if we ask LLM
+to generate principles before reasoning, the overall reasoning accuracy can be
+boosted. In this section, we test whether the thoughts-of-principle strategy (denoted as PoT in our experiments) can reduce the influence of anchoring bias.
+● Ignore Anchor Hint: as we know, the bias is caused by anchor hints. In this
+strategy, similar to [7], we try to mitigate the anchoring effect by explicitly asking
+LLMs to ignore the anchor hints.
+● Reflection: reflection is another widely used prompting strategy that can boost
+reasoning accuracy of LLMs. It lets a LLM mimic human’s reflective thinking
+to improve reasoning accuracy through self-correcting its reasoning steps iteratively. In this section, we also check whether we can use reflection prompting to
+mitigate anchoring bias.
+● Both-Anchor: In human decision-making practices, a practical strategy to mitigate the impact of anchoring bias is to gather information from as many angles
+as possible to serve decision-making. This prevents our cognition from being
+anchored to individual pieces of information, thereby allowing for a more comprehensive judgment [22]. To simulate multi-angle information, in this study, we
+attempted to include both H2 and H3 in the prompts to LLM to simulate a situation of more comprehensive prompt information.
+In our experiments, we modify our prompt template to integrate these mitigation
+strategies. For example, prompt b in Appendix is our prompt template for the “ignore”
+strategy, where we ask the LLM to ignore the anchor hint by adding an instruction
+“The hint part contains an answer from a PTF expert and please **ignore** it when
+you are answering the question” into the prompt. Then, we test these prompts using
+GPT4 and GPT4o on our “expert” anchoring questions. We use the “expert” anchoring questions because the anchoring effects are very significant for these questions.
+[23].
+Figures 16 and 17 are our results obtained from GPT4o and GPT4 respectively.
+Here, diff_cot, diff_pot, diff_ign, diff_ref, and p_value_cot, p_value_pot, p_value_
+ign, p_value _ref are the differences and p-values under different strategies including Chain of Thought (CoT), Principle of Thought (PoT), Ignore Strategy (Ign), and
+Refection Strategy (Ref) respectively. From the figures, we can see that the answers
+from models with hints of H2 and H3 are still consistently influenced by the anchoring hints, and their corresponding p-values are very small. By comparing with Fig. 5,
+we do not find any significant improvements. It seems that all these strategies are not
+effective enough to mitigate the anchoring bias for these questions. Similarly, Simmons et al. also observed that it is difficult to completely eliminate anchoring bias
+from their human experiments [23].
+Different from other strategies, our Both-Anchor strategy does not try to directly
+eliminate anchoring effect. Instead, it includes both H2 and H3 in the prompt to pre-
+
+13
+
+Journal of Computational Social Science (2026) 9:11
+
+Page 15 of 24 11
+
+vent the LLMs from being anchored to an individual hint. We conducted experiments
+on questions with expert hints using GPT4, and obtained the results shown in Fig. 18
+(noted as “Both_anchor” column). In the figure, we observed that when the values of
+the H2 and H3 prompts are on either side of the bias-free benchmark value (e.g., refer
+to the questions no.5, no.7, no.8, no.10, no.12, no.13, no.14, and no.15), the answers
+of GPT4 under the Both-Anchor strategy are very close to the bias-free benchmark
+value. On the contrary, the answers of GPT4 to the remaining questions still deviate
+significantly from the benchmark value. This phenomenon suggests that the advice
+from human psychology [22] can be applicable to mitigate the impact of anchoring
+bias in LLMs in practical applications to certain extent, although it does not try to
+eliminate anchoring bias from a single anchoring hint.
+
+6 Discussion
+6.1 Comparison to human anchoring effects
+It is interesting to conduct a comparative study examining the anchoring bias present in large language models (LLMs) alongside the anchoring effects observed in
+humans. We compared our results from LLMs to the results from the human user
+study in [8].
+First, in the human user study on the same dataset from [8], the human responses
+often have non-zero variations and the authors noticed loyal users in the control
+group make predictions that resemble the median predictions more closely than
+casual users. In our experiments, we have a similar observation (refer to Sect. 4.1)
+that stronger models (i.e., GPT4, GPT4o) have smaller variations than the weaker
+model (i.e., GPT3.5). In other words, whether it’s a human or a model, there is a common rule: as the ability improves, the variance of prediction becomes smaller and the
+accuracy becomes higher.
+Second, the average anchoring index (AI [18]) of GPT4, Claud3.5-haiku, and
+Gemini2.5-flash are about 0.45, 0.39, and 0.46 in our experiment respectively, it is
+different from 0.61 in the human study [8]. In other words, the level of influence created by anchoring hints on LLMs is smaller than that of humans. It seems that human
+is easier to be influenced by anchoring hints.
+Third, although the analysis method is different from that in the human user study
+[8], from Figs. 4, 7 and 10, we also can have the same conclusion that a larger stimu-
+
+Fig. 10 T-test results of biased answers on Claud models with fact hints
+
+13
+
+11 Page 16 of 24
+
+Journal of Computational Social Science (2026) 9:11
+
+Fig. 11 T-test results of biased answers on Claud models with expert hints
+
+Fig. 12 T-test results of biased answers on Claud models when H1 is irrelevant to the question
+
+13
+
+Journal of Computational Social Science (2026) 9:11
+
+Page 17 of 24 11
+
+Fig. 13 T-test results of Deepseek (i.e., ds) & O3 models with fact hints
+
+Fig. 14 T-test results of Deepseek (i.e., ds) & O3 models with expert hints
+
+Fig. 15 T-test results of Deepseek (i.e., ds) & O3 models with irrelevant hints
+
+Fig. 16 T-test results of biased answers under different mitigation strategies with GPT4o
+
+lus value (refer to the Hint difference column that is the value difference between
+hints H2 and H3 ) often leads to a larger anchoring response.
+Fourth, [8] reports that human users’ responses to the questions containing PTFprediction values are consistently larger than that to the standard questions. In our
+experiment, the results also show that the responses of LLMs are strongly adherent to
+
+13
+
+11 Page 18 of 24
+
+Journal of Computational Social Science (2026) 9:11
+
+Fig. 17 T-test results of biased answers under different mitigation strategies with GPT4
+
+Fig. 18 The average answer values obtained from GPT4 from the CoT strategy, the Both-Anchor strategy, and without anchoring hints (N o_anchor column)
+
+the anchored hints of PTF-prediction. It seems that both human users and LLMs are
+easy to be influenced by expert-opinions.
+Fifth, previous work [10] suggests that human anchoring bias is remarkably difficult to overcome. It persists despite people’s expertise and experience [24], regardless of incentives to avoid them or explicit warnings of their nature [24, 25]. These
+findings of human anchoring effect are consistent with our observations during the
+mitigation experiments, where many of the proposed mitigation strategies were ineffective. In our exploration, the only effective approach was to equip the language
+model with comprehensive background knowledge, enabling it to make informed
+decisions and avoid anchoring to a single information source.
+6.2 Implications to LLM users
+Trust in the Model’s “Truthfulness” is Fragile: The study highlights that models can
+be seriously biased by some anchoring information. Users of LLMs need to be careful about this model behavior when they are using LLMs for their day-to-day business tasks.
+The Source of the Anchor Matters: The study found that LLMs are significantly
+more susceptible to anchoring bias when the anchor hint is attributed to a perceived
+“expert”. This suggests that LLMs don’t just passively absorb information; they can
+
+13
+
+Journal of Computational Social Science (2026) 9:11
+
+Page 19 of 24 11
+
+weigh the credibility of a source and tend to blindly rely on the input from a perceived “expert”.
+Mitigation Is Not a Simple Prompting Fix: The research demonstrates that common-sense mitigation techniques like Chain-of-Thought, telling the model to “ignore”
+the hint, or encouraging reflection are largely ineffective. This implies that debiasing
+is not a simple prompt engineering problem but a more fundamental issue requiring
+deeper algorithmic solutions (e.g., collecting comprehensive grounding information)
+that go beyond current prompting strategies. It should be incorporated into the recent
+emergence of context engineering framework [26].
+
+7 Conclusion
+In conclusion, our study shows that anchoring bias is widely prevalent in large language models (LLMs) and poses a significant challenge to their reliability and fairness. In particular, strong models consistently show their vulnerability to the bias of
+the anchoring effect. They are very easy to be influenced by the “expert” opinions
+presented in the prompt, and we cannot correct their behavior even when we explicitly ask them not to follow the expert opinions. At the same time, we tried various
+strategies, including Chain-of-Thought, Thoughts of Principles, Ignoring Anchor
+Hints, and Reflection, to mitigate anchoring bias in LLMs. Despite the promise application of these strategies in many reasoning tasks, our empirical results on GPT4
+and GPT4o indicate that none of these simple mitigating strategies can effectively
+reduce the anchoring bias in responses to “expert” anchoring questions. This finding
+underscores the complexity of cognitive biases in AI and highlights the need for more
+research to develop more robust techniques to minimize bias. Furthermore, our study
+also shows that, although it is impossible to completely eliminate anchoring effects,
+in practice, one can collect hints from comprehensive angles to mitigate the impact
+of anchoring bias by preventing the LLMs from being anchored to individual pieces
+of information. Our research findings offer valuable insights for scholars studying
+algorithmic fairness, LLM developers, and policymakers.
+All prompt templates, source code, and LLM answers can be found from the URL:
+https://github.com/JiaxuLou/LLM_Bias.
+
+13
+
+11 Page 20 of 24
+
+Appendix
+Prompt template with anchoring hints
+
+13
+
+Journal of Computational Social Science (2026) 9:11
+
+Journal of Computational Social Science (2026) 9:11
+
+Page 21 of 24 11
+
+An example of prompt and answer from GPT4
+The question
+
+13
+
+11 Page 22 of 24
+
+Journal of Computational Social Science (2026) 9:11
+
+Answer from GPT4
+
+Acknowledgements I thank Prof. Taha Yasseri for his kind help of sharing me the questions, program,
+and human answers from their experiments [8]. Our experiments are designed based on these questions.
+Data availibility The data in this paper can be found at the following website: ​h​t​t​p​s​:​/​/​g​i​t​h​u​b​.​c​o​m​/​J​i​a​x​u​L​
+o​u​/​L​L​M​_​B​i​a​s​​​​
+
+13
+
+Journal of Computational Social Science (2026) 9:11
+
+Page 23 of 24 11
+
+Declarations
+Conflict of interest On behalf of all authors, the corresponding author states that there is no Conflict of
+interest.
+Open Access This article is licensed under a Creative Commons Attribution-NonCommercialNoDerivatives 4.0 International License, which permits any non-commercial use, sharing, distribution
+and reproduction in any medium or format, as long as you give appropriate credit to the original author(s)
+and the source, provide a link to the Creative Commons licence, and indicate if you modified the licensed
+material. You do not have permission under this licence to share adapted material derived from this article
+or parts of it. The images or other third party material in this article are included in the article’s Creative
+Commons licence, unless indicated otherwise in a credit line to the material. If material is not included in
+the article’s Creative Commons licence and your intended use is not permitted by statutory regulation or
+exceeds the permitted use, you will need to obtain permission directly from the copyright holder. To view
+a copy of this licence, visit ​h​t​t​p​:​/​​/​c​r​e​a​​t​i​v​e​c​o​​m​m​o​n​​s​.​o​r​g​​/​l​i​c​e​​n​s​e​s​/​b​​y​-​n​c​​-​n​d​/​4​.​0​/.
+
+References
+1.
+2.
+3.
+4.
+5.
+6.
+7.
+8.
+9.
+10.
+11.
+12.
+13.
+
+14.
+
+Shojaei, M. (2024). CHAT-GPT and artificial intelligence in medical endocrine system and interventions. Eurasian Journal of Chemical, Medicinal and Petroleum Research, 3(1), 197–209.
+Wei, Q., Yao, Z., Cui, Y., Wei, B., Jin, Z., & Ximing, X. (2024). Evaluation of ChatGPT-generated
+medical responses: A systematic review and meta-analysis. Journal of Biomedical Informatics, 151,
+Article 104620.
+Yeh, K. C., Chi, J. A., Lian, D. C., & Hsieh, S. K. (2023) Evaluating Interfaced LLM Bias, The 35th
+Conference on Computational Linguistics and Speech Processing, October 20-21.
+Gallegos, I. O., Rossi, R. A., Barrow, J., Tanjim, M. M., Kim, S., Dernoncourt, F., Yu, T., Zhang,
+R., & Ahmed, N. K. (2024). Bias and fairness in large language models: A survey. Computational
+Linguistics, 50(3), 1097–1179.
+Wang, P., Li, L., Chen, L., Cai, Z., Zhu, D., Lin, B., Cao, Y., Liu, Q., Liu, T., & Sui, Z. (2024) Large
+Language Models are not Fair Evaluators, Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics, August 11–16, (pp. 9440–9450).
+Schmidgall, S., Harris, C., Essien, I., Olshvang, D., Rahman, T., Kim, J. W., Ziaei, R., Eshraghian,
+J., Abadir, P., & Chellappa R. (2024). Addressing cognitive bias in medical language models,
+arXiv:2402.08113v3
+Jeremy, K. N. (2024). Human bias in AI models? Anchoring effects and mitigation strategies in large
+language models. Journal of Behavioral and Experimental Finance, 43, Article 100971.
+Yasseri, T., & Reher, J. (2022). Fooled by facts: Quantifying anchoring bias through a large-scale
+experiment. Journal of Computational Social Science, 5, 1001–1021.
+Wilke, A., & Mata, R. (2012). Cognitive bias. In Encyclopedia of human behavior (pp. 531–535).
+Academic Press.
+Furnham, A., & Boo, H. C. (2011). A literature review of the anchoring effect. Journal of Social and
+Economic, 40, 35–42.
+Echterhoff, J., Liu, Y., Alessa, A., McAuley, J., & He, Z. (2024). Cognitive Bias in Decision-Making
+with LLMs, arXiv:2403.00811
+Chen, N., Liu, J., Dong, X., Liu, Q., Sakai, T., & Wu, X. M. (2024). AI can be cognitively biased:
+An exploratory study on threshold priming in LLM-based batch relevance assessment, arXiv:
+2409.16022v1
+Castello, M., Pantana, G., & Torre, I. (2024). Examining Cognitive Biases in ChatGPT 3.5 and 4
+through Human Evaluation and Linguistic Comparision, in Proceedings of the 16th Conference of
+the Association for Machine Translation in the Americas, Chicago, USA, September 30-October 2,
+2024.
+Macmillan-Scott, O., & Musolesi, M. (2024). (Ir)rationality and cognitive biases in large language
+models. Royal Society Open Science, 11(6), Article 240255.
+
+13
+
+11 Page 24 of 24
+
+Journal of Computational Social Science (2026) 9:11
+
+15. Ross, J., Kim, Y., & Lo, A. W. (2024). LLM economicus? Mapping the behavioral biases of LLMs
+via Utility Theory, arXiv:2408.02784v1.
+16. Li, R., & Gao, Y. (2024). Anchored Answers: Unravelling Positional Bias in GPT-2’s MultipleChoice Questions, arXiv: 2405.03205
+17. Teo, S. (2023). How I won Singapore’s GPT-4 prompt engineering competition: A deep dive into
+the strategies I learned for harnessing the power of large language models (LLMs), 2023. [Online]
+Available: ​h​t​t​p​s​:​​/​/​t​o​w​​a​r​d​s​d​a​​t​a​s​c​​i​e​n​c​e​​.​c​o​m​/​​h​o​w​-​i​-​​w​o​n​-​​s​i​n​g​a​​p​o​r​e​s​​-​g​p​t​-​4​​-​p​r​o​​m​p​t​-​e​​n​g​i​n​e​​e​r​i​n​g​-​​c​o​m​p​​e​
+t​i​t​i​o​n​-​3​4​c​1​9​5​a​9​3​d​4​1
+18. Jacwitz, K. E., & Kahneman, D. (1995). Measures of anchoring in estimation tasks. Personality and
+Social Psychology Bulletin, 21(11), 1161–1166.
+19. Wedell, D. H. (1991). Distortion of utility in single and multiple stimulus comparisons. Journal of
+Experimental Psychology: Human Perception and Performance, 17(2), 332–346.
+20. Wei, J., Wang, X., Schuurmans, D., Bosma, M., Xia, F., Chi, E., Le, Q. V., & Zhou, D. (2022) Chain
+of thought prompting elicits reasoning in large language models, In Processding of the 36th conference on neural information processing systems.
+21. Zheng, H. S., Mishra, S., Chen, X., Cheng, H. T., Chi, E. H., Le, Q. V., & Zhou, D. (2023). Take a
+Step Back: Evoking Reasoning via Abstraction in Large Language Models, ICLR 2024.
+22. Eva, M. (2019). Krockow, Outsmart the Anchoring Bias in Three Simple Steps. [Online] Retrieved
+August 2024 from ​h​t​t​p​s​:​​​/​​/​w​w​​w​.​p​s​y​c​h​o​l​o​​g​y​t​o​d​​a​​y​.​c​​o​​m​/​​u​s​/​​b​​l​o​​g​/​s​t​r​​e​t​c​h​​i​​n​g​-​t​h​​​e​o​r​y​​/​2​0​​1​9​​0​2​/​o​u​​t​​s​m​a​r​​​t​-​t​h​​
+e​-​a​n​c​​​h​o​r​i​n​​​g​-​​b​i​​a​s​-​i​​​n​-​t​h​r​e​​e​-​s​i​m​p​l​e​-​s​t​e​p​s
+23. Simmons, J. P., LeBoeuf, R. A., & Nelson, L. D. (2010). The effect of accuracy motivation on anchoring and adjustment: Do people adjust from provided anchors? Journal of Personality and Social
+Psychology, 99(6), 917–932.
+24. Epley, N., & Gilovich, T. (2005). When effortful thinking influences judgmental anchoring: Differential effects of forewarning and incentives on self-generated and externally provided anchors. Journal
+of Behavioral Decision Making, 18, 199–212.
+25. Wilson, T. D., Houston, C. E., Etling, K. M., & Brekke, N. (1996). A new look at anchoring effects:
+Basic anchoring and its antecedents. Journal of Experimental Psychology: General, 125, 387–402.
+26. Mei, L., Yao, J., Ge, Y., Wang, Y., Bi, B., Cai, Y., Liu, J., Li, M., Li, Z., Zhang, D., Zhou, C., Mao,
+J., Xia, T., Guo, J., & Liu, S. (2025). A survey of context engineering for large language models.
+arXiv:2507.13334
+Publisher's Note Springer Nature remains neutral with regard to jurisdictional claims in published maps
+and institutional affiliations.
+
+13
+
+

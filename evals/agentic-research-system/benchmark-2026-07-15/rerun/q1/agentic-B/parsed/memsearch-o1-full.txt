@@ -1,0 +1,1272 @@
+               MemSearch-o1: Empowering Large Language Models with
+                Reasoning-Aligned Memory Growth in Agentic Search
+
+             Sheng Zhang1 , Junyi Li1 , Yingyi Zhang1,2 , Pengyue Jia1 , Yichao Wang3 * ,
+            Xiaowei Qian1 , Wenlin Zhang 1 , Maolin Wang1 , Yong Liu3 , Xiangyu Zhao1 *
+  1
+      City University of Hong Kong, 2 Dalian University of Technology, 3 Huawei Technologies Ltd.,
+                            Correspondence: wangyichao5@huawei.com, xianzhao@cityu.edu.hk
+
+
+
+                         Abstract                                provides shallow support: retrieved passages are
+                                                                 limited in scope, and the pipeline lacks explicit rea-
+        Recent advances in large language models                 soning over the original query (Zhang et al., 2026c).
+        (LLMs) have scaled the potential for rea-                This significantly constrains performance on com-
+        soning and agentic search, wherein models
+                                                                 plex, multi-hop problems. To overcome these lim-
+        autonomously plan, retrieve, and reason over
+        external knowledge to answer complex queries.            itations, the paradigm of deep search has been
+        However, the iterative think–search loop                 proposed (Wu et al., 2025; Li et al., 2025a). Un-
+        accumulates long system memories, leading to             like conventional RAG, deep search autonomously
+        memory dilution problem. In addition, existing           plans, retrieves, reflects, and reasons over exter-
+        memory management methods struggle                       nal knowledge in an iterative manner, construct-
+        to capture fine-grained semantic relations               ing deeper reasoning chains through repeated inter-
+        between queries and documents and often lose
+                                                                 actions with knowledge sources (Jin et al., 2025;
+        substantial information. Therefore, we propose
+        MemSearch-o1, an agentic search framework                Li et al., 2025a). Deep search is especially well-
+        built on reasoning-aligned memory growth and             suited to LLMs with advanced reasoning capabil-
+        retracing. MemSearch-o1 dynamically grows                ities (Wang, 2025; Liu et al., 2024; Yang et al.,
+        fine-grained memory fragments from memory                2025; Zhang et al., 2025b; Wu et al., 2026), which
+        seed tokens from the queries, then retraces and          effectively exploits the complex knowledge (Ferrag
+        deeply refines the memory via a contribution             et al., 2025; Liu et al., 2025b) and perform high-
+        function, and finally reorganizes a globally             quality generation (Liu et al., 2025a; Wang et al.,
+        connected memory path. This shifts memory
+                                                                 2025a) based on the search trajectories.
+        management from stream-like concatenation to
+        structured, token-level growth with path-based              Despite its promise, the deep search paradigm
+        reasoning. Experiments on eight benchmark                still faces two critical limitations. First, the accumu-
+        datasets show that MemSearch-o1 substan-                 lated thinking history and redundant document frag-
+        tially mitigates memory dilution, and more               ments often introduce irrelevant information (Yan
+        effectively activates the reasoning potential of         et al., 2025; Luo et al., 2025; Yu et al., 2025; Wen
+        diverse LLMs, establishing a solid foundation            et al.), while attention dilution in LLMs causes
+        for memory-aware agentic intelligence.
+                                                                 much of the context to be overlooked (Liu et al.,
+        Our code is available at https://github.
+        com/Applied-Machine-Learning-Lab/                        2023; Xu et al., 2026). As a result, key evidence
+        ACL2026_MemSearch-o1.                                    may remain undiscovered, ultimately degrading
+                                                                 reasoning quality. This issue becomes more severe
+  1     Introduction                                             as system memory grows: the signal-to-noise ratio
+                                                                 declines, making it increasingly difficult for the
+  In recent years, retrieval-augmented generation                model to focus on query goals. Second, although
+  (RAG) (Lewis et al., 2020) has emerged as a power-             advanced LLMs possess substantial latent reason-
+  ful framework that enables large language models               ing capacity enabled by their scale (Kaplan et al.,
+  (LLMs) to access external corpora by retrieving                2020), current deep search studies have yet to fully
+  text chunks relevant to a given query (Zhang et al.,           exploit this potential (Wu et al., 2025). In addi-
+  2025c; Zhao et al., 2019). While effective in en-              tion, since memory dilution cannot be solved by
+  hancing LLMs with factual knowledge, RAG often                 prompt engineering alone, effective explicit mem-
+     * Corresponding authors:  wangyichao5@huawei.com            ory management strategies are essential to unlock
+  (Yichao Wang), xianzhao@cityu.edu.hk (Xiangyu Zhao).           the reasoning capabilities of LLMs.
+                                                              925
+                                                               1
+Proceedings of the 64th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 925–943
+                               July 2-7, 2026 ©2026 Association for Computational Linguistics
+   Prior efforts to address memory dilution in deep     • Extensive experiments on eight QA benchmarks
+search can be broadly divided into two paradigms.         and LLMs show that MemSearch-o1 effectively
+The first focuses on memory summarization and             mitigates memory dilution and consistently out-
+refinement, where retrieved documents are com-            performs strong baselines.
+pressed (Li et al., 2025a; Chhikara et al., 2025)
+or filtered (Qin et al., 2025) to improve reasoning
+                                                        2     Method
+quality. While intuitive, these methods often fail to
+adapt to the evolving semantics of updated queries,     In this section, we will introduce the MemSearch-
+resulting in the loss of critical information. The      o1 in detail. We first give an overview of our frame-
+second paradigm centers on memory pruning and           work (Section 2.1), then introduce the memory
+distillation, where the system selectively retains      seeds extraction from queries (Section 2.2), fol-
+or compresses past context for subsequent reason-       lowed by memory fragments growth and memory
+ing through designing special prompts (Zhou et al.,     path retracing (Section 2.3 and 2.4).
+2025; Yan et al., 2025). However, these approaches
+largely optimize for overall task rewards without       2.1   Overview
+explicitly modeling the structure and logic of stored   Most agentic search frameworks produce especially
+memories, leading to suboptimal reasoning paths.        long working trajectories during the iterative rea-
+Even methods that explicitly retrieve key elements      soning process (Gao et al., 2025; Peng et al., 2025),
+from refined memories (Xu et al., 2025b) risk dis-      leading to a serious memory dilution problem (Wu
+carding important connections, as their quadratic       et al., 2025; Liu et al., 2023). Although existing
+search mechanisms may overlook latent semantic          memory management methods can refine the re-
+dependencies across memory fragments.                   dundant memories (Shi et al., 2025; Chhikara et al.,
+   To overcome these challenges, we propose             2025), they only focus on the semantic relevance
+MemSearch-o1, a novel agentic search framework          to the query, which may either be too complex
+that emphasizes fine-grained, reasoning-aligned         for LLMs to comprehend or lead to a dramatic in-
+memory growth. Instead of refining memories             formation loss. To tackle this issue, we develop
+based on complex query-document semantic re-            MemSearch-o1, an agentic search framework that
+lations, our approach expands memories by collect-      employs reasoning-aligned memory growth and
+ing contents associated with specific tokens of sub-    retrace for LLMs with reasoning ability.
+ject, action, degree, temporal (Szabó, 2015), i.e.,         The overall framework is shown in Figure 1. The
+seed tokens of the query, thereby aligning more         MemSearch-o1 starts from an original search query
+closely with the search goal. The framework then        q o , and a predefined instruction for LLM reason-
+retraces and filters these token-associated mem-        ing. Then, the LLM raises a new required query for
+ories to build a semantically coherent and logi-        search, and we utilize this query for memory seeds
+cally structured memory path for answer gener-          preparation. Specifically, the raised query will be
+ation. By enabling the agent to operate within com-     split into memory seeds, and each seed consists of
+pact, query-focused memory spaces, rather than          several memory seed tokens grouped by their parts
+diluted long contexts, MemSearch-o1 provides a          of speech (Brown, 1957; Szabó, 2015). After that is
+concise yet comprehensive semantic environment          the memory fragments growth stage, where rele-
+optimized for reasoning. This targeted memory           vant documents are retrieved using the latest raised
+management substantially enhances the depth, pre-       query, and the memory seed tokens are fed into
+cision, and overall quality of the deep search.         the LLM to guide the information extraction. The
+   Our main contributions are as follows:               grown fragment sentences are then conveyed into
+                                                        the LLM again for next-round reasoning. The LLM
+• We propose MemSearch-o1, the first deep search
+                                                        reasoning round, together with corresponding mem-
+  framework that grows fine-grained memory frag-
+                                                        ory growth, is iteratable. Finally, we collect all the
+  ments from query tokens, enabling clearer seman-
+                                                        fragment sentences for memory path retracing to
+  tic alignment and stronger reasoning.
+                                                        deeply refine the memory. We design a contribution
+• We develop a retracing-based memory refinement        function to select fragments with high relevance to
+  mechanism that filters and reorganizes fragments      the original query and high bridge potential with
+  into concise, coherent memory paths optimized         other fragments. Finally, we use greedy search to
+  for multi-hop reasoning.                              find a semantically smooth memory path for the
+                                                     926
+                                                      2
+        (a). Reason with Memory Fragments                                                           (b). Memory Fragments Growth
+
+  Original Search Query ��                                                                                  ...             Search Query �(�)
+  What is the place of birth of the director of film A
+  Chrysanthemum Bursts In Cincoesquinas?
+                                                                                                                   ...                     Memory Seed Tokens
+  LLM Reasoning (Round 1 )                                                    Subjects        Actions     Degree Temporal Markers
+  To answer the question I need to identify...                                                             �� ... ��
+                                                                                   (�)            (�)       (�)      (�)
+                                                                                 ��             ��
+                         Think & Search
+                                                        (1)              Memory Growth
+  Search Query �(1)              Memory Seeds ��
+                                                                         Extract content that is useful for inferencing query                        +
+  Director of A Chrysan-         Extract entities, actions, degree       corresponding to the memory seeds from the context: ...
+  themum Bursts...?              modifiers, temporal markers...
+                         Memory Growth                                                                                                    Generated Sentences
+                                                                                  ��
+                                                                                    (�)
+                                                                                               ��
+                                                                                                  (�)
+                                                                                                          ��
+                                                                                                             (�)
+                                                                                                                    ...    ��
+                                                                                                                                (�)
+                                                                                                                                          as Memory Fragments
+                   (1)                              (1)
+   Retrieved Docs ��              Memory Fragments ��
+                                                                                                                                               LLM       High-quality
+  Daniel Burman is an             Chrysanthemum Bursts: A film                                                                            +
+  Argentine film director...      directed by Daniel Burman...                                                                                           Query �(�+1)
+
+
+  LLM Reasoning (Round 2 )                                                                          (c). Memory Path Retracing
+  Now that I know the director is Daniel Burman, I need                                      ��
+  to find his place of birth ...                                      �� : Relevance
+                                                                      to ��                             Original ��                      ...
+                  Multiple Reasoning Rounds       ...
+                                                                       (�)
+                                                                      �� : Bridge Potential                                                                      Response
+  Memory Path Retracing & Generation                ��
+                                                         (�)          with other Fragments
+                                                                                                                                      Greedy Search for Smooth Path
+  Daniel Burman is the director...         (�)
+                                          ��                          Contribution Function:                                          Fragments with High Contribution
+  Daniel Burman was born in...                                  (�)
+                                                               ��
+  Based on the..., the final answer is...                             �(�� ; �� ) = ���� (�� ; �� ) + ��� (�� )                       & Smooth Semantics
+
+
+Figure 1: Overview Framework of MemSearch-o1. (a). Our MemSearch-o1 enables memory growth and retracing
+in the agentic. (b). The memory fragments are grown from the seed tokens extracted from the search queries,
+which enables efficient and effective semantic exploration. (c). Retrace and construct a memory path based on their
+relevance to the original question and the relevance among the memory fragments to enhance the reasoning process.
+
+
+final generation. The whole framework improves                                   actions performed by or involving these subjects,
+the capability of our deep search system to exploit                              providing essential links within reasoning chains.
+essential information for concise yet semantically                               Adjectives and adverbs function as degree modi-
+rich memory growth and perform higher-quality                                    fiers, describing the properties of subjects or the
+reasoning and generation.                                                        manner and intensity of actions. Based on these
+                                                                                 observations, we categorize nouns and pronouns
+2.2 Memory Seeds Preparation                                                     into subjects and temporal markers, and group ad-
+Most existing memory management approaches                                       jectives and adverbs together as degree modifiers.
+rely on LLMs to refine retrieved documents or to                                 This decomposition serves as the foundation for our
+directly fetch relevant fragments from stored mem-                               token-level memory growth strategy, enabling fine-
+ories, but such strategies often incur significant                               grained alignment between the goals of queries and
+information loss (Wang et al., 2025c). To tackle                                 memory exploration.
+                                                                                                                (n) (n)           (n)
+this issue, our method grows fine-grained memories                                  Specifically, let q (n) = [q1 , q2 , . . . , qL ] de-
+from seed tokens extracted from queries, enabling                                note a search query consisting of L tokens at the
+the construction of a concise yet semantically rich                              n-th turn. We then identify and partition q (n) into
+memory space that remains closely aligned with                                   Lr memory seeds as follows:
+the evolving query goals.                                                                       (n) (n)           (n)
+                                                                                       S (n) = s1 , s2 , . . . , sLr ←  − q (n) , (1)
+   Inspired by linguistics, a sentence is composed
+of words with eight parts of speech, among which                                                                          (n)             (n) zi
+                                                                                 where each seed si                               =       qj j=1 contains zi
+nouns, pronouns, verbs, adjectives, and adverbs
+usually contain the richest semantics (Szabó, 2015).                             tokens from q (n) and corresponds to one type from
+In the context of deep search and memory growth,                                 subjects, actions, degree modifiers, and temporal
+nouns and pronouns often denote subjects such                                    markers. For efficient implementation, we use the
+as people, places, and objects, as well as tem-                                  spaCy1 toolkit to identify and group these tokens
+poral markers that indicate the time or duration                                 into respective memory seeds.
+of events. Verbs, by contrast, usually capture the                                     1
+                                                                                           https://spacy.io/
+
+                                                                           927
+                                                                            3
+                                                                   (n)
+2.3 Memory Fragments Growth                              where mi is the i-th grown memory fragment
+                                                                                               (n)
+Although existing system memory refinement ap-           during the n-th reasoning round, and Ts0 = 0.
+proaches can extract key information from retrieved      2.4   Memory Path Retracing
+documents, the complex relationships between
+queries and documents can degrade the quality of         Existing memory management often preserves ver-
+both subsequent queries and final answers (Lee,          bose traces accumulated across multiple reasoning
+2025). In particular, the smooth semantic nature         rounds without effective integration, and answer-
+of sentence embeddings in vector space causes            ing over elongated paths exacerbates memory dilu-
+query representations and lengthy document em-           tion (Shi et al., 2024). We address this by retracing
+beddings to become highly entangled. This en-            the memory history and reorganizing fragments
+tanglement introduces irrelevant information and         into a coherent path: MemSearch-o1 selects the
+obscures critical content, thereby reducing the ef-      most relevant evidence and assembles a semanti-
+fectiveness of memory refinement. Furthermore,           cally smooth memory trajectory, reducing redun-
+in agentic search, such degraded memories are re-        dancy and sharpening focus for reliable reasoning.
+peatedly used as inputs for subsequent reasoning            After the LLM completes search and reasoning,
+steps, compounding errors and leading to a gradual       we retrace and collect all the memory fragments
+decline in downstream reasoning quality.                 mi from every reasoning round within a memory
+                                                         region. However, because search queries may drift
+   To address this issue, we grow memory frag-
+                                                         semantically over reasoning rounds, the grown frag-
+ments that contain the contents of memory seeds
+                                                         ments can contain irrelevant information. To refine
+introduced in Section 2.2 based on the retrieved
+                                                         them, we design a contribution function C(mi ; q o )
+information. Instead of comprehending complex
+                                                         that measures both their relevance to the original
+semantic relations between the query and retrieved
+                                                         query q o and their bridge potential to other frag-
+texts, memory seeds guide LLMs to extract diverse
+                                                         ments. Specifically, we define the relevance contri-
+and useful summaries aligned with the query goal.
+                                                         bution CRel to filter out memories that lie far from
+Concretely, we provide the LLM with the memory
+        (n)                                              the ideal reasoning region as follows:
+seeds si , retrieval results D (n) of the n-th reason-
+ing round and task instructions I M , and prompt it             CRel = Sim(Emb(mi ), Emb(q o )),          (4)
+to expand each seed into diverse yet relevant mem-
+                                                        where Emb(·) is the sentence transformer that maps
+ory fragments for subsequent reasoning. Thus, the
+                                                        input tokens into embedding vectors, and Sim(·) is
+generation probability PM of the memory fragment
+                                                        the cosine similarity. Memory fragments with high
+M (n) can be formulated as:
+                                                        contribution CRel have more relevance to q o . In
+               (n)                                      addition, we consider the potential of each memory
+        YLr TYsi
+                           (n)   (n) (n)                fragment to connect with others through a bridge
+PM =                 P (M t |M <t , si , I M , D (n) ),
+                                                        potential function:
+        i=1 t=T (n)                                                P
+               si−1
+
+                                                 (2)                 j̸=i sim(mi , mj ) · σ(URel − τs )
+                                                          CBP =             P                            , (5)
+                                                                              j̸=i σ(URel − τs )
+          (n)
+where Tsi is the position where the i-th memory
+                         (n)
+fragment ends, and Ts0 = 0. M nt denotes the            where URel = max{Sim(mj , q (n) )}N     j=1 is the up-
+t-th generated token of the memory fragments, and       per bound of the relevance between memory frag-
+    (n)
+M <t is the sequence of the LLM generated before        ments and search query, and N is the total number
+position t. The current query q (n) is included in      of reasoning rounds. Threshold τs together with
+the I M as a constraint.                                the ReLU function σ(·) restricts the contribution
+                     (n)
+   Obviously, the si serves as a seed that attracts     score of fragments with the lowest relevance to
+the attention of LLMs to focus on the relevant in- the search query in reasoning. The maximum rel-
+formation to it, which brings about more concise        evance σ(URel − τs ) serves as the weight on the
+and accurate fragment contents. Subsequently, the       bridge potential with other fragments, which is cal-
+generated tokens in Equation 2 are concatenated to      culated by the cosine similarity function. Then we
+form memory fragments, as formalized below.             can derive the contribution score of the memory
+                                                        fragment mi as:
+                   (n)       (n)
+               mi = M (n) (n) ,                  (3)            C(m ; q ) = α · C + β · C ,                (6)
+                           Tsi−1 :Tsi                                    i   o       Rel         BP
+
+                                                     928
+                                                      4
+where α and β are predefined weights. Then we            length in the corpus. We focus on both multi- and
+need to reorganize the fragments that we retrace         single-document QA to comprehensively evaluate
+and select in the memory region:                         the performance of competing methods. Detailed
+              n                        o                 dataset statistics are provided in Appendix A.2. Fol-
+     Mq = mi ∈ Rd | C(mi ; q o ) > τr , (7)              lowing prior work (Bai et al., 2023), we report
+                                                         QA-F1 as the primary evaluation metric for all
+where τr is the threshold that filters the memory        datasets except DuReader, which is evaluated us-
+fragments with low contribution, i.e., with low se-      ing ROUGE-L. We also evaluate the performance
+mantic relevance to queries and other memory frag-       of agentic search baselines on large-corpus search
+ments. In order to find a semantically smooth mem-       tasks using LongBench v2 (Bai et al., 2025) and
+ory path tailored for reasoning, we aim to solve the     LongBook QA (Zhang et al., 2024)
+following optimization problem:
+                                                         3.2   Baselines
+                    |Mq |
+                    X                                    To verify the effectiveness of our MemSearch-o1
+    P ∗ = arg max           C(mik ; q o ) · µ(mik ),
+              P                                          framework, we compare the performance with the
+                    k=1
+                                                        following baselines: (1) Standard RAG (Lewis
+  µ(mik ) = exp −λ(1 − Sim(mik , mik−1 )) ,
+                                                         et al., 2020), (2) Deep search without memory man-
+                                                  (8)
+                                                         agement: Search-o1 (RAgent) (Li et al., 2025a) (3)
+where P = (mi1 , mi2 , ..., miK ) is the ideal mem-
+                                                         Deep search with memory management: Search-o1
+ory path consisting of K maximum fragments, and
+                                                         (Refined) (Li et al., 2025a), MemoryBank (Zhong
+µ(mik ) is the penalty function that ensures the
+                                                         et al., 2024), A-Mem (Xu et al., 2025b), and Am-
+smooth semantics between the current fragment
+                                                         ber (Qin et al., 2025). The detailed information
+and connected fragment. In this work, we utilize
+                                                         of the baselines and the backbone models can be
+the greedy search strategy (Chickering, 2002) to
+                                                         found in Appendix A.3.
+find the memory path. Finally, the memory path is
+directly used for answer generation.                     3.3   Implementation Details
+   Since the memory fragments are generated based
+                                                         For all retrieval processes in the baselines, includ-
+on prior reasoning steps, and we have already or-
+                                                         ing standard RAG and deep search systems, we use
+ganized them through a path that incorporates re-
+                                                         BGE-M3 (Chen et al., 2024) as both the retriever
+call and semantic smoothing, during the generation
+                                                         and sentence embedding model. The maximum
+phase, we no longer need to rely on the original
+                                                         number of search rounds is fixed at N = 5, with
+system memory. Instead, we can generate answers
+                                                         the top-k documents (k = 3) retrieved in chunks
+directly from the constructed memory path. The
+                                                         of 256 tokens. We set filtering thresholds τs and
+detailed deep search algorithm of MemSearch-o1
+                                                         τr to 0.3 to discard memory fragments weakly
+inference is displayed in Appendix A.1.
+                                                         related to either the original query or reasoning-
+3     Experiment                                         driven search queries. In the contribution function,
+                                                         weights are set to α = 0.6 and β = 0.4, while
+3.1 Dataset and Metrics                                  memory reorganization applies a penalty λ = 1 to
+To evaluate the effectiveness of MemSearch-              ensure semantic smoothness and restricts each path
+o1, we conduct extensive experiments on eight            to K = 10 fragments. Following prior work (Li
+benchmark datasets from LongBench (Bai et al.,           et al., 2025a; Wang et al., 2025b), we evaluate
+2023), covering both multi-document and single-          MemSearch-o1 alongside baselines using two back-
+document QA. The multi-document tasks include            bone LLMs: Qwen2.5-72B-Instruct (Yang et al.,
+HotpotQA (Yang et al., 2018), 2WikiMQA (Ho               2024) and DeepSeek V3.1 (Liu et al., 2024). Full
+et al., 2020), and MuSiQue (Trivedi et al., 2022),       prompt templates are provided in Appendix A.7.
+DuReader (He et al., 2017), while the single-
+document tasks include NarrativeQA (Kočiskỳ            3.4   Overall Performance
+et al., 2018), Qasper (Dasigi et al., 2021), and         Experiment on LongBench. As shown in Ta-
+Multi-FieldQA (Bai et al., 2023). The long con-          ble 1, MemSearch-o1 achieves state-of-the-art re-
+texts of QA tasks serve as the corpus for external       sults across both multi- and single-document QA
+knowledge retrieval, and the retrieved passages are      benchmarks, outperforming RAG and advanced
+substantially shorter than the average document          agentic search methods such as Amber and A-Mem
+                                                       929
+                                                        5
+                                                     MultidocQA                                         Singledoc QA
+    Models            Methods                                                                                                                Avg.
+                                       HotpotQA   2WikiMQA   MuSiQue     DuReader     NarrativeQA   Qasper   MultiField-en   MultiField-zh
+                     Direct RAG         54.40      47.23      27.54          27.49       17.73      35.94       45.43           52.29        38.51
+                 Search-o1 (RAgent)     57.41      62.86      44.78          18.91       14.37      22.88       37.77           49.97        38.62
+                 Search-o1 (Refined)    52.11      35.74      37.99          15.30       16.12      17.51       33.79           44.45        31.63
+   Qwen 2.5-
+                    MemoryBank          47.27      44.89      28.26          19.24       16.26      26.28       32.42           43.46        32.26
+  72B-Instruct
+                      A-Mem             54.24      60.08      39.95          18.74       15.18      22.09       34.59           50.79        36.96
+                       Amber            53.78      61.16      37.61          20.57       16.65      27.19       37.98           52.26        38.40
+                   MemSearch-o1         59.71∗     65.95∗     44.11          32.06∗      17.30      36.18∗      49.05∗          59.91∗       45.53∗
+                     Direct RAG         53.98      43.76      26.95          18.72      21.48       32.45       43.41           48.15        36.11
+                 Search-o1 (RAgent)     54.64      56.14      44.31          15.28      20.59       33.04       38.67           49.76        39.05
+                 Search-o1 (Refined)    48.46      36.75      33.32          16.12      18.59       22.97       33.82           44.79        31.85
+ Deepseek V3.1      MemoryBank          47.51      46.65      38.05          17.57      21.83       28.60       33.34           42.33        34.49
+                      A-Mem             49.57      41.38      25.67          17.10      20.92       27.55       28.27           47.29        32.22
+                       Amber            55.59      58.63      41.29          18.39      22.48       32.86       39.27           49.31        39.79
+                   MemSearch-o1         67.78∗     68.32∗     52.01∗         27.23∗     23.04∗      37.94∗      52.26∗          56.81∗       48.17∗
+
+
+Table 1: Overall Performance (%) Comparison on MultidocQA and Singledoc QA Benchmarks. The best results
+are bolded and the second best results are underlined. "∗ " indicates the statistically significant improvements
+(i.e.,two-sided t-test with p < 0.05 ) over the baselines.
+
+under all two LLM backbones. The gains are espe-                         pare it against Search-o1 (with its original memory
+cially notable on complex reasoning tasks: with                          refinement), MemoryBank (Zhong et al., 2024),
+DeepSeek V3.1, MemSearch-o1 improves over                                Zep (Rasmussen et al., 2025), and MIRIX (Wang
+the strongest baseline by 21.93% on HotpotQA,                            and Chen, 2025). The results and detailed analysis
+16.53% on 2WikiMQA, and 17.38% on MuSiQue.                               are provided in Appendix A.4.
+The results are obtained by averaging over multiple                      Experiment on LongBench v2 and Long-
+runs. These results show that fine-grained mem-                          BookQA. To further validate the effectiveness of
+ory growth from seed tokens and retraced memory                          MemSearch-o1, we also conduct experiments on
+paths substantially enhance the iterative reasoning                      LongBookQA (en&zh) from InfiniteBench (Zhang
+quality. To further show that MemSearch-o1 re-                           et al., 2024) and Multi&Single-Document QA
+lieves the memory dilution problem and constructs                        in various knowledge domains from LongBench
+concise memory paths for generation, we measure                          v2 (Bai et al., 2025). Specifically, LongBench
+the number of tokens in the system memory. De-                           v2 has the corpus with 15k∼129k tokens, and in-
+tailed analysis can be found in Appendix A.5.                            cludes scientific QA tasks covering domains such
+   Deep search with memory management gener-                             as academia, finance, government reports, and le-
+ally surpasses typical RAG on multi-document QA,                         gal texts. LongBookQA en and zh have a corpus
+as iterative retrieval supports multi-hop reasoning.                     with 192k and 2.068M tokens respectively, and con-
+Yet, existing memory strategies remain limited.                          sist of long-form novels and narrative stories. By
+Summarization-based methods such as Search-o1,                           incorporating these datasets, we demonstrate that
+MemoryBank, and A-Mem often lose key evidence,                           MemSearch-o1’s capabilities can be successfully
+while Amber mitigates memory dilution through                            extended to a broader range of domains. We use
+chunk- and sentence-level refinement but still strug-                    the Qwen2.5-72B-Instruct as the backbone, and
+gles to capture deeper logical connections.                              employ accuracy to evaluate the multiple-choice
+   On tasks with localized evidence (e.g., Qasper,                       questions in Longbench v2, and employ F1 to eval-
+MultiFieldQA-en), standard RAG can be compet-                            uate LongBook QA. The experimental results of
+itive, since these scenarios require less iterative                      LongBench v2 are shown in Table 2.
+retrieval. Many deep search methods over-search                             As shown in Table 3 and 4, MemSearch-o1
+here, leading to instability. In contrast, MemSearch-                    maintains strong deep search performance on ex-
+o1 avoids this issue by expanding memory from                            tremely large corpora, effectively organizing mem-
+seed tokens, ensuring sufficient coverage while                          ory across multiple retrieval rounds to support high-
+maintaining concise and precise reasoning paths.                         quality reasoning. Additionally, MemSearch-o1
+Together, these results establish MemSearch-o1 as                        can effectively find and organize the knowledge in
+a robust framework for deep search reasoning.                            the large corpus without training. In contrast, other
+   To further show the superiority of MemSearch-                         strong agentic search baselines exhibit unstable per-
+o1 over agentic search systems equipped with dif-                        formance compared with naive RAG, as they may
+ferent memory management strategies, we com-                             suffer from oversearch or the misleading search in
+                                                                       930
+                                                                        6
+       Methods                   Multinews        Academic       Legal                                 Financial                 Governmental                           Avg.
+       Direct RAG                   30.43           33.33        24.24                                     29.73                          26.83                      28.91
+       Search-o1 (Refined)          30.43           27.27        32.98                                     32.43                          31.71                      30.96
+       A-Mem                        39.13           40.43        42.42                                     40.54                          34.15                      39.33
+       Amber                        39.13           39.36        36.36                                     35.14                          29.27                      35.85
+       MemSearch-o1                 43.48∗          40.43        42.42                                     48.65∗                         36.59∗                     42.31∗
+
+Table 2: Performance Comparison in LongBench v2. Metrics are Accuracy (%). The best results are bolded and the
+second best results are underlined. "∗ " indicates the statistically significant improvements (i.e.,two-sided t-test with
+p < 0.05 ) over the baselines.
+
+          Method                   F1        EM                                                          3 H U I R U P D Q F H  Y V   0 R G H O  6 F D O H  R Q   : L N L 0 4 $
+          Direct RAG             23.13     15.67
+          Search-o1 (Refined)    16.91     11.68                                                
+          A-Mem                  18.64     11.40
+          Amber                  19.58     13.11
+
+                                                                      4 $  )   6 F R U H
+          MemSearch-o1           25.04∗    17.66∗                                               
+Table 3: Results on LongBookQA-en Dataset. The
+                                                                                                                                                         $ P E H U
+best results are bolded and "∗ " indicates the statistically                                                                                           6 H D U F K  R    5 H I L Q H G 
+significant improvements (i.e.,two-sided t-test with p <                                                                                                 0 H P 6 H D U F K  R 
+0.05 ) over the baselines.
+                                                                                                         %             %      %             %    %               %              %
+                                                                                                                                          0 R G H O  6 L ] H
+          Method                   F1        EM
+          Direct RAG             37.28     30.16                                 Figure 2: Model Size Scaling on MemSearch-o1
+          Search-o1 (Refined)    22.16     18.52
+          A-Mem                  28.64     23.81
+          Amber                  27.54     21.69                 approach with reasoning tasks. In contrast, Am-
+          MemSearch-o1           39.44∗    33.86∗                ber shows delayed activation, with noticeable im-
+                                                                 provements only beyond the 7B scale, and still
+Table 4: Results on LongBookQA-zh Dataset. The                   lags behind MemSearch-o1 in overall performance.
+best results are bolded and "∗ " indicates the statistically     Search-o1 (Refined), meanwhile, exhibits unsta-
+significant improvements (i.e.,two-sided t-test with p <         ble behavior: after an initial boost, its performance
+0.05 ) over the baselines.
+                                                                 fluctuates on larger models and fails to scale consis-
+                                                                 tently. This instability reflects its reliance on com-
+the large corpus. These observations demonstrate
+                                                                 plex semantic associations between queries and
+that MemSearch-o1 is highly adaptable to diverse
+                                                                 retrieved documents, which often leads to informa-
+data types, including both scientific QA datasets
+                                                                 tion loss and constrains its reasoning capacity.
+and narrative/story datasets.
+
+3.5 Scaling Law of MemSearch-o1                                  3.6                            Top-k Scalability for Retrieval
+In this experiment, we employ the Qwen2.5 in-                    In this subsection, we vary the number of top-k
+struct model series from 0.5B to 72B to perform the              documents retrieved during the agentic search pro-
+model size scaling and evaluate the performance on               cess to examine how retrieval volume influences
+the 2WikiMQA dataset. The corresponding results                  both the performance of MemSearch-o1 and the
+of MemSearch-o1 are shown in Figure 2.                           average number of reasoning steps. Experiments
+   Smaller models struggle to accurately follow                  are conducted with Qwen2.5-72B-Instruct on the
+search instructions and thus fail to perform deep                2WikiMQA and MuSiQue datasets, and results are
+reasoning without additional training. As model                  shown in Figure 3.
+size increases, however, reasoning capabilities are                Two distinct patterns emerge. As illustrated in
+activated more rapidly. Around the 3B scale, our                 Figure 3(a), increasing k initially enriches the mem-
+method effectively unlocks deep search-based rea-                ory with more relevant information, reducing the
+soning, and larger models achieve even higher ac-                number of reasoning steps required. However, ex-
+curacy, confirming the strong compatibility of our               cessively large k introduces redundancy, diluting
+                                                               931
+                                                                7
+                                                                                                                                  Dataset           w/o memory   w/o retracing   Complete
+                                      )   6 F R U H                                       
+                                                                                                                                    hotpotqa            54.64         64.27         67.78
+                                    7 K L Q N L Q J  5 R X Q G V                                                              2wikimqa            56.41         63.91         68.32
+
+
+
+
+                                                                                              7 K L Q N L Q J  5 R X Q G V
+                                                                                                                                  musique             44.31         47.69         52.01
+                                                                                            
+  )   6 F R U H
+                                                                                                                                    dureader            15.28         25.05         27.23
+                                                                                                                               narrativeqa         20.59         22.50         23.04
+                                                                                                                                    qasper              33.04         35.30         37.94
+                                                                                                                               multifieldqa-en     38.67         46.33         52.26
+                                                                                                                                  multifieldqa-zh     49.76         53.73         56.81
+                                                                                            
+                                                                                                                                  Table 5: Ablation Study of MemSearch-o1
+                                                  7 R S  N  5 H W U L H Y D O
+                                                  (a) 2WikiMQA
+                                                                                                                                   The ablation results highlight the importance of
+                                                                                                                           memory management in MemSearch-o1. When
+                                      )   6 F R U H
+                                      7 K L Q N L Q J  5 R X Q G V                                                             memory is completely removed, the LLM is ex-
+                      
+                                                                                            
+
+
+                                                                                              7 K L Q N L Q J  5 R X Q G V
+                                                                                                                                posed to redundant document content, and the com-
+                                                                                                                              plex semantic relations between queries and re-
+  )   6 F R U H
+                                                                                            
+                                                                                                                              trieved texts lead to confused reasoning, causing a
+                                                                                                                             noticeable performance drop. Removing the mem-
+                      
+                                                                                                                                ory path retracing also degrades performance, as
+                                                                                            
+                                                                                                                              unorganized memory fragments accumulate irrele-
+                                                                                                                          vant information with increasing semantic distance
+                                                  7 R S  N  5 H W U L H Y D O
+                                                                                                                                from the original query. These findings confirm
+                                                    (b) MuSiQue                                                                 that both memory growth and retracing are essen-
+                                                                                                                                tial for maintaining reasoning accuracy.
+              Figure 3: Top-k Scalability for MemSearch-o1.
+                                                                                                                                3.8      Memory Path Vizualization
+useful context and ultimately reducing accuracy
+                                                                                                                                In this subsection, we present case studies to illus-
+while increasing the number of search rounds. By
+                                                                                                                                trate how MemSearch-o1 reasons along memory
+contrast, in Figure 3(b), performance continues to
+                                                                                                                                paths, providing an intuitive demonstration of its ef-
+improve as k grows. For datasets like MuSiQue,
+                                                                                                                                fectiveness. We compare our method with Search-
+where relevant evidence is dispersed across many
+                                                                                                                                o1 (Refined) using the Qwen2.5-72B-Instruct back-
+chunks, larger retrieval sets provide greater infor-
+                                                                                                                                bone. Memory fragments from MemSearch-o1 and
+mation gains for memory construction. There-
+                                                                                                                                analysis sentences from Search-o1, together with
+fore, even though lengthy documents contain abun-
+                                                                                                                                retrieved document sentences, are projected into
+dant information, MemSearch-o1, by employing
+                                                                                                                                a low-dimensional space using UMAP (McInnes
+memory-seed-guided memory growth and focusing
+                                                                                                                                et al., 2018). Figure 4 shows two scenarios: (a)
+on information extraction at the token level, can
+                                                                                                                                when both retrieval queries and retrieved regions
+still distill more effective content from extended
+                                                                                                                                differ, and (b) when they are identical.
+documents, thereby reducing the required number
+of reasoning steps accordingly. Detailed values and                                                                                As shown in Figure 4(a), memory growth al-
+additional analysis are provided in Appendix A.6.                                                                               lows MemSearch-o1 to generate queries that are
+                                                                                                                                more goal-directed and logically coherent, retriev-
+                                                                                                                                ing regions closer to the ground-truth answers. The
+3.7 Ablation Study
+                                                                                                                                richer semantics of memory fragments also enable
+We conduct the ablation study and remove the mem-                                                                               broader exploration within the memory space, im-
+ory management strategy step by step. The results                                                                               proving answer accuracy. In contrast, Figure 4(b)
+are shown in Table 5. Specifically, we remove                                                                                   shows that even with identical retrieved regions,
+the memory path retracing and reorganization (w/o                                                                               MemSearch-o1 outperforms Search-o1 (Refined).
+memory retracing) first, to verify the effectiveness                                                                            While Search-o1 often over-refines and restricts
+of deep refinement in Memsearch-o1. Then, based                                                                                 exploration to local information, MemSearch-o1
+on this, we remove the memory seeds and frag-                                                                                   expands memory into a wider region, supporting
+ments growth (w/o memory), to show the efficacy                                                                                 more effective reasoning and retrieval. These visu-
+of memory management.                                                                                                           alizations clearly demonstrate how memory growth
+                                                                                                                              932
+                                                                                                                               8
+                                                                                                                               ods frequently generate redundant documents and
+                                                                                                                               noisy reasoning trajectories, leading to memory di-
+                                                                                                                               lution and reduced effectiveness (Liu et al., 2023).
+                                                                                                                               In this work, we tackle this issue by introducing
+                                                                                                               m5              memory growth and retracing to construct compact,
+                                                                 4 X H U \
+                                                                                                                               explicit memories that support high-quality reason-
+                  m3                   m2
+                                                     m1                                                                        ing. Unlike R1-style methods (Jin et al., 2025; Luo
+                                                                                                                               et al., 2025; Hao et al., 2025; Shi et al., 2025) based
+                                                                                                                   m6
+                                                                                                                               on smaller LLMs, our focus is on fully activating
+                                                                             m4                                                the reasoning potential of large-scale models.
+                2 U L J L Q D O  & R Q W H [ W
+                5 H W U L H Y H G   6 H D U F K  R                             0 H P R U \   6 H D U F K  R            Memory Management To mitigate memory di-
+                5 H W U L H Y H G   0 H P 6 H D U F K  R                       0 H P R U \   0 H P 6 H D U F K  R 
+                2 Y H U O D S S H G                                                4 X H U \                                   lution, prior work has explored a range of mem-
+                                                                                                                               ory management strategies for LLMs (Deng et al.,
+(a) UMAP: Memory Path under Divergent Retrieval Regions                                                                        2026; Wen et al.; Zhang et al., 2026c; Xu et al.,
+                                                                                                                               2026). Search-o1 (Li et al., 2025a) refines re-
+                                                                                                m6                             trieved texts to retain the most useful information,
+                                                                                                                               while MemoryBank (Zhong et al., 2024) summa-
+                                                                                                                               rizes event histories and applies selective forgetting.
+        m1 m2                                                                                   m5
+                                                                                                                               Mem0 (Chhikara et al., 2025) combines multi-step
+  4 X H U \                                                                                                                    retrieval with summarization to enrich semantic
+                                                                                                                               coverage, and Amber (Qin et al., 2025) filters rele-
+                                                                 m4                                                            vant content at both chunk and sentence levels dur-
+                                                                                                                               ing memory updates. Despite these advances, such
+                               m3                                                                                              methods largely rely on summarization or retrieval
+                2 U L J L Q D O  & R Q W H [ W
+                5 H W U L H Y H G   5 R X Q G                                                                               of query-relevant texts (Zhou et al., 2025), leaving
+                5 H W U L H Y H G   5 R X Q G                                   0 H P R U \   0 H P 6 H D U F K  R      LLMs unable to fully capture the complex seman-
+                0 H P R U \   6 H D U F K  R                                   4 X H U \
+                                                                                                                               tic associations between evolving queries and re-
+(b) UMAP: Memory Path under Identical Retrieval Regions                                                                        trieved contexts. This significantly constrains their
+                                                                                                                               deep search potential. In this work, we address
+Figure 4: Memory Paths for Different Retrieval Cases.                                                                          this limitation by constructing concise yet seman-
+                                                                                                                               tically rich system memories, thereby unlocking
+in MemSearch-o1 guides reasoning and retrieval in                                                                              more scalable deep search capabilities for LLMs.
+a more expansive, coherent, and accurate manner.
+                                                                                                                               5   Conclusion
+4             Related Work
+                                                                                                                               In this paper, we propose MemSearch-o1, a novel
+Retrieval-Augmented Generation RAG (Lewis                                                                                      deep search system that grows memory fragments
+et al., 2020; Li et al., 2025b) has been a widely                                                                              from seeds and seeks a path, enhancing the deep
+adopted method for enhancing LLMs with external                                                                                search reasoning process, which significantly re-
+knowledge (Jia et al., 2024; Zhang et al., 2026b; Xu                                                                           lieves the problem of memory dilution. This en-
+et al., 2025a). Single-step retrieval methods such as                                                                          ables the deep search system to effectively extract
+GraphRAG (Edge et al., 2024), HippoRAG (Gutiér-                                                                                concise information with rich semantics, and ex-
+rez et al., 2025), and HiRAG (Huang et al., 2025)                                                                              plore the memory path where the LLMs can search
+leverage knowledge graphs or hierarchical struc-                                                                               for and generate better solutions. Through exten-
+tures to better exploit retrieved contexts. However,                                                                           sive experiments on eight benchmark datasets, we
+their limited retrieval scope often fails on complex                                                                           demonstrate the effectiveness of MemSearch-o1 in
+multi-hop reasoning tasks (Qin et al., 2025). To                                                                               enhancing the agentic search capability of LLMS,
+address this, deep search has been proposed as                                                                                 surpassing all the baselines, including RAG and
+an agentic RAG framework that integrates reason-                                                                               agentic search frameworks with memory manage-
+ing, planning, and retrieval (Li et al., 2025a; El-                                                                            ment. Our MemSearch-o1 aligned with reasoning
+Shorbagy et al., 2025; Zhang et al., 2025a, 2026a),                                                                            based on memory growth establishes a new foun-
+enabling iterative exploration. Yet, existing meth-                                                                            dation for memory-aware agentic intelligence.
+                                                                                                                             933
+                                                                                                                              9
+Limitations                                                David Maxwell Chickering. 2002. Optimal structure
+                                                             identification with greedy search. Journal of machine
+While MemSearch-o1 effectively grows memory                  learning research, 3(Nov):507–554.
+fragments and retraces memory paths for reason-
+                                                           Pradeep Dasigi, Kyle Lo, Iz Beltagy, Arman Cohan,
+ing, it still depends on the comprehension abil-
+                                                             Noah A Smith, and Matt Gardner. 2021. A dataset of
+ity of LRMs for memory seed preparation and                  information-seeking questions and answers anchored
+growth. Our method demonstrates substantial im-              in research papers. arXiv preprint arXiv:2105.03011.
+provements with large-parameter LLMs, but the
+                                                           Yimin Deng, Yuqing Fu, Derong Xu, Yejing Wang,
+gains on smaller models (fewer than 3B parame-               Wei Ni, Jingtong Gao, Xiaopeng Li, Chengxu Liu,
+ters) remain limited, as these models lack strong            Xiao Han, Guoshuai Zhao, and 1 others. 2026.
+reasoning and information extraction capabilities            Enhancing conversational agents via task-oriented
+and often fail to follow search instructions reliably.       adversarial memory adaptation. arXiv preprint
+                                                             arXiv:2601.21797.
+Enhancing the performance of small-scale models
+thus remains an important avenue for future work.          Darren Edge, Ha Trinh, Newman Cheng, Joshua
+                                                             Bradley, Alex Chao, Apurva Mody, Steven Truitt,
+Acknowledgements                                             Dasha Metropolitansky, Robert Osazuwa Ness, and
+                                                             Jonathan Larson. 2024. From local to global: A
+This research was partially supported by Na-                 graph rag approach to query-focused summarization.
+tional Natural Science Foundation of China                   arXiv preprint arXiv:2404.16130.
+(No.62502404), Hong Kong Research Grants Coun-             Mohammed A El-Shorbagy, Anas Bouaouda, Laith
+cil (Research Impact Fund No.R1015-23, Collab-              Abualigah, and Fatma A Hashim. 2025. Atom search
+orative Research Fund No.C1043-24GF, General                optimization: a comprehensive review of its variants,
+Research Fund No. 11218325), Institute of Dig-              applications, and future directions. PeerJ Computer
+ital Medicine of City University of Hong Kong               Science, 11:e2722.
+(No.9229503), and Huawei (Huawei Innovation                Mohamed Amine Ferrag, Norbert Tihanyi, and Mer-
+Research Program).                                          ouane Debbah. 2025. From llm reasoning to au-
+                                                            tonomous ai agents: A comprehensive review. arXiv
+                                                            preprint arXiv:2504.19678.
+References                                                 Jingtong Gao, Ling Pan, Yejing Wang, Rui Zhong, Chi
+Yushi Bai, Xin Lv, Jiajie Zhang, Hongchang Lyu,               Lu, Maolin Wang, Qingpeng Cai, Peng Jiang, and Xi-
+  Jiankai Tang, Zhidian Huang, Zhengxiao Du, Xiao             angyu Zhao. 2025. Navigate the unknown: Enhanc-
+  Liu, Aohan Zeng, Lei Hou, and 1 others. 2023.               ing llm reasoning with intrinsic motivation guided
+  Longbench: A bilingual, multitask benchmark                 exploration. arXiv preprint arXiv:2505.17621.
+  for long context understanding. arXiv preprint
+  arXiv:2308.14508.                                        Bernal Jiménez Gutiérrez, Yiheng Shu, Weijian Qi,
+                                                             Sizhe Zhou, and Yu Su. 2025. From rag to memory:
+Yushi Bai, Shangqing Tu, Jiajie Zhang, Hao Peng, Xi-         Non-parametric continual learning for large language
+  aozhi Wang, Xin Lv, Shulin Cao, Jiazheng Xu, Lei           models. arXiv preprint arXiv:2502.14802.
+  Hou, Yuxiao Dong, and 1 others. 2025. Longbench
+  v2: Towards deeper understanding and reasoning           Chuzhan Hao, Wenfeng Feng, Yuewei Zhang, and
+  on realistic long-context multitasks. In Proceedings       Hao Wang. 2025. Dynasearcher: Dynamic knowl-
+  of the 63rd Annual Meeting of the Association for          edge graph augmented search agent via multi-
+  Computational Linguistics (Volume 1: Long Papers),         reward reinforcement learning. arXiv preprint
+  pages 3639–3664.                                           arXiv:2507.17365.
+
+Roger W Brown. 1957. Linguistic determinism and the        Wei He, Kai Liu, Jing Liu, Yajuan Lyu, Shiqi Zhao,
+  part of speech. The Journal of Abnormal and Social        Xinyan Xiao, Yuan Liu, Yizhong Wang, Hua Wu,
+  Psychology, 55(1):1.                                      Qiaoqiao She, and 1 others. 2017. Dureader: a
+                                                            chinese machine reading comprehension dataset
+Jianlv Chen, Shitao Xiao, Peitian Zhang, Kun Luo, Defu      from real-world applications.     arXiv preprint
+   Lian, and Zheng Liu. 2024. Bge m3-embedding:             arXiv:1711.05073.
+   Multi-lingual, multi-functionality, multi-granularity
+   text embeddings through self-knowledge distillation.    Xanh Ho, Anh-Khoa Duong Nguyen, Saku Sugawara,
+   arXiv preprint arXiv:2402.03216.                          and Akiko Aizawa. 2020. Constructing a multi-hop
+                                                             qa dataset for comprehensive evaluation of reasoning
+Prateek Chhikara, Dev Khant, Saket Aryan, Taranjeet          steps. arXiv preprint arXiv:2011.01060.
+  Singh, and Deshraj Yadav. 2025. Mem0: Building
+  production-ready ai agents with scalable long-term       Haoyu Huang, Yongfeng Huang, Junjie Yang, Zhenyu
+  memory. arXiv preprint arXiv:2504.19413.                   Pan, Yongqiang Chen, Kaili Ma, Hongzhi Chen, and
+                                                       934
+                                                       10
+  James Cheng. 2025. Retrieval-augmented genera-          Qidong Liu, Xian Wu, Wanyu Wang, Yejing Wang,
+  tion with hierarchical knowledge. arXiv preprint          Yuanshao Zhu, Xiangyu Zhao, Feng Tian, and Yefeng
+  arXiv:2503.10150.                                         Zheng. 2025a. Llmemb: Large language model can
+                                                            be a good embedding generator for sequential recom-
+Pengyue Jia, Derong Xu, Xiaopeng Li, Zhaocheng Du,          mendation. In Proceedings of the AAAI Conference
+  Xiangyang Li, Yichao Wang, Yuhao Wang, Qidong             on Artificial Intelligence, volume 39, pages 12183–
+  Liu, Maolin Wang, Huifeng Guo, and 1 others. 2024.        12191.
+  Bridging relevance and reasoning: Rationale dis-
+  tillation in retrieval-augmented generation. arXiv      Qidong Liu, Xiangyu Zhao, Yuhao Wang, Yejing Wang,
+  preprint arXiv:2412.08519.                                Zijian Zhang, Yuqi Sun, Xiang Li, Maolin Wang,
+                                                            Pengyue Jia, Chong Chen, and 1 others. 2025b.
+Bowen Jin, Hansi Zeng, Zhenrui Yue, Jinsung Yoon,           Large language model enhanced recommender sys-
+  Sercan Arik, Dong Wang, Hamed Zamani, and Jiawei          tems: Methods, applications and trends. In Proceed-
+  Han. 2025. Search-r1: Training llms to reason and         ings of the 31st ACM SIGKDD Conference on Knowl-
+  leverage search engines with reinforcement learning.      edge Discovery and Data Mining V. 2, pages 6096–
+  arXiv preprint arXiv:2503.09516.                          6106.
+
+                                                          Haoran Luo, Guanting Chen, Qika Lin, Yikai Guo,
+Jared Kaplan, Sam McCandlish, Tom Henighan, Tom B
+                                                            Fangzhi Xu, Zemin Kuang, Meina Song, Xiaobao
+   Brown, Benjamin Chess, Rewon Child, Scott Gray,
+                                                            Wu, Yifan Zhu, Luu Anh Tuan, and 1 others. 2025.
+   Alec Radford, Jeffrey Wu, and Dario Amodei. 2020.
+                                                            Graph-r1: Towards agentic graphrag framework via
+   Scaling laws for neural language models. arXiv
+                                                            end-to-end reinforcement learning. arXiv preprint
+   preprint arXiv:2001.08361.
+                                                            arXiv:2507.21892.
+Tomáš Kočiskỳ, Jonathan Schwarz, Phil Blunsom, Chris    Leland McInnes, John Healy, and James Melville. 2018.
+  Dyer, Karl Moritz Hermann, Gábor Melis, and Ed-           Umap: Uniform manifold approximation and pro-
+  ward Grefenstette. 2018. The narrativeqa reading          jection for dimension reduction. arXiv preprint
+  comprehension challenge. Transactions of the Asso-        arXiv:1802.03426.
+  ciation for Computational Linguistics, 6:317–328.
+                                                          Jingyu Peng, Maolin Wang, Xiangyu Zhao, Kai Zhang,
+Seokgi Lee. 2025. Transforming questions and docu-           Wanyu Wang, Pengyue Jia, Qidong Liu, Ruocheng
+  ments for semantically aligned retrieval-augmented         Guo, and Qi Liu. 2025. Stepwise reasoning disrup-
+  generation. arXiv preprint arXiv:2508.09755.               tion attack of llms. In Proceedings of the 63rd Annual
+                                                             Meeting of the Association for Computational Lin-
+Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio         guistics (Volume 1: Long Papers), pages 5040–5058.
+  Petroni, Vladimir Karpukhin, Naman Goyal, Hein-
+  rich Küttler, Mike Lewis, Wen-tau Yih, Tim Rock-        Qitao Qin, Yucong Luo, Yihang Lu, Zhibo Chu, and
+  täschel, and 1 others. 2020. Retrieval-augmented gen-     Xianwei Meng. 2025. Towards adaptive memory-
+  eration for knowledge-intensive nlp tasks. Advances       based optimization for enhanced retrieval-augmented
+  in neural information processing systems, 33:9459–        generation. arXiv preprint arXiv:2504.05312.
+  9474.
+                                                          Preston Rasmussen, Pavlo Paliychuk, Travis Beauvais,
+Xiaoxi Li, Guanting Dong, Jiajie Jin, Yuyao Zhang,          Jack Ryan, and Daniel Chalef. 2025. Zep: a tempo-
+  Yujia Zhou, Yutao Zhu, Peitian Zhang, and                 ral knowledge graph architecture for agent memory.
+  Zhicheng Dou. 2025a. Search-o1: Agentic search-           arXiv preprint arXiv:2501.13956.
+  enhanced large reasoning models. arXiv preprint
+  arXiv:2501.05366.                                       Kaize Shi, Xueyao Sun, Qing Li, and Guandong Xu.
+                                                            2024. Compressing long context for enhancing rag
+                                                            with amr-based concept distillation. arXiv preprint
+Yuchen Li, Hengyi Cai, Rui Kong, Xinran Chen, Jiamin
+                                                            arXiv:2405.03085.
+  Chen, Jun Yang, Haojie Zhang, Jiayi Li, Jiayi Wu,
+  Yiqun Chen, and 1 others. 2025b. Towards ai search      Yaorui Shi, Sihang Li, Chang Wu, Zhiyuan Liu, Jun-
+  paradigm. arXiv preprint arXiv:2506.17188.                feng Fang, Hengxing Cai, An Zhang, and Xiang
+                                                            Wang. 2025. Search and refine during think: Au-
+Aixin Liu, Bei Feng, Bing Xue, Bingxuan Wang,               tonomous retrieval-augmented reasoning of llms.
+  Bochao Wu, Chengda Lu, Chenggang Zhao, Chengqi            arXiv preprint arXiv:2505.11277.
+  Deng, Chenyu Zhang, Chong Ruan, and 1 others.
+  2024. Deepseek-v3 technical report. arXiv preprint      Zoltán Gendler Szabó. 2015. Major parts of speech.
+  arXiv:2412.19437.                                         Erkenntnis, 80(Suppl 1):3–29.
+
+Nelson F Liu, Kevin Lin, John Hewitt, Ashwin Paran-       Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot,
+  jape, Michele Bevilacqua, Fabio Petroni, and Percy        and Ashish Sabharwal. 2022. Musique: Multi-
+  Liang. 2023. Lost in the middle: How lan-                 hop questions via single-hop question composition.
+  guage models use long contexts. arXiv preprint            Transactions of the Association for Computational
+  arXiv:2307.03172.                                         Linguistics, 10:539–554.
+                                                       935
+                                                       11
+Hanbing Wang, Xiaorui Liu, Wenqi Fan, Xiangyu Zhao,         Agentic memory for llm agents. arXiv preprint
+  Venkataramana Kini, Devendra Pratap Yadav, Fei            arXiv:2502.12110.
+  Wang, Zhen Wen, and Hui Liu. 2025a. Rethink-
+  ing large language model architectures for sequential   Sikuan Yan, Xiufeng Yang, Zuchao Huang, Ercong
+  recommendations. In Proceedings of the 14th In-           Nie, Zifeng Ding, Zonggen Li, Xiaowen Ma, Hin-
+  ternational Joint Conference on Natural Language          rich Schütze, Volker Tresp, and Yunpu Ma. 2025.
+  Processing and the 4th Conference of the Asia-Pacific     Memory-r1: Enhancing large language model agents
+  Chapter of the Association for Computational Lin-         to manage and utilize memories via reinforcement
+  guistics, pages 3376–3391.                                learning. arXiv preprint arXiv:2508.19828.
+
+Jun Wang. 2025. A tutorial on llm reasoning: Rel-         An Yang, Anfeng Li, Baosong Yang, Beichen Zhang,
+  evant methods behind chatgpt o1. arXiv preprint           Binyuan Hui, Bo Zheng, Bowen Yu, Chang
+  arXiv:2502.10867.                                         Gao, Chengen Huang, Chenxu Lv, and 1 others.
+                                                            2025. Qwen3 technical report. arXiv preprint
+Yu Wang and Xi Chen. 2025. Mirix: Multi-agent mem-          arXiv:2505.09388.
+  ory system for llm-based agents. arXiv preprint
+  arXiv:2507.07957.                                       An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui,
+                                                            Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu,
+Yu Wang, Dmitry Krotov, Yuanzhe Hu, Yifan Gao,              Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jian-
+  Wangchunshu Zhou, Julian McAuley, Dan Gutfreund,          hong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang,
+  Rogerio Feris, and Zexue He. 2025b. M+: Extending         Jingren Zhou, Junyang Lin, Kai Dang, and 22 oth-
+  memoryllm with scalable long-term memory. arXiv           ers. 2024. Qwen2.5 technical report. arXiv preprint
+  preprint arXiv:2502.00592.                                arXiv:2412.15115.
+Zihan Wang, Zihan Liang, Zhou Shao, Yufei Ma,             Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Ben-
+  Huangyu Dai, Ben Chen, Lingtao Mao, Chenyi Lei,           gio, William W Cohen, Ruslan Salakhutdinov, and
+  Yuqing Ding, and Han Li. 2025c. Infogain-rag:             Christopher D Manning. 2018. Hotpotqa: A dataset
+  Boosting retrieval-augmented generation via docu-         for diverse, explainable multi-hop question answer-
+  ment information gain-based reranking and filtering.      ing. arXiv preprint arXiv:1809.09600.
+  arXiv preprint arXiv:2509.12765.
+                                                          Chuanyue Yu, Kuo Zhao, Yuhan Li, Heng Chang,
+Yi Wen, Derong Xu, Pengyue Jia, Yichao Wang, Yingyi         Mingjian Feng, Xiangzhe Jiang, Yufei Sun, Jia
+   Zhang, Maolin Wang, Junyi Li, Yue Liu, Huifeng           Li, Yuzhi Zhang, Jianxin Li, and 1 others. 2025.
+   Guo, Yong Liu, and 1 others. Memory type mat-            Graphrag-r1: Graph retrieval-augmented genera-
+   ters: Enhancing long-term memory in large language       tion with process-constrained reinforcement learning.
+   models with hybrid strategies.                           arXiv preprint arXiv:2507.23581.
+Tongzhou Wu, Yuhao Wang, Xinyu Ma, Xiuqiang               Wenlin Zhang, Kuicai Dong, Junyi Li, Yingyi Zhang,
+  He, Shuaiqiang Wang, Dawei Yin, and Xiangyu              Xiaopeng Li, Pengyue Jia, Yi Wen, Derong Xu,
+  Zhao. 2026. Deepresearch-9k: A challenging bench-        Maolin Wang, Yichao Wang, and 1 others. 2026a.
+  mark dataset of deep-research agent. arXiv preprint      To search or not to search: Aligning the decision
+  arXiv:2603.01152.                                        boundary of deep search agents via causal interven-
+                                                           tion. arXiv preprint arXiv:2602.03304.
+Yaxiong Wu, Sheng Liang, Chen Zhang, Yichao Wang,
+  Yongyue Zhang, Huifeng Guo, Ruiming Tang, and           Wenlin Zhang, Xiangyang Li, Kuicai Dong, Yichao
+  Yong Liu. 2025. From human memory to ai memory:          Wang, Pengyue Jia, Xiaopeng Li, Yingyi Zhang,
+  A survey on memory mechanisms in the era of llms.        Derong Xu, Zhaocheng Du, Huifeng Guo, and 1 oth-
+  arXiv preprint arXiv:2504.15965.                         ers. 2025a. Process vs. outcome reward: Which is
+                                                           better for agentic rag reinforcement learning. arXiv
+Derong Xu, Pengyue Jia, Xiaopeng Li, Yingyi Zhang,         preprint arXiv:2505.14069.
+  Maolin Wang, Qidong Liu, Xiangyu Zhao, Yichao
+  Wang, Huifeng Guo, Ruiming Tang, and 1 oth-             Wenlin Zhang, Xiaopeng Li, Yingyi Zhang, Pengyue
+  ers. 2025a. Align-grag: Reasoning-guided dual            Jia, Yichao Wang, Huifeng Guo, Yong Liu, and
+  alignment for graph retrieval-augmented generation.      Xiangyu Zhao. 2025b. Deep research: A survey
+  arXiv preprint arXiv:2505.16237.                         of autonomous research agents. arXiv preprint
+                                                           arXiv:2508.12752.
+Derong Xu, Yi Wen, Pengyue Jia, Yingyi Zhang, Wenlin
+  Zhang, Yichao Wang, Huifeng Guo, Ruiming Tang,          Xinrong Zhang, Yingfa Chen, Shengding Hu, Zi-
+  Xiangyu Zhao, Enhong Chen, and Tong Xu. 2026.             hang Xu, Junhao Chen, Moo Khai Hao, Xu Han,
+  From single to multi-granularity: Toward long-term        Zhen Leng Thai, Shuo Wang, Zhiyuan Liu, and
+  memory association and selection of conversational        1 others. 2024. ∞ bench: Extending long con-
+  agents. In The Fourteenth International Conference        text evaluation beyond 100k tokens. arXiv preprint
+  on Learning Representations.                              arXiv:2402.13718.
+Wujiang Xu, Kai Mei, Hang Gao, Juntao Tan, Zu-            Yingyi Zhang, Pengyue Jia, Xianneng Li, Derong Xu,
+ jie Liang, and Yongfeng Zhang. 2025b. A-mem:               Maolin Wang, Yichao Wang, Zhaocheng Du, Huifeng
+                                                      936
+                                                      12
+    Guo, Yong Liu, Ruiming Tang, and 1 others. 2025c.               Task          Metric    Avg. Length   Language   #Samples
+    Lsrp: A leader-subordinate retrieval framework for            HotpotQA          F1         9,151        EN         200
+    privacy-preserving cloud-device collaboration. In          2WikiMultihopQA      F1         4,887        EN         200
+                                                                   MuSiQue          F1        11,214        EN         200
+    Proceedings of the 31st ACM SIGKDD Conference                 DuReader        Rouge-L     15,768        ZH         200
+    on Knowledge Discovery and Data Mining V. 2,                MultiFieldQA-en     F1         4,559        EN         150
+    pages 3889–3900.                                            MultiFieldQA-zh     F1         6,701        ZH         200
+                                                                 NarrativeQA        F1        18,409        EN         200
+Yingyi Zhang, Pengyue Jia, Derong Xu, Yi Wen, Xi-                   Qasper          F1         3,619        EN         200
+  anneng Li, Yichao Wang, Wenlin Zhang, Xiaopeng
+  Li, Weinan Gan, Huifeng Guo, and 1 others. 2026b.                  Table 6: Statistics of Evaluation Datasets
+  Personalize before retrieve: Llm-based personalized
+  query expansion for user-centric retrieval. In Pro-      means the model R should execute search to seek
+  ceedings of the AAAI Conference on Artificial Intelli-   for more information. Then, the raised query q (n)
+  gence, volume 40, pages 16406–16414.                     is extracted from R(n) , and is utilized to retrieve
+Yingyi Zhang, Junyi Li, Wenlin Zhang, Pengyue Jia,         relevant contexts in line 5. In line 6, we use the
+  Xianneng Li, Yichao Wang, Derong Xu, Yi Wen,             toolkit to split the query and prepare for memory
+  Huifeng Guo, Yong Liu, and Xiangyu Zhao. 2026c.          seed tokens which is stored in the set S (n) . In
+  Evoking user memory: Personalizing LLM via
+  recollection-familiarity adaptive retrieval. In The
+                                                           line 7, we grow memory fragments using the LLM
+  Fourteenth International Conference on Learning          based on the intent of current query q (n) . If the rea-
+  Representations.                                         soning sequence R(n) ends with EOS, the model
+                                                           regards the retrieved information as sufficient, and
+Xiangyu Zhao, Long Xia, Jiliang Tang, and Dawei
+  Yin. 2019. " deep reinforcement learning for search,     finishes the reasoning process. Finally, we should
+  recommendation, and online advertising: a survey"        consolidate the memory fragments and calculate
+  by xiangyu zhao, long xia, jiliang tang, and dawei       the contribution function to find a memory region
+  yin with martin vesely as coordinator. ACM sigweb        in line 11 and 12. In line 13, we use greedy search
+  newsletter, 2019(Spring):1–15.
+                                                           to deeply refine and reorganize the memory path for
+Wanjun Zhong, Lianghong Guo, Qiqi Gao, He Ye, and          reasoning, as the some memory fragments might
+ Yanlin Wang. 2024. Memorybank: Enhancing large            have the semantics far away from that of the origi-
+  language models with long-term memory. In Pro-
+                                                           nal query. Finally in line 14, we use the model R
+  ceedings of the AAAI Conference on Artificial Intelli-
+  gence, volume 38, pages 19724–19731.                     to generate the answer a.
+
+Zijian Zhou, Ao Qu, Zhaoxuan Wu, Sunghwan                  A.2       Details for the Datasets
+   Kim, Alok Prakash, Daniela Rus, Jinhua Zhao,
+   Bryan Kian Hsiang Low, and Paul Pu Liang. 2025.         In our experiments, we utilize LongBench (Bai
+   Mem1: Learning to synergize memory and reason-          et al., 2023) to evaluate the performance of meth-
+   ing for efficient long-horizon agents. arXiv preprint   ods, which covers both Chinese and English tasks,
+   arXiv:2506.15841.
+                                                           offering a more complete assessment of how well
+A     Appendix                                             models handle questions and comprehend informa-
+                                                           tion in long contexts in different languages. We
+A.1 Algorithm                                              select MultiDocQA and SingleDocQA tasks for
+The detailed inference procedure of MemSearch-             evaluation, and the brief description of adopted
+o1 is shown in Algorithm 1. For MemSearch-o1               domains are listed as below:
+inference, we should prepare the model with rea-           HotpotQA (Yang et al., 2018): HotpotQA is a
+soning ability R, search function Search, toolkit          question-answering dataset that includes natural,
+for memory seed preparation T . We input the orig-         multi-step questions. It provides clear labels for the
+inal query, and instructions for reasoning, memory         supporting facts, helping build question-answering
+growth and answers to the LLM to execute infer-            systems that are easier to explain.
+ence. Before the inference starts, we initialize the       2WikiMQA (Ho et al., 2020): 2WikiMQA is a
+maximum search round as N , and the current query          high-quality multi-hop QA dataset designed to eval-
+q as the original q o for first-step analysis. While       uate a model’s reasoning and inference capabilities.
+the current search round is less than N , and the          The dataset incorporates evidences by combining
+search indicator is True, the LLM should generate          structured and unstructured data, and explicitly pro-
+a sequence of analysis using current search query.         vides reasoning paths for multi-hop questions.
+In line2, if the reasoning sequence of the current         MuSiQue (Trivedi et al., 2022): MuSiQue is a
+round R(n) ends with ⟨|end_search_query|⟩), this           challenging multi-hop QA dataset constructed via
+                                                         937
+                                                         13
+Algorithm 1 MemSearch-o1 Inference
+Require: LLM for reasoning R, search function Search, toolkit for memory seed preparation T .
+Input: Original query q o , task instruction I R , answer instruction I a , memory growth instruction I M
+Initialize the search indicator F = True, Corpus C for retrieval and maximum round of search N .
+Initialize the memory seed set S and memory fragment set M as empty, and set search round n = 1.
+Initialize the current query q for analysis and retrieval as q o , and the reasoning text R(0) as empty.
+ 1: while n ≤ N and F = True do
+ 2:     Generate reasoning and derive an analysis sequence. R(n) ← R(I R , q, R(n−1) )
+ 3:     if R(n) ends with ⟨|end_search_query|⟩ then
+ 4:         Extract search query: q (n) ← Extract(R(n) , ⟨|begin_search_query|⟩, ⟨|end_search_query|⟩)
+ 5:         Retrieve documents: D ← Search(q (n) )
+                                                  (n) (n)         (n)
+ 6:         Prepare memory seed tokens S (n) = s1 , s2 , . . . , sLr ←   − T (q (n) )
+                                                         (n)      (n)          (n)
+ 7:        Grow memory fragments M(n) = {m1 , m2 , . . . , m|M(n) | } ← R(S (n) , I M , q (n) ).
+ 8:        n=n+1
+ 9:    else if R(n) ends with EOS then
+10:        Finish the Reasoning Step. F = False                    S
+11:        Memory consolidation: M = {m1 , m2 , . . . , m|M| } ← N   n=1 M
+                                                                            (n)
+
+12:        Calculate the contribution to find memory region: Mq = {mi ∈ Rd |C(mi ; q o ) > τr }.
+13:        Find an optimal memory path P ∗ = (mj1 , mj2 , ..., mjK ) using greedy search.
+14:        Generate the final response: a ← R(Ia , q o , P ∗ )
+15:    end if
+16: end while
+
+Output: High quality reasoning chain R and answer a
+
+
+a bottom-up approach that composes connected                      The statistics of the above domains for evalua-
+single-hop questions, ensuring that each reasoning             tion are shown in Table 6. The above statistics show
+step depends on information from another.                      that our evaluation is conducted on a diverse set of
+DuReader (He et al., 2017): DuReader is a human-               datasets, ranging from those with shorter contexts
+annotated Chinese machine reading comprehension                where query-relevant information is easier to re-
+dataset grounded in real-world QA tasks. It empha-             trieve—to those with much longer contexts, posing
+sizes authenticity by featuring genuine user queries,          greater challenges for information retrieval. Multi-
+naturally occurring documents, human-provided                  DocQA tasks require synthesizing evidence across
+answers, and practical application contexts.                   multiple, often disjoint, passages to answer com-
+NarrativeQA (Kočiskỳ et al., 2018): NarrativeQA              plex, multi-hop questions, while SingleDoc QA
+is a reading comprehension dataset designed to                 focuses on precise comprehension and reasoning
+evaluate deep, integrative understanding of long-              within a single, typically longer, document.
+form narratives, such as books and movie scripts.
+                                                               A.3      Baselines
+Qasper (Dasigi et al., 2021): Qasper is a QA
+dataset specifically designed for NLP papers. Ques-            In this subsection, we will introduce the baselines
+tions are authored by NLP practitioners who only               adopted in our experiments in detail.
+read the title and abstract, yet seek information that         Direct RAG (Lewis et al., 2020): Retrieve relevant
+resides in the full paper; answers and supporting              documents as external knowledge from the corpus
+evidence are then provided by other experts.                   to enhance the the generation quality of LLMs.
+MultiFieldQA (Bai et al., 2023): MultiFieldQA                  Search-o1 (RAgent) (Li et al., 2025a): Search-o1
+is a manually curated QA dataset designed to eval-             as a pioneering deep search system, enables LLMs
+uate long-context comprehension across diverse                 to integrate agentic search into o1-like reasoning
+domains, with versions in English and Chinese.It               process, during which the retrieved documents are
+draws documents from legal texts, government re-               used for inference directly.
+ports, encyclopedias, and academic papers.                     Search-o1 (Refined) (Li et al., 2025a): This is a
+                                                     938
+                                                     14
+deep search system integrating memory refinement                                                                                                 
+
+
+
+
+                                                              $ Y J   7 R N H Q V  I R U  * H Q H U D W L R Q
+into reasoning. It summarizes the retrieved contexts                                                                    
+to improve the quality of reasoning.                                                                                    
+
+MemoryBank (Zhong et al., 2024): A typical                                                                              
+                                                                                                                                                                    
+memory management method, and is applied to                                                                                                                                                            
+                                                                                                                                    
+search-o1’s memory in our experiment. It summa-                                                                                     
+                                                                                                                                                                                                                                             
+rizes the key events from the retrieved texts, and                                                                                   
+employs forgetting mechanism properly.                                                                                                     J H Q W              Q N
+                                                                                                                                                               % D
+                                                                                                                                                                                   P
+                                                                                                                                                                                0 H          $ P
+                                                                                                                                                                                                      U
+                                                                                                                                                                                                    E H
+                                                                                                                                                                                                                       P 6
+                                                                                                                                                                                                                     I L Q
+                                                                                                                                                                                                                                        H G  
+                                                                                                                                     5 $             P R                  $                                                H D U
+A-Mem (Xu et al., 2025b): A novel memory man-                                                                                                             U \                                                  5 H                 F K
+                                                                                                                                              0 H                                                                                  R 
+                                                                                             F K   R                                                                                                F K   R             0 H
+agement method, and is applied to deep search                6 H  D U                                                                                                                            6 H  D U
+system in our experiments. It generates key notes
+                                                                                                                                                                        (a) HotpotQA.
+for retrieved documents, and evolve the memories
+using links between the notes.                                                                                                                     
+
+
+
+
+                                                                           $ Y J   7 R N H Q V  I R U  * H Q H U D W L R Q
+                                                                                                                                     
+Amber (Qin et al., 2025): A deep search system                                                                                       
+using a novel system memory management method,                                                                                                                        
+which filters the retrieved documents in chunk and                                                                                    
+                                                                                                                                                                                        
+sentence levels to optimizes the reasoning process.                                                                                   
+                                                                                                                                                                                                            
+                                                                                                                                                                                                                                             
+                                                                                                                                      
+A.4 Detailed Comparison with Memory                                                                                                     
+    Management Strategies.                                                                                                                     0 H              Q W                                  U
+                                                                                                                                                                                                    E H                0 H                 H G
+                                                                                                                                      5 $
+                                                                                                                                             J H   P R  U \ %  D Q                           $ P              5 H I L Q    P 6                  
+                                                                                                                                                                    N                                                          H D U
+                                                                                                                                                   $                                                                           F K
+In this section, we will compare the performance                                             F K   R
+                                                                                                                                                            0 H   P                                 F K   R                                R 
+                                                            6 H
+of MemSearch-o1 over agentic search systems                      D U                                                                                                                        6 H  D U
+equipped with different memory management                                                                                                                             (b) 2WikiMQA.
+strategies. These strategies include step-wise refine-
+ment employed in basic Search-o1 (Refined), Mem-                                                                        Figure 5: Average Tokens for Generation.
+oryBank (Zhong et al., 2024), Zep (Rasmussen
+et al., 2025), and MIRIX (Wang and Chen, 2025).
+                                                         A.5                                                                 Average Tokens for Generation
+MIRIX streamlines memory retrieval and manage-
+ment by using memory agents, whereas Zep places          In this subsection, we show the average tokens
+greater emphasis on entity relationships within re-      for generating answers across all baseline methods.
+trieved texts. The experimental results on the Long-     The experiments are conducted on HotpotQA and
+Bench benchmark are shown in Table 7. The exper-         2WikiMQA, using the DeepSeek-V3.1 backbone.
+imental settings of Zep and MIRIX are identical to       We limit the maximum number of search iterations
+the basic settings illustrated in the Section 3.3. We    to three. The results are displayed in Figure 5.
+utilize Qwen2.5-72B-Instruct as the agent model.            The experimental results show that refining re-
+   The results show that traditional memory man-         trieved texts without careful processing leads to ver-
+agement strategies may struggle to grasp complex         bose memory representations, causing severe mem-
+semantics in the retrieved documents. This is be-        ory dilution and thereby increasing the difficulty
+cause the refinement- and retrieval-based methods        for LLMs to generate accurate responses. This find-
+may ignore important information. Additionally,          ing is consistent with the instability of Search-o1
+graph-based methods may degrade deep reason-             (RAgent) observed in Table 1. Directly applying
+ing performance, as inferring over graph-structured      the document refinement strategy from Search-o1,
+knowledge constitutes a challenging multi-hop rea-       however, tends to over-summarize the content, re-
+soning task, particularly when the retrieved con-        sulting in significant information loss, as such re-
+text contains significant noise. Uniquely, in con-       finement often overlooks the complex semantics
+trast to these approaches, MemSearch-o1 is a novel       of the queries generated during deep search. Al-
+method with stronger refinement performance that         though other memory refinement approaches, such
+leverages part-of-speech tagging to grow and trace       as A-Mem and Amber, achieve relatively better re-
+back memory starting from memory seed tokens de-         finement performance, they still extract irrelevant
+rived from the query. This enables LLMs to directly      information from documents, ultimately degrading
+identify and organize crucial memory information         generation quality. Uniquely, our MemSearch-o1
+within lengthy retrieved documents.                      method eliminates the reliance on reasoning his-
+                                                     939
+                                                     15
+                                                    MultidocQA                                        Singledoc QA
+   Models            Methods                                                                                                                   Avg.
+                                      HotpotQA   2WikiMQA   MuSiQue    DuReader     NarrativeQA   Qasper   MultiField-en    MultiField-zh
+                Search-o1 (Refined)    52.11      35.74      37.99      15.30         16.12       17.51       33.79            44.45           31.63
+                   MemoryBank          47.27      44.89      28.26      19.24         16.26       26.28       32.42            43.46           32.26
+  Qwen 2.5-
+                      MIRIX            55.20      62.49      39.76      15.74         17.07       19.27       35.90            48.06           36.69
+ 72B-Instruct
+                       Zep             56.68      60.85      41.28      15.11         14.79       17.69       36.54            49.70           36.58
+                  MemSearch-o1         59.71∗     65.95∗     44.11∗     32.06∗        17.30∗      36.18∗      49.05∗           59.91∗          45.53∗
+
+
+Table 7: Detailed comparison with diverse memory management strategies. The best results are bolded. "∗ " indicates
+the statistically significant improvements (i.e.,two-sided t-test with p < 0.05 ) over the baselines.
+
+tory inherent in traditional deep search frameworks.                        top-k
+                                                                                             2WikiMQA                         MuSiQue
+Instead, it grows memory structures from memory                                       F1       Thinking rounds         F1     Thinking rounds
+seed tokens in a targeted way and then identifies                            1       51.14          3.43            30.26               3.66
+optimal memory paths from the grown memory                                   2       59.94          3.29            33.54               3.35
+                                                                             3       65.95          3.13            41.57               3.37
+fragments for response generation. This approach                             5       67.45          2.99            42.94               3.38
+substantially reduces the number of tokens required                          10      65.85          3.05            44.05               3.20
+during generation, improving both efficiency and
+generation quality while effectively mitigating the                     Table 8: Performance and Reasoning Cost vs. Top-k
+memory dilution problem.                                                Retrieval on 2WikiMQA and MuSiQue
+   We also compare the average total token con-
+                                                                            Method                    Inference Time (s)         Total Tokens
+sumption and the average inference time of each
+question on the Hotpotqa dataset using Qwen2.5-                             Search-o1 (Refined)               22.83                     2677.6
+                                                                            A-Mem                             27.07                     3185.3
+72B-Instruct as the backbone.                                               MIRIX                             32.34                     3956.3
+   As shown in Table 9, MemSearch-o1 achieves                               Zep                               28.33                     3580.2
+lower total token usage across the reasoning                                Amber                             20.29                     2507.3
+pipeline. The inference time of MemSearch-o1 is                             MemSearch-o1                      18.17                     2171.9
+lower compared with existing approaches, despite
+                                                                        Table 9: Comparison of average inference time and total
+its enhanced memory reasoning capability. More-
+                                                                        token consumption on HotpotQA.
+over, MemSearch-o1 exhibits low time complexity.
+Unlike traditional deep search methods, which re-                       tions. As a result, the deep search performance
+quire reading a cumulative system memory with                           improves rapidly in the initial phase of increasing
+length D in N reasoning steps, leading to O(N 2 D)                      k. Moreover, the higher-quality retrieved informa-
+complexity, our approach only extracts memory                           tion boosts the model’s confidence, leading to a
+information from the documents retrieved in the                         reduction in the number of search iterations. This
+current turn. This design results in complexity                         phenomenon is especially obvious on the results
+O(N D), which means MemSearch-o1 only needs                             of MuSiQue dataset. However, as the retrieved
+to read the lengthy retrieved documents N times.                        information becomes extremely large, redundant
+Consequently, as the number of search iterations in-                    texts will be fed into the LLMs. Since the memory
+creases, the efficiency advantage of MemSearch-o1                       fragments growth are based on both memory seeds
+becomes more obvious, making it particularly well-                      and the retrieved texts, too lengthy texts may also
+suited for multi-hop or iterative reasoning scenarios                   lead to the context dilution, and guide the memory
+that demand both accuracy and scalability.                              growth to irrelevant information region.
+
+A.6 Detailed Values of Top-k Scalability                                A.7         Prompts
+In this subsection, we supplement the detailed val-                     The instructions for agentic search follow the pre-
+ues of the top-k scalability, and analyze the mecha-                    vious work (Li et al., 2025a; Wang et al., 2025b).
+nism behind the observed results.                                       We take the HotpotQA as an example, and the in-
+   As shown in Table 8, as k increases, a richer                        structions for deep search are shown in Table 11.
+set of information sources will be retrieved for                        For the memory fragments growth, we organize
+memory construction. Consequently, during the                           the prompt template in Table 12. The prompts for
+memory seed expansion process, the growing mem-                         answer generation is shown in Table 13. In addi-
+ory fragments benefit from more contextual in-                          tion, for the LongBench v2 benchmark, the specific
+put, resulting in semantically richer representa-                       prompt used to generate final answers for multiple-
+                                                                      940
+                                                                      16
+  α    β     K    τ     λ   MuSiQue   MultiField-zh          From the results in this table, it can be found that
+ 0.8   0.2   10   0.3   1    43.42        58.73           the hyperparameters in reasonable ranges leads to
+ 0.6   0.4   15   0.3   1    43.57        59.54           stable performance, and are superior to the baseline
+ 0.6   0.4   10   0.1   1    43.84        59.12           methods, which indicates that our hyperparameter
+ 0.6   0.4   10   0.3   2    43.23        58.55           settings are not dataset-specific.
+
+Table 10: Hyperparameter Analysis of α, β, K, τ and λ
+on MuSiQue and MultiField-zh Benchmarks
+
+choice questions is explicitly shown in Table 14.
+For the LongBook QA benchmark, we utilize the
+same experimental settings and prompts as those
+used for LongBench in our paper.
+   Regarding prompt design, we follow the exper-
+imental setup of prior work, such as Search-o1,
+and the prompt of our approach only adds a mem-
+ory fragment extraction step. This memory frag-
+ment growth imposes lower difficulty on large lan-
+guage models and does not require highly com-
+plex or fine-tuned prompt engineering. Moreover,
+the extraction of memory fragments is guided by
+part-of-speech-based memory seed tokens and task-
+specific targets, enabling the model to reliably ex-
+tract relevant and essential information across a
+wide variety of tasks. This design ensures that our
+method remains effective and generalizable even
+in more complex and diverse task settings.
+   Each path constructed by these prompts is an
+ordered sequence of memory fragments, where the
+score of a candidate fragment depends on the pre-
+viously selected one. MemSearch-o1 ensures high-
+quality construction by two mechanisms: (1) Frag-
+ments are filtered via a contribution-based scoring
+function. (2) The path length is not lengthy, lower-
+ing the risk of low-performance of the memory path
+with high-quality fragments. In short, MemSearch-
+o1 organizes compact, coherent fragments to effec-
+tively structure contextual knowledge and support
+high-quality reasoning and generation in LLMs.
+
+A.8 Hyperparameter Analysis
+A reasonable hyperparameter setting might not be
+optimal for all the datasets, but MemSearch-o1 can
+remain high performance with this setting. In Sec-
+tion 3.3, we reported that the values of these param-
+eters remain unchanged across all the benchmark
+datasets. Using this effective setting, MemSearch-
+o1 exhibits significantly better performance than
+baselines, indicating it is not dataset-specific.
+   To further demonstrate that the settings are not
+dataset-specific, we select some reasonable settings
+in (1) and use them to test on other datasets. The
+results are shown in Table 10.
+                                                        941
+                                                        17
+You are a reasoning assistant with the ability to perform searches to help you answer the user’s
+question accurately. When answering, just give the answer and do not output other information.
+You have special tools:
+- To perform a search: write <|begin_search_query|> your query here <|end_search_query|>.
+Then, the system will search and analyze relevant passages, then provide you with helpful information
+in the format <|begin_search_result|> ...search results... <|end_search_result|>.
+If you think the searched information is not enough, you can continue searching. The maximum
+number of search attempts is limited to {MAX_SEARCH_LIMIT}.
+Once you have all the information you need, stop the search and continue your reasoning.
+Example:
+Question: “Alice David is the voice of Lara Croft in a video game developed by which company?”
+Assistant thinking steps:
+- I need to find out who voices Lara Croft in the video game.
+- Then, I need to determine which company developed that video game.
+Assistant:
+<|begin_search_query|>Alice David Lara Croft voice<|end_search_query|>
+(System returns processed information from relevant passages)
+Assistant thinks: The search results indicate that Alice David is the voice of Lara Croft in a specific
+video game. Now, I need to find out which company developed that game.
+Assistant:
+<|begin_search_query|>video game developed by Alice David Lara Croft<|end_search_query|>
+(System returns processed information from relevant passages)
+Assistant continues reasoning with the new information...
+Remember:
+- Use <|begin_search_query|> to request a search and end with <|end_search_query|>.
+- When done searching, continue your reasoning.
+
+                           Table 11: Prompt Used for the Reasoning Assistant
+
+
+
+
+                                                 942
+                                                 18
+Please extract content from the provided text that is useful for answering the given query, specifically
+with respect to the listed subjects, actions, temporal markers, degree modifiers.
+Input:
+- List of subjects, actions, temporal markers, degree modifiers:
+- Text: ...
+- Query: ...
+Instructions:
+- For each item in the list of subjects, actions, temporal markers or degree descriptions, extract raw,
+verbatim content from the text that is directly relevant to the query.
+- Format each extracted piece as:
+   subjects: [exact content from the text about the subjects]
+   actions: [exact content from the text describing an action involving the verb]
+   temporal markers: [exact content from the text indicating when an event occurred
+or the time duration]
+   degree modifiers: [exact content from the text indicating the characteristics
+of the actions and subjects.]
+- Do not paraphrase, summarize, or use your own words. Use only direct excerpts or minimally
+truncated phrases that preserve original wording.
+- Each subjects/actions/temporal markers/degree modifiers–content pair must appear on a separate
+line.
+- Only include content that provides diverse and query-relevant information.
+- If no relevant content exists in the text for a given entity, verb, or time expression with respect to
+the query, omit it entirely.
+
+                            Table 12: Prompt for Memory Fragments Growth
+
+
+Answer the question based on the given system memory of reasoning. Just give the answer and do
+not output other information.
+You should provide your final answer in the format \boxed{YOUR_ANSWER}.
+If the answer is in the context, maintain the illustrations (e.g., examples and specific phrasings)
+present in the context when formulating the answer.
+System memory: ...
+Question:...
+Generate an accurate answer based solely on the provided information.
+
+                   Table 13: Prompt for Answering Questions Based on Given Context
+
+
+Prompt Template for Multiple Choice Questions
+Please read the provided contexts and answer the question below.
+<text>{Contexts} </text>
+What is the correct answer to this question: {query}
+Choices:
+(A) {item[’choice_A’]}
+(B) {item[’choice_B’]}
+(C) {item[’choice_C’]}
+(D) {item[’choice_D’]}
+Answer the question based on the given context. Just give the answer and do not output other
+information. Format your response as follows: "The correct answer is (insert answer here)".
+
+               Table 14: Prompt Template for Multiple Choice Questions in LongBench v2
+
+
+                                                  943
+                                                  19
+

@@ -1,11 +1,9 @@
+---
+type: note
+title: Agentic Research System Changelog
+---
+
 # Agentic Research System Changelog
-
-## 1.2.0 — 2026-07-15
-
-- Refactored the 590-line operational skill into a concise contract and phase router.
-- Moved detailed methodology, source basis, schemas, rubrics, anti-anchoring safeguards, and promotion/evidence protocols to `references/operating-protocol-v1.1.md`.
-- Preserved validated Brain-first injection, bounded/provider-neutral routing, delta classifications, ledgers, critique/citation gates, output contract, and controlled Brain promotion gate.
-- Added a Skillify audit/E2E receipt under `evals/agentic-research-system/skillify-refactor-2026-07-15.md`.
 
 ## 1.0.0 — 2026-07-01
 

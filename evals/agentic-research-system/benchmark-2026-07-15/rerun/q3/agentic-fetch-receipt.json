@@ -1,0 +1,98 @@
+[
+  {
+    "source_id": "S1",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC1975788/?report=xml",
+    "file": "agentic-sources/human-search-bias.xml",
+    "status": 200,
+    "content_type": "text/html; charset=utf-8",
+    "latency_seconds": 1.168446,
+    "bytes": 180788,
+    "sha256": "eb00e3ecc31e2a152f6e4e89a24f7850399d3d40418cc2d833926a09c3b66814",
+    "error": null,
+    "accessed_at": "2026-07-15T00:41:42.889436+00:00"
+  },
+  {
+    "source_id": "S2",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9038198/?report=xml",
+    "file": "agentic-sources/active-sampling-confirmation.xml",
+    "status": 200,
+    "content_type": "text/html; charset=utf-8",
+    "latency_seconds": 1.381556,
+    "bytes": 381053,
+    "sha256": "a1f82b222850b7ca472c8b72b977e2866654458e42e9ea16735e04224e6bc3c8",
+    "error": null,
+    "accessed_at": "2026-07-15T00:41:44.272348+00:00"
+  },
+  {
+    "source_id": "S3",
+    "url": "https://link.springer.com/content/pdf/10.1007/s42001-025-00435-2.pdf",
+    "file": "agentic-sources/llm-anchoring.pdf",
+    "status": 200,
+    "content_type": "application/pdf",
+    "latency_seconds": 4.777393,
+    "bytes": 2465422,
+    "sha256": "5ab0968cbf7ba819ecd6420db931b11500d6aee5bd47c741a628eb51a812965c",
+    "error": null,
+    "accessed_at": "2026-07-15T00:41:49.054210+00:00"
+  },
+  {
+    "source_id": "S4",
+    "url": "https://aclanthology.org/2025.acl-long.1400.pdf",
+    "file": "agentic-sources/authority-bias-rag.pdf",
+    "status": 200,
+    "content_type": "application/pdf",
+    "latency_seconds": 2.635273,
+    "bytes": 1694299,
+    "sha256": "42bb5d6a5577345883f9db5eb0e0d733bb07df450106aa85c9771a3be267e696",
+    "error": null,
+    "accessed_at": "2026-07-15T00:41:51.692963+00:00"
+  },
+  {
+    "source_id": "S5",
+    "url": "https://arxiv.org/pdf/2401.11911",
+    "file": "agentic-sources/generated-vs-retrieved-context.pdf",
+    "status": 200,
+    "content_type": "application/pdf",
+    "latency_seconds": 1.556324,
+    "bytes": 1833994,
+    "sha256": "8f2ce45be5cf03cb6b00a496e1e3201f9f2df76923dc4a939ddc70c8bb23a5ab",
+    "error": null,
+    "accessed_at": "2026-07-15T00:41:53.252780+00:00"
+  },
+  {
+    "source_id": "S6",
+    "url": "https://aclanthology.org/2025.findings-acl.247.pdf",
+    "file": "agentic-sources/context-faithfulness-memory.pdf",
+    "status": 200,
+    "content_type": "application/pdf",
+    "latency_seconds": 2.656586,
+    "bytes": 1660054,
+    "sha256": "5e8b775a0b95d8de8fcd1312e1dd56ff0078e25c78067c0284f7d53aa0cdfe98",
+    "error": null,
+    "accessed_at": "2026-07-15T00:41:55.913038+00:00"
+  },
+  {
+    "source_id": "S7",
+    "url": "https://aclanthology.org/2024.acl-long.585.pdf",
+    "file": "agentic-sources/ragtruth.pdf",
+    "status": 200,
+    "content_type": "application/pdf",
+    "latency_seconds": 2.593756,
+    "bytes": 1020530,
+    "sha256": "17afb377ca5ea8cf672efa9a95fca5889713e94c6fd0355f89f8e01651ddfd4d",
+    "error": null,
+    "accessed_at": "2026-07-15T00:41:58.509873+00:00"
+  },
+  {
+    "source_id": "S8",
+    "url": "https://arxiv.org/pdf/2402.01727",
+    "file": "agentic-sources/prompting-diverse-ideas.pdf",
+    "status": 200,
+    "content_type": "application/pdf",
+    "latency_seconds": 0.169668,
+    "bytes": 1451054,
+    "sha256": "4efee6c00b31138c67f85048395c8d53f05683749cbd08f747fe73720fb21fc0",
+    "error": null,
+    "accessed_at": "2026-07-15T00:41:58.682734+00:00"
+  }
+]

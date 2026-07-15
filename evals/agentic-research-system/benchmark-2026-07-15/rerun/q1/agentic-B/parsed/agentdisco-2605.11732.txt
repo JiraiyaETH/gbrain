@@ -1,0 +1,2538 @@
+AgentDisCo: Towards Disentanglement and Collaboration in Open-ended Deep Research Agents
+Report GitHub Issue
+×
+Title:
+Content selection saved. Describe the issue below:
+Description:
+Submit without GitHub
+Submit in GitHub
+arXiv is now an independent nonprofit!
+Learn more
+×
+Back to arXiv
+Why HTML?
+Report Issue
+Back to Abstract
+Download PDF
+Abstract
+1
+Introduction
+2
+AgentDisCo: A Disentangled and Collaborative Agentic Architecture
+2.1
+System Overview and Design Philosophy
+2.2
+Planner Agent
+2.3
+(Outline) Critic Agent and (Outline) Generator Agent
+2.4
+Writer Agent
+2.5
+Render Agent
+2.6
+A Running Example
+3
+GALA: A Benchmark for General AI Life Assistants
+3.1
+Data Collection and Synthesis on Deep Research Queries
+3.2
+Statistics and Comparisons with Existing Benchmarks
+3.3
+Evaluation Protocols
+4
+Experiments
+4.1
+Setups
+4.2
+Main Results
+4.3
+Analysis
+5
+Real-World Applications and Conclusion
+References
+A
+Prompt Design
+A.1
+Prompt for Deep Research Query Miner
+A.2
+Prompt for Deep Research Query Classification
+A.3
+Prompt for Planner Agent
+A.4
+Prompt for Outline Critic Agent
+A.5
+Prompt for Outline Generator Agent
+A.6
+Prompt for Writer Agent
+B
+Harness Optimization
+B.1
+Harness Instruction
+B.2
+Prompts in Harness
+C
+Gallery of Templates
+C.1
+Gallery of Templates in Render Agent
+License: CC BY-SA 4.0
+arXiv:2605.11732v1 [cs.IR] 12 May 2026
+AgentDisCo: Towards Disentanglement and Collaboration in Open-ended Deep Research Agents
+Jiarui Jin, Zexuan Yan, Shijian Wang, Wenxiang Jiao, Yuan Lu
+Abstract
+Open-ended deep research
+agents have emerged as a promising paradigm for autonomously performing comprehensive information gathering and synthesis.
+However, existing approaches typically integrate information
+exploration
+and
+exploitation
+into a single unified module—such as an outline generator or a report generator—thereby limiting their flexibility and optimization potential.
+In this paper, we introduce
+AgentDisCo
+, a novel
+Dis
+entangled and
+Co
+llaborative agentic architecture that formulates deep research as an adversarial optimization problem between information exploration and exploitation.
+Specifically, a
+critic agent
+is optimized to evaluate and critique the generated outlines (serving as information exploitation states) and subsequently
+refine the search queries (serving as information exploration states)
+, while a
+generator agent
+is optimized to retrieve updated search results based on the refined search queries (serving as information exploration states) and accordingly
+update the generated outlines (serving as information exploitation states)
+.
+The resulting outline, progressively refined through iterative adversarial optimization, is subsequently delivered to a downstream report writer module.
+This module leverages the structured outline alongside the accumulated search results to synthesize a comprehensive, coherent, and well-grounded research report.
+The above agentic workflow can be optimized through either handcrafted or automatically discovered design strategies by constructing a
+meta-optimization harness
+over the adversarial optimization loop, where the generator agent originally tasked with producing target outlines is repurposed as a scoring agent that evaluates and generates quality signals over the critic agent's outputs, thereby enabling systematic optimization of the search queries.
+Concretely, powerful code-generation agents—such as Claude-Code or Codex—are employed to systematically explore the space of agent configurations and automatically construct a
+policy bank
+, a structured repository of reusable and composable design strategies over search query generation across diverse research tasks and search domains, enabling the framework to self-refine its own design strategies without requiring extensive human intervention.
+We evaluate AgentDisCo on three widely adopted deep research benchmarks—DeepResearchBench, DeepConsult, and DeepResearchGym—with Gemini-2.5-Pro as our base model, demonstrating performance comparable to or surpassing that of leading closed-source deep research agents.
+Furthermore, we observe that existing benchmarks predominantly focus on academic or domain-specific consulting queries, which diverge significantly from the breadth and diversity of real-world user needs.
+To bridge this gap, we introduce
+GALA
+(
+G
+eneral
+A
+I
+L
+ife
+A
+ssistants), a novel benchmark constructed via an agentic workflow that automatically mines latent deep research interests from users' historical browsing behavior, enabling a more faithful reflection of organic, everyday information needs.
+As an intuitive and user-friendly interface is essential for bridging the gap between research outputs and end-user consumption, we develop a
+rendering agent
+capable of transforming structured research reports into visually rich (rednote-style) poster presentations.
+Building upon this, we further construct a product demonstration—``AutoResearch Your Interest''—which automatically curates and delivers personalized deep research recommendations tailored to individual user profiles derived from their browsing histories.
+We publicly release our benchmark, code, demo, and evaluation harness to support and accelerate future research in open-ended deep research.
+†
+†
+Project page:
+https://agentdisco-project.github.io/
+†
+†
+Correspondence:
+jinjiarui@xiaohongshu.com
+,
+wenxiangjiaonju@gmail.com
+,
+luyuan3@xiaohongshu.com
+1
+Introduction
+Open-ended deep research agents—capable of synthesizing vast web-scale information into comprehensive, well-cited reports—have emerged as a critical frontier for large language models (LLMs).
+On one hand, closed-source commercial offerings—such as GPT Deep Research
+(OpenAI,
+2025a
+)
+and Gemini Deep Research
+(Research,
+2025a
+)
+—provide neither technical reports nor open implementations.
+On the other hand, a growing body of open technical reports
+(Han
+et al.
+,
+2025
+; Li
+et al.
+,
+2025
+; Lei
+et al.
+,
+2025
+)
+shed light on architectural design choices.
+Yet, beneath these advances in released architectural designs lies a persistent architectural bottleneck.
+First, existing deep research agents entangle
+information exploitation
+—the generation of structured outlines or reports—with
+information exploration
+—the planning and generation of search queries—into a single, undifferentiated module, fundamentally lacking any guarantee of informational incrementality in the iterative optimization process.
+Second, current outline-guided iteration loops require LLMs to refine generated outlines without explicit optimization objectives, leaving the model without clear guidance on which parts of the outline are satisfactory and which require further improvement.
+This absence of structured feedback signals results in directionless and unstable iterative refinement, where the model oscillates between over-revision and under-revision without convergence.
+In this paper, we propose
+AgentDisCo
+, a novel
+Dis
+entangled and
+Co
+llaborative agentic architecture that formulates deep research as an adversarial optimization problem between information exploration and exploitation.
+We first argue that iterative optimization should operate on intermediate generated outlines rather than final reports, as outline-level representations offer greater structural flexibility and are more amenable to effective context management.
+Within the outline optimization loop, we further disentangle the generation of outlines and search queries into two specialized yet interacting agents: a
+critic agent
+and a
+generator agent
+.
+Specifically, the critic agent receives the current
+generator state (i.e., the information exploitation state)
+— comprising the evolving outlines along with their associated references — and is tasked with evaluating and critiquing the quality and completeness of the generated outlines, upon which it subsequently produces targeted and gap-aware search queries.
+To further structure this iterative optimization process, we design the critic agent to produce updated
+critic state (i.e., the information exploration state)
+including a set of
+blueprints
+, where each blueprint represents a key point to be covered in the final report and is accompanied by a dedicated list of targeted search queries, thereby ensuring that the information retrieval at each iteration is systematically aligned with the intended scope and coverage of the final report.
+Conversely, the generator agent receives the current
+critic state (i.e., the information exploration state)
+, and is responsible for retrieving updated search results based on the refined search queries, and accordingly revising the generated outlines along with accompanying references, namely
+generator state (i.e., the information exploitation state)
+.
+Through this adversarial yet collaborative interaction, the two agents iteratively drive each other toward more comprehensive information coverage and higher-quality outline generation.
+The aforementioned agentic workflow can be optimized through two broad classes of design strategies: handcrafted approaches and
+automatically discovered approaches
+.
+Handcrafted optimization relies on domain expert knowledge to manually engineer search heuristics and allocate computational resources across distinct components of the workflow, offering interpretability but limited scalability.
+To overcome these constraints, recent advances in meta-optimization
+(Lee
+et al.
+,
+2026
+)
+introduce an outer optimization harness that operates over the agentic workflow itself, enabling the agent to systematically explore and refine its own optimization strategies in an automated and adaptive manner—without requiring exhaustive human intervention.
+Concretely, we employ Claude-Code as our primary code-generation agent and construct a meta-optimization harness around the critic agent.
+Within this harness, the
+generator agent
+—originally responsible for producing target outlines—is repurposed as a
+scoring agent
+that evaluates the critic agent's outputs and emits structured quality signals.
+This repurposing enables systematic optimization of search query generation without introducing additional model components.
+Leveraging the strong code-generation capabilities of state-of-the-art agents such as Claude-Code, the framework systematically explores the space of agent configurations and automatically constructs a
+policy bank
+—a structured repository of reusable and composable design strategies that govern search query generation across diverse research tasks and retrieval domains.
+By drawing upon and refining the entries in this policy bank, the framework iteratively self-evolves its design strategies, progressively improving retrieval quality while reducing the need for human intervention.
+We evaluate AgentDisCo on three widely
+adopted deep research benchmarks, namely, DeepResearchBench
+(Du
+et al.
+,
+2025
+)
+, DeepConsult
+(Consult,
+2025
+)
+, and DeepResearchGym
+(Coelho
+et al.
+,
+2025
+)
+with Gemini-2.5-Pro
+(DeepMind,
+2025a
+)
+as our base model,
+Specifically, AgentDisCo w/ Harness achieves a RACE score of
+52.11
+on DeepResearchBench and
+6.86
+on DeepConsult, surpassing leading closed-source systems such as Doubao-Research
+(Research,
+2026a
+)
+, Claude-DeepResearch
+(anthropic,
+2025
+)
+, and OpenAI-DeepResearch
+(OpenAI,
+2025a
+)
+.
+However, we observe that existing benchmarks predominantly center on academic or domain-specific consulting queries, which diverge substantially from the breadth and diversity of real-world user needs.
+To bridge this gap, we introduce
+GALA
+(
+G
+eneral
+A
+I
+L
+ife
+A
+ssistants), a novel benchmark designed to capture authentic, everyday information-seeking behavior.
+Specifically, we collect over 10,000 highly active users from the Rednote platform
+1
+1
+1
+https://www.xiaohongshu.com/explore
+along with their browsing and commenting histories, and devise an agentic workflow that automatically mines latent deep research interests and synthesizes personalized queries tailored to each user's individual preferences.
+Compared with prior open-sourced benchmarks, the resulting queries exhibit a markedly more lifestyle-oriented character, with the dominant topics shifting from Science & Technology and Finance & Business toward everyday domains such as Home & Hobbies, Fashion & Beauty, and Travel.
+By grounding evaluation in organic user activity, GALA offers a more faithful reflection of everyday information needs and enables a more realistic assessment of deep research agents in practical deployment scenarios.
+Alongside the query set, we release a standardized evaluation protocol built upon Gemini-3-Flash
+(DeepMind,
+2025b
+)
+, in which reports generated by AgentDisCo serve as reference outputs against which competing systems are scored in a pairwise manner.
+To construct competitive baselines, our human annotation team manually collects reports from the official web interfaces of Doubao-Research
+(Research,
+2026a
+)
+and Qwen-Research
+(Research,
+2026c
+)
+, as well as outputs from OpenAI o3-DeepResearch
+(Research,
+2026b
+)
+obtained via its API.
+Experimental results demonstrate that AgentDisCo consistently outperforms these strong proprietary baselines.
+Moreover, we find that AgentDisCo achieves stronger performance when relying solely on the Rednote search engine than when relying solely on Google Search, highlighting the superiority of Rednote as a source of community-grounded content for everyday information-seeking tasks.
+Figure 1:
+Comparison of deep research paradigms.
+(a) the outline-iterative-optimization paradigm couples outline generation and search query formulation within a single model; (b) the report-iterative-optimization paradigm similarly entangles report generation with search query formulation;
+(c) in contrast,
+AgentDisCo
+disentangles the outline generator and the search query generator into separate models, and further coordinates them through a dynamic critic-and-generator research cycle.
+Motivated by recent advances in AI-generated content (AIGC) and the emergence of paper-to-poster generation systems
+(Zhang
+et al.
+,
+2025b
+)
+, we further explore the integration of deep research agents with automated visual presentation.
+Recognizing that an intuitive and user-friendly interface is essential for bridging the gap between research outputs and end-user consumption, we develop a
+rendering agent
+that transforms structured research reports into visually rich, Rednote-style poster presentations.
+Building upon this capability, we construct a product demonstration—AutoResearch Your Interest—which automatically curates and delivers personalized deep research recommendations tailored to individual user profiles inferred from their browsing histories.
+Figure 2:
+Overview of the architecture and applications of AgentDisCo.
+AgentDisCo spans the full pipeline from mining latent deep research queries in user interaction histories to producing structured reports and rendering visually rich posters. This end-to-end design realizes the vision of ``AutoResearch Your Interest''—automatically tracking evolving user interests and delivering personalized deep research recommendations tailored to individual user profiles.
+Contributions.
+Our main contributions can be summarized as follows.
+•
+A novel disentangled and collaborative agentic architecture.
+As illustrated in Figure
+1
+, we introduce
+AgentDisCo
+, which formulates deep research as an adversarial optimization problem between information exploration and exploitation, decoupling outline generation from search query formulation and coordinating them through a dynamic critic-and-generator cycle.
+•
+A meta-optimization harness for self-evolving search.
+We construct a meta-optimization harness over the adversarial optimization loop, in which the generator agent—originally responsible for producing target outlines—is repurposed as a scoring agent that evaluates the critic agent's outputs and emits structured quality signals. This design enables the systematic and automatic optimization of search query generation without introducing additional model components.
+•
+A new benchmark for lifestyle deep research needs.
+Observing that existing benchmarks predominantly focus on academic or domain-specific consulting queries—diverging substantially from the breadth and diversity of real-world user needs—we introduce
+GALA
+, a benchmark that captures authentic, lifestyle-oriented information-seeking behavior mined from organic user activity.
+•
+An open-sourced deep research system with multi-modal render agent.
+Recognizing that an intuitive interface is essential for bridging research outputs and end-user consumption, we develop a
+rendering agent
+that transforms structured reports into visually rich, Rednote-style poster presentations. As depicted in Figure
+2
+, AgentDisCo thus spans the full pipeline—from deep research interest mining (which underpins the GALA benchmark) to the generation of reports and posters. To support and accelerate future research on open-ended deep research, we publicly release our benchmark, code, demo, and evaluation harness.
+2
+AgentDisCo: A Disentangled and Collaborative Agentic Architecture
+2.1
+System Overview and Design Philosophy
+We consider open-ended deep research questions without ground-truth answers.
+Given such a question
+q
+q
+, the agentic system must perform
+information exploration
+(searching relevant evidence) and
+information exploitation
+(synthesizing the evidence into a structured report).
+We argue that iterative optimization should occur on
+intermediate outlines
+rather than final reports, and we further disentangle exploration and exploitation into two specialized but interacting agents — a
+critic agent
+π
+c
+\pi^{c}
+and a
+generator agent
+π
+g
+\pi^{g}
+— whose adversarial yet collaborative interplay drives convergence toward a comprehensive, well-grounded outline.
+We formalize this disentangled and collaborative interaction as a dual-agent cooperative MDP (Markov Decision Process):
+ℳ
+=
+⟨
+𝒮
+c
+,
+𝒮
+g
+,
+𝒜
+c
+,
+𝒜
+g
+,
+𝒫
+,
+ℛ
+,
+T
+⟩
+,
+\mathcal{M}=\langle\mathcal{S}^{\mathrm{c}},\mathcal{S}^{\mathrm{g}},\mathcal{A}^{\mathrm{c}},\mathcal{A}^{\mathrm{g}},\mathcal{P},\mathcal{R},T\rangle,
+(1)
+where the joint environment state at timestep
+t
+t
+is the pair
+s
+t
+=
+(
+s
+t
+c
+,
+s
+t
+g
+)
+\mathrm{s}_{t}=(\mathrm{s}^{\mathrm{c}}_{t},\mathrm{s}^{\mathrm{g}}_{t})
+.
+The
+generator state (i.e., the information-exploitation state)
+, denoted
+s
+t
+g
+=
+(
+O
+t
+,
+R
+t
+)
+\mathrm{s}^{\mathrm{g}}_{t}=(\mathrm{O}_{t},\mathrm{R}_{t})
+, consists of the current outline
+O
+t
+\mathrm{O}_{t}
+and the set of references
+R
+t
+\mathrm{R}_{t}
+attached to it.
+The
+critic state (i.e., the information-exploration state)
+, denoted
+s
+t
+c
+=
+(
+B
+t
+,
+Q
+t
+)
+\mathrm{s}^{\mathrm{c}}_{t}=(\mathrm{B}_{t},\mathrm{Q}_{t})
+, comprises a set of blueprints
+B
+t
+\mathrm{B}_{t}
+together with their associated search queries
+Q
+t
+\mathrm{Q}_{t}
+.
+Each blueprint in
+B
+t
+\mathrm{B}_{t}
+specifies a key point that the final report should cover, and each such key point is paired with a list of targeted search queries in
+Q
+t
+\mathrm{Q}_{t}
+dedicated to filling its information gap.
+Together, the blueprints align retrieval with the intended scope
+and coverage of the report.
+Given a user query
+q
+q
+, the system initializes the generator state as
+s
+0
+g
+=
+(
+∅
+,
+∅
+)
+\mathrm{s}^{\mathrm{g}}_{0}=(\varnothing,\varnothing)
+, indicating an empty outline and an empty document pool.
+Conditioned solely on
+q
+q
+, the critic agent then performs a coarse decomposition and proposes an initial blueprint set
+s
+0
+c
+∼
+π
+c
+(
+⋅
+∣
+q
+,
+∅
+,
+∅
+)
+\mathrm{s}^{\mathrm{c}}_{0}\sim\pi^{\mathrm{c}}(\cdot\mid q,\varnothing,\varnothing)
+, which seeds the subsequent iterative refinement.
+At each iteration
+t
+t
+, the two agents act sequentially rather than simultaneously, with the critic moving first.
+At the critic's step, conditioned on the question
+q
+q
+, the previous generator state
+s
+t
+−
+1
+g
+\mathrm{s}^{\mathrm{g}}_{t-1}
+and its own previous state
+s
+t
+−
+1
+c
+\mathrm{s}^{\mathrm{c}}_{t-1}
+, the critic agent assesses the completeness and quality of the current outline and produces an updated blueprint set:
+s
+t
+c
+∼
+π
+c
+(
+⋅
+∣
+q
+,
+s
+t
+−
+1
+g
+,
+s
+t
+−
+1
+c
+)
+\mathrm{s}^{\mathrm{c}}_{t}\sim\pi^{\mathrm{c}}(\cdot\mid q,\mathrm{s}^{\mathrm{g}}_{t-1},\mathrm{s}^{\mathrm{c}}_{t-1})
+.
+That is, the critic's action is to instantiate the next exploration state.
+At the generator's step, conditioned on the freshly updated critic state
+s
+t
+c
+\mathrm{s}^{\mathrm{c}}_{t}
+together with its previous state
+s
+t
+−
+1
+g
+\mathrm{s}^{\mathrm{g}}_{t-1}
+, the generator agent executes the queries prescribed by each blueprint, retrieves new evidence via the search tool, and accordingly revises both the outline and its references:
+s
+t
+g
+∼
+π
+g
+(
+⋅
+∣
+q
+,
+s
+t
+−
+1
+g
+,
+s
+t
+c
+)
+\mathrm{s}^{\mathrm{g}}_{t}\sim\pi^{\mathrm{g}}(\cdot\mid q,\mathrm{s}^{\mathrm{g}}_{t-1},\mathrm{s}^{\mathrm{c}}_{t})
+.
+The generator's action thus realizes the exploitation counterpart of the critic's exploration.
+As for environment dynamics, given the actions of both agents, the joint state transition is deterministic: each agent's output directly instantiates the corresponding component of the next joint state, i.e.,
+s
+t
++
+1
+c
+=
+a
+t
+c
+\mathrm{s}^{\mathrm{c}}_{t+1}=\mathrm{a}^{\mathrm{c}}_{t}
+and
+s
+t
++
+1
+g
+=
+a
+t
+g
+\mathrm{s}^{\mathrm{g}}_{t+1}=\mathrm{a}^{\mathrm{g}}_{t}
+.
+Consequently, all stochasticity of the trajectory originates from the agents' policies themselves.
+Under the above sequential protocol, an interaction trajectory of AgentDisCo unfolds as the alternating sequence
+τ
+=
+{
+q
+,
+s
+0
+c
+,
+s
+0
+g
+,
+s
+1
+c
+,
+s
+1
+g
+,
+⋯
+}
+\tau=\{\,q,\,\mathrm{s}^{\mathrm{c}}_{0},\,\mathrm{s}^{\mathrm{g}}_{0},\,\mathrm{s}^{\mathrm{c}}_{1},\,\mathrm{s}^{\mathrm{g}}_{1},\,\cdots\,\}
+, in which the critic and the generator alternately update their respective state components.
+The likelihood of sampling
+τ
+\tau
+admits the following equivalent factorizations:
+p
+​
+(
+τ
+)
+\displaystyle p(\tau)
+=
+∏
+t
+=
+0
+T
+−
+1
+π
+c
+​
+(
+s
+t
++
+1
+c
+∣
+q
+,
+s
+t
+g
+,
+s
+t
+c
+)
+⏟
+(1) Critic agent policy
+​
+π
+g
+​
+(
+s
+t
++
+1
+g
+∣
+q
+,
+s
+t
+g
+,
+s
+t
++
+1
+c
+)
+⏟
+(2) Generator agent policy
+\displaystyle=\prod_{t=0}^{T-1}\underbrace{\pi^{\mathrm{c}}\bigl(\mathrm{s}^{\mathrm{c}}_{t+1}\mid q,\mathrm{s}^{\mathrm{g}}_{t},\mathrm{s}^{\mathrm{c}}_{t}\bigr)}_{{\color[rgb]{0.15234375,0.37890625,0.81640625}\definecolor[named]{pgfstrokecolor}{rgb}{0.15234375,0.37890625,0.81640625}\text{(1) Critic agent policy}}}\underbrace{\pi^{\mathrm{g}}\bigl(\mathrm{s}^{\mathrm{g}}_{t+1}\mid q,\mathrm{s}^{\mathrm{g}}_{t},\mathrm{s}^{\mathrm{c}}_{t+1}\bigr)}_{{\color[rgb]{0.90625,0.28125,0.19140625}\definecolor[named]{pgfstrokecolor}{rgb}{0.90625,0.28125,0.19140625}\text{(2) Generator agent policy}}}
+(2)
+=
+∏
+t
+=
+0
+T
+−
+1
+π
+c
+​
+(
+a
+t
+c
+∣
+q
+,
+s
+t
+g
+,
+s
+t
+c
+)
+⏟
+(1) Critic agent policy
+​
+𝕀
+​
+[
+s
+t
++
+1
+c
+=
+a
+t
+c
+]
+​
+𝒫
+c
+​
+(
+s
+t
++
+1
+g
+∣
+q
+,
+s
+t
+g
+,
+a
+t
+c
+)
+⏟
+(2) Environment dynamic of critic agent
+\displaystyle=\prod_{t=0}^{T-1}\underbrace{\pi^{\mathrm{c}}\bigl(\mathrm{a}^{\mathrm{c}}_{t}\mid q,\mathrm{s}^{\mathrm{g}}_{t},\mathrm{s}^{\mathrm{c}}_{t}\bigr)}_{{\color[rgb]{0.15234375,0.37890625,0.81640625}\definecolor[named]{pgfstrokecolor}{rgb}{0.15234375,0.37890625,0.81640625}\text{(1) Critic agent policy}}}\underbrace{\mathbb{I}\bigl[\ \mathrm{s}^{\mathrm{c}}_{t+1}=\mathrm{a}^{\mathrm{c}}_{t}\bigr]\ \mathcal{P}^{\mathrm{c}}\bigl(\mathrm{s}^{\mathrm{g}}_{t+1}\mid q,\mathrm{s}^{\mathrm{g}}_{t},\mathrm{a}^{\mathrm{c}}_{t}\bigr)}_{{\color[rgb]{0.90625,0.28125,0.19140625}\definecolor[named]{pgfstrokecolor}{rgb}{0.90625,0.28125,0.19140625}\text{(2) Environment dynamic of critic agent}}}
+=
+∏
+t
+=
+0
+T
+−
+1
+π
+g
+​
+(
+a
+t
+g
+∣
+q
+,
+s
+t
+g
+,
+s
+t
++
+1
+c
+)
+⏟
+(1) Generator agent policy
+​
+𝕀
+​
+[
+s
+t
++
+1
+g
+=
+a
+t
+g
+]
+​
+𝒫
+g
+​
+(
+s
+t
++
+2
+c
+∣
+q
+,
+a
+t
+g
+,
+s
+t
++
+1
+c
+)
+⏟
+(2) Environment dynamic of generator agent
+\displaystyle=\prod_{t=0}^{T-1}\underbrace{\pi^{\mathrm{g}}\bigl(\mathrm{a}^{\mathrm{g}}_{t}\mid q,\mathrm{s}^{\mathrm{g}}_{t},\mathrm{s}^{\mathrm{c}}_{t+1}\bigr)}_{{\color[rgb]{0.90625,0.28125,0.19140625}\definecolor[named]{pgfstrokecolor}{rgb}{0.90625,0.28125,0.19140625}\text{(1) Generator agent policy}}}\underbrace{\mathbb{I}\bigl[\ \mathrm{s}^{\mathrm{g}}_{t+1}=\mathrm{a}^{\mathrm{g}}_{t}\bigr]\ \mathcal{P}^{\mathrm{g}}\bigl(\mathrm{s}^{\mathrm{c}}_{t+2}\mid q,\mathrm{a}^{\mathrm{g}}_{t},\mathrm{s}^{\mathrm{c}}_{t+1}\bigr)}_{{\color[rgb]{0.15234375,0.37890625,0.81640625}\definecolor[named]{pgfstrokecolor}{rgb}{0.15234375,0.37890625,0.81640625}\text{(2) Environment dynamic of generator agent}}}
+where
+T
+T
+denotes the maximum number of optimization rounds and
+𝕀
+​
+(
+⋅
+)
+\mathbb{I}(\cdot)
+is the indicator function.
+The first line presents the most compact policy-only factorization, while the latter two further decouple each agent's stochastic decision from its (degenerate) environment transition, thereby making explicit the loci at which learning signals can be injected.
+Although both agents are optimized toward a common objective, their per-round roles are functionally adversarial, jointly forming a minimax-style yet cooperative loop.
+The critic agent
+π
+c
+\pi^{c}
+adversarially probes the generator's current outline, surfacing missing evidence and uncovered key points through newly proposed blueprints — thereby pushing exploration outward.
+The generator agent
+π
+g
+\pi^{g}
+defensively expands and grounds the outline using the freshly retrieved evidence — thereby consolidating exploitation inward.
+This adversarial-yet-aligned interaction progressively refines the outline along the axes of coverage, factual grounding, and structural coherence.
+To reconcile the two locally adversarial roles under a single global objective, both agents share a common cooperative reward that quantifies the quality of the updated outline for the subsequent writer agent and render agent.
+Below, we describe each component of AgentDisCo in detail (as depicted in Figure
+1
+), including the aforementioned (outline) critic and (outline) generator agents.
+Figure 3:
+Overview of the harness optimization in AgentDisCo.
+AgentDisCo can automatically discover design strategies by constructing a meta-optimization harness around the adversarial optimization loop. Specifically, the generator agent—originally tasked with producing target outlines—is repurposed as a scoring agent that evaluates the critic agent's outputs and generates quality signals, thereby enabling systematic optimization of the search queries.
+2.2
+Planner Agent
+Handcrafted Design.
+To accommodate the heterogeneous nature of deep research queries encountered on the industrial platform, we introduce a planner agent that classifies each incoming query into one of two top-level categories, each further subdivided into fine-grained intents, namely
+information seeking
+category (including fact query, status & progress, news & information, deep exploration, and resource locating) and
+decision making
+category (comparison & selection, recommendations & suggestions, how-to guide, travel planning, and purchase decision).
+Beyond the categorical label, the planner also infers an expected response style tailored to the predicted intent, which subsequently conditions the downstream critic and generator agents.
+We instantiate the planner with Gemini-2.5-Pro
+(DeepMind,
+2025a
+)
+as the backbone, and provide the full prompt template in Appendix
+A.3
+.
+Harness Optimization.
+During harness optimization, we grant the planner agent access to generate instructions for the subsequent agentic workflows.
+Concretely, we observe that our code-generation agent (i.e., the Claude-Code agent) specifies instructions such as tips for formulating search queries and selecting hyperparameters for the search engines, which are then passed along to the downstream (outline) critic and generator agents.
+Detailed prompts are provided in Appendix
+B.2
+.
+Formally, we introduce the notation
+π
+Planner
+​
+(
+⋅
+)
+\pi_{\text{Planner}}(\cdot)
+to denote the planner agent, whose function can be written as
+P
+∼
+π
+Planner
+​
+(
+q
+)
+\mathrm{P}\sim\pi_{\text{Planner}}(q)
+.
+In the handcrafted design,
+P
+\mathrm{P}
+represents the intent type and response style conditioned on the input query
+q
+q
+, whereas during harness optimization,
+P
+\mathrm{P}
+additionally includes specified instructions.
+For ease of representation, we omit
+P
+\mathrm{P}
+, since it can be regarded as a complementary explanation attached to the query and thus integrated into
+q
+q
+, namely
+q
+=
+[
+P
+;
+q
+]
+q=[\mathrm{P};\,q]
+.
+2.3
+(Outline) Critic Agent and (Outline) Generator Agent
+Handcrafted Design.
+As described in Section
+2.1
+, the core of AgentDisCo lies in the dual optimization between the critic and generator agents.
+Eq. (
+2
+) reveals that, although both agents assume functionally adversarial roles in each round, they jointly constitute a minimax-style yet cooperative loop: both are optimized toward a shared objective, namely, the production of a high-quality outline that can attain a sufficiently high score under the critic's evaluation.
+The resulting artifact, denoted as
+O
+t
+\mathrm{O}_{t}
+and
+R
+t
+\mathrm{R}_{t}
+, serves as the foundation for the subsequent writing and rendering stages.
+To assess outline quality, our handcrafted design employs the critic agent to produce both a numerical score and an accompanying justification for each candidate outline. The optimization loop is further governed by three control parameters: an exit threshold that determines when the outline is deemed acceptable by the critic, a minimum number of optimization rounds to ensure sufficient refinement, and a maximum number of rounds to bound the overall computational cost.
+Formally, the reward function for
+(
+O
+t
+,
+R
+t
+)
+(\mathrm{O}_{t},\mathrm{R}_{t})
+can be expressed as
+ℛ
+​
+(
+s
+t
+g
+,
+a
+t
+g
+)
+\mathcal{R}(\mathrm{s}_{t}^{\mathrm{g}},\mathrm{a}_{t}^{\mathrm{g}})
+, where
+a
+t
+g
+\mathrm{a}_{t}^{\mathrm{g}}
+denotes the generator's action, i.e., the produced outline
+O
+t
+\mathrm{O}_{t}
+and its rendering
+R
+t
+\mathrm{R}_{t}
+.
+At iteration
+t
++
+1
+t+1
+, the critic agent receives
+(
+O
+t
+,
+R
+t
+)
+(\mathrm{O}_{t},\mathrm{R}_{t})
+as input and outputs an evaluation score that constitutes the reward signal.
+Accordingly, the reward is sampled as
+r
+t
+∼
+π
+c
+​
+(
+a
+t
++
+1
+c
+∣
+s
+t
++
+1
+c
+)
+\mathrm{r}_{t}\sim\pi^{\mathrm{c}}(\mathrm{a}^{\mathrm{c}}_{t+1}\mid\mathrm{s}^{\mathrm{c}}_{t+1})
+, with the critic's state defined as
+s
+t
++
+1
+c
+=
+a
+t
+g
+\mathrm{s}^{\mathrm{c}}_{t+1}=\mathrm{a}_{t}^{\mathrm{g}}
+, thereby coupling the generator's output directly to the critic's input.
+A persistent challenge in multi-round outline optimization is reference management: as the optimization unfolds, the agent must continually decide which documents retrieved in earlier rounds are worth retaining for downstream use and which can be safely discarded.
+Naive strategies risk either prematurely dropping high-quality evidence or overloading the context window with stale and redundant content—both of which degrade the quality of the final outline.
+To address this, we introduce the
+document bank
+, a lightweight recorder and tracker that maintains a persistent view of retrieved references across rounds.
+Once the critic agent produces a set of search queries, the document bank parses each retrieved document into fine-grained evidence snippets, scores documents in parallel for relevance, summarizes their content, and extracts key evidence triples; low-scoring documents are filtered out before reaching the generator agent.
+In this way, the document bank not only compresses raw search results into a structured, citation-ready memory, but also shields the generator agent from contextual noise and redundancy.
+To ensure stable progression and prevent information loss across rounds, each new optimization round enforces the following continuity constraints.
+Firstly, all documents contained in the reference set (i.e.,
+R
+t
+\mathrm{R}_{t}
+in the outline
+O
+t
+\mathrm{O}_{t}
+) are carried over as input to the next round (i.e.,
+t
++
+1
+t+1
+), guaranteeing that previously validated evidence remains accessible to both agents.
+The document bank correspondingly updates its document indices to align with the new round.
+Secondly, while outlines and search queries are fully re-generated at each round,
+the underlying blueprint is only permitted to be modified or expanded
+; deletion of existing key points is discouraged, thereby preserving the structural backbone established in earlier rounds.
+Moreover, each invocation of the critic agent (for refining search queries and blueprints) and the generator agent (for refining outlines) is explicitly conditioned on the concrete content produced in the preceding iteration, ensuring that optimization proceeds incrementally rather than restarting from scratch.
+Harness Optimization.
+Our central insight is that LLMs excel at extracting and summarizing information, but are comparatively weaker at generating effective search queries across heterogeneous retrieval sources and at organizing coherent outlines.
+In this paper, we therefore focus on harness-based optimization for search query generation, leaving outline organization to future work.
+Concretely, we develop a harness that optimizes the (outline) critic agent, whose responsibility is to formulate effective search queries and retrieve high-quality information from web-scale sources.
+As illustrated in Figure
+3
+, we further repurpose the generator agent as a score agent that analyzes the returned search results and provides feedback signals to guide the critic's query refinement.
+In practice, since the search queries are organized under a set of blueprints, evaluating individual results in isolation is insufficient.
+We therefore design several criteria—namely completeness, diversity, search coverage, and internal correlation—and apply them to each search result, aggregating the per-result scores into statistics and distributions over the entire result set.
+These aggregated signals provide the critic with a holistic view of retrieval quality, enabling more targeted query refinement in subsequent rounds.
+The detailed prompt used by the score agent is provided in the Appendix
+B.2
+.
+Figure 4:
+Overview of the render agent in AgentDisCo.
+Our render agent accepts as input a report in either PDF or Markdown format. It first extracts the salient features and structural elements from the report, and then reorganizes the content into one of two presentation modalities: an HTML-based layout or a slide-style layout. Notably, both modalities support pluggable templates and styling components, enabling flexible visual customization. The final output is rendered as a PDF document or a sequence of images, depending on the chosen modality.
+A particularly noteworthy emergent behavior arises during harness optimization: prompted only by a minimal cue—``you are allowed to store and retrieve traces to evolve''—the coding agent (i.e., the Claude-Code agent) autonomously builds a policy bank that records and reuses relevant historical traces, including critic states, generator states, and the aforementioned criterion scores, to guide subsequent optimization.
+Formally, the likelihood of sampling
+τ
+\tau
+can be formulated as follows:
+p
+​
+(
+τ
+)
+=
+∏
+t
+=
+0
+T
+−
+1
+μ
+r
+​
+(
+m
+t
+∣
+q
+,
+s
+t
+g
+,
+s
+t
+c
+,
+M
+t
+)
+⏟
+(1) Retrieve from policy bank
+​
+π
+c
+​
+(
+a
+t
+c
+∣
+q
+,
+s
+t
+g
+,
+s
+t
+c
+,
+m
+t
+)
+⏟
+(2) Critic agent policy
+​
+μ
+w
+​
+(
+M
+t
++
+1
+|
+⋅
+)
+⏟
+(3) Update policy bank
+​
+𝕀
+​
+[
+s
+t
++
+1
+c
+=
+a
+t
+c
+]
+​
+𝒫
+c
+​
+(
+s
+t
++
+1
+g
+∣
+q
+,
+s
+t
+g
+,
+a
+t
+c
+)
+⏟
+(4) Environment dynamic of critic agent
+p(\tau)=\prod_{t=0}^{T-1}\underbrace{\mu^{\mathrm{r}}\bigl(\mathrm{m}_{t}\mid q,\mathrm{s}^{\mathrm{g}}_{t},\mathrm{s}^{\mathrm{c}}_{t},\mathrm{M}_{t}\bigr)}_{{\text{(1) Retrieve from policy bank}}}\underbrace{\pi^{\mathrm{c}}\bigl(\mathrm{a}^{\mathrm{c}}_{t}\mid q,\mathrm{s}^{\mathrm{g}}_{t},\mathrm{s}^{\mathrm{c}}_{t},\mathrm{m}_{t}\bigr)}_{{\color[rgb]{0.15234375,0.37890625,0.81640625}\definecolor[named]{pgfstrokecolor}{rgb}{0.15234375,0.37890625,0.81640625}\text{(2) Critic agent policy}}}\underbrace{\mu^{\mathrm{w}}\bigl(\mathrm{M}_{t+1}|\cdot\bigr)}_{{\text{(3) Update policy bank}}}\underbrace{\mathbb{I}\bigl[\ \mathrm{s}^{\mathrm{c}}_{t+1}=\mathrm{a}^{\mathrm{c}}_{t}\bigr]\ \mathcal{P}^{\mathrm{c}}\bigl(\mathrm{s}^{\mathrm{g}}_{t+1}\mid q,\mathrm{s}^{\mathrm{g}}_{t},\mathrm{a}^{\mathrm{c}}_{t}\bigr)}_{{\color[rgb]{0.90625,0.28125,0.19140625}\definecolor[named]{pgfstrokecolor}{rgb}{0.90625,0.28125,0.19140625}\text{(4) Environment dynamic of critic agent}}}
+(3)
+Here,
+m
+t
+\mathrm{m}_{t}
+denote the trace(s) sampled at step
+t
+t
+from the policy bank
+M
+t
+\mathrm{M}_{t}
+.
+The retrieval process is formulated as
+m
+t
+∼
+μ
+r
+(
+⋅
+∣
+q
+,
+s
+t
+g
+,
+s
+t
+c
+,
+M
+t
+)
+\mathrm{m}_{t}\sim\mu^{\mathrm{r}}\bigl(\cdot\mid q,\mathrm{s}^{\mathrm{g}}_{t},\mathrm{s}^{\mathrm{c}}_{t},\mathrm{M}_{t}\bigr)
+, where
+μ
+r
+\mu^{\mathrm{r}}
+denotes the retrieval function.
+In practice,
+μ
+r
+\mu^{\mathrm{r}}
+is instantiated as a simple BM25-based retriever
+(Robertson and Zaragoza,
+2009
+)
+, which is autonomously implemented by the Claude-Code agent during harness optimization.
+After each step, the newly produced trace is written back into the policy bank, yielding the updated bank
+M
+t
++
+1
+∼
+μ
+w
+(
+⋅
+|
+q
+,
+s
+t
+g
+,
+s
+t
+c
+,
+m
+t
+,
+a
+t
+c
+,
+M
+t
+)
+\mathrm{M}_{t+1}\sim\mu^{\mathrm{w}}\bigl(\cdot|q,\mathrm{s}^{\mathrm{g}}_{t},\mathrm{s}^{\mathrm{c}}_{t},\mathrm{m}_{t},\mathrm{a}^{\mathrm{c}}_{t},\mathrm{M}_{t}\bigr)
+, where
+μ
+w
+\mu^{\mathrm{w}}
+is a lightweight writing function.
+Together,
+μ
+r
+\mu^{\mathrm{r}}
+and
+μ
+w
+\mu^{\mathrm{w}}
+constitute a simple yet effective read-write interface that enables the policy bank to evolve continuously throughout the optimization process.
+2.4
+Writer Agent
+As introduced in Section
+2.3
+, the document bank effectively filters out irrelevant content, thereby alleviating the burden on the model's attentional capacity. Since the generated outline is inherently structured, it is straightforward to partition the outline together with its associated references into a sequence of self-contained chunks, following the strategy of
+Li
+et al.
+(
+2025
+)
+.
+This decomposition reduces the complex task of long-context writing into a series of manageable, attention-focused subtasks, each operating on only the relevant evidence.
+Because each document has already been assigned a unique index within the outline, the relevant evidence for any given section can be retrieved directly from the document bank.
+The composition of each section is therefore not a single monolithic action, but rather a deliberate intra-sectional reasoning cycle: at each step, the writer conditions on the previously generated chunks and continues the narrative in a coherent, context-aware manner.
+This internal monologue is critical for moving beyond shallow summarization toward genuine synthesis across evidence.
+Finally, the system outputs a Markdown-formatted report in which every cited reference is accompanied by its corresponding URL, ensuring full source traceability.
+Notably, the writer agent is additionally conditioned on the response style produced by the planner agent (Section
+2.2
+), ensuring that the generated report remains coherent with the input query and faithfully aligned with the user's intent.
+As discussed in Section
+2.3
+, our key premise is that extracting and summarizing information does not constitute the primary bottleneck for LLMs, in contrast to the more challenging task of generating effective search queries across heterogeneous retrieval sources.
+Accordingly, this paper focuses on harness-based optimization for search query generation, leaving the optimization of the writer agent to future work.
+Figure 5:
+A showcase of AgentDisCo.
+The figure illustrates the end-to-end processing pipeline of an input query: starting from the planner agent, proceeding through the iterative optimization loop between the (outline) critic agent and the (outline) generator agent, and finally passing to the writer agent and the render agent.
+2.5
+Render Agent
+Considering that a clear, intuitive, and visually engaging interface is essential for bridging the gap between raw research outputs and end-user consumption, we develop a render agent that transforms structured research reports into visually rich presentations—ranging from RedNote-style posters to slide decks and HTML pages—thereby allowing users to readily digest, share, and act upon the generated content.
+Existing open-source render agents
+(Sun
+et al.
+,
+2025
+; Zhang
+et al.
+,
+2025a
+; Ma
+et al.
+,
+2025
+; Pang
+et al.
+,
+2025
+; Yan
+et al.
+,
+2026
+)
+rely heavily on complex, tightly coupled pipelines that target a single output modality, making it difficult to accommodate heterogeneous user preferences over presentation forms.
+Moreover, their intricate iterative design and rigid workflow orchestration limit the extensibility of packaging multimodal pipelines as reusable tools or skills, while incurring additional deployment and debugging overhead.
+In contrast, we present a clean and flexible render agent that generalizes across diverse rendering tasks within a unified framework.
+As depicted in Figure
+4
+, our render agent incorporates an information extractor to extract key information points from the report. To enhance its performance, we also feed the blueprints and response style into the information extractor as auxiliary inputs.
+To ensure flexibility in use, we construct a webpage template set
+𝒯
+w
+\mathcal{T}^{\mathrm{w}}
+and a slide template set
+𝒯
+s
+\mathcal{T}^{\mathrm{s}}
+.
+Given an input document, the information extractor first produces structured multimodal assets conditioned on either
+𝒯
+w
+\mathcal{T}^{\mathrm{w}}
+or
+𝒯
+s
+\mathcal{T}^{\mathrm{s}}
+.
+We then apply Gemini-2.5-Pro
+(DeepMind,
+2025a
+)
+as the web composer to generate webpages in HTML format, or Gemini-3-Pro-Image
+(DeepMind,
+2026a
+)
+as the slide generator to produce multiple images for constructing posters or slides.
+In addition, we provide an option to generate Rednote-style posters, in which the textual content is produced by Gemini-2.5-Pro
+(DeepMind,
+2025a
+)
+acting as the content planner.
+We present multiple showcases of our rendered posters in the Appendix
+C.1
+, along with interactive demos.
+2.6
+A Running Example
+To illustrate the end-to-end workflow of AgentDisCo, we present a real execution trace in Figure
+5
+for the example query: ``From 2020 to 2050, how many elderly people will there be in Japan, and what is their consumption potential across various aspects such as clothing, food, housing, and transportation?''.
+First, the planner agent generates a response style based on the input query, which is then passed, together with the query, into the optimization loop between the outline critic agent and the outline generator agent.
+At round
+0
+, the critic agent observes an empty outline and assigns a rating of
+0
+.
+At round
+1
+1
+, the critic agent evaluates the draft and identifies that the housing section is underdeveloped.
+Accordingly, it emits an updated set of blueprints with refined search queries specifically targeting elderly housing consumption.
+The generator then revises the outline in response, while the document bank preserves the valid citations accumulated from turn
+0
+, ensuring incremental knowledge accumulation across turns.
+This trace illustrates how the outline critic and generator agents co-evolve through the exchange of blueprints, rather than one dominating the other.
+Finally, the outline that receives the highest score is forwarded to the downstream agents: the writer agent composes the report by sequentially elaborating each section of the outline, drawing on the associated references retrieved from the document bank, and the render agent subsequently transforms the report into the desired presentation format.
+3
+GALA: A Benchmark for General AI Life Assistants
+3.1
+Data Collection and Synthesis on Deep Research Queries
+Figure 6:
+Comparison between our proposed GALA benchmark with existing benchmarks DeepResearchBench, DeepResearchGym, DeepConsult.
+.
+Early deep research agents primarily focused on isolated tasks such as question answering and translation, and later advanced through tool integration to enable autonomous information retrieval and synthesis.
+To evaluate such systems, a variety of deep research benchmarks
+(Consult,
+2025
+; Coelho
+et al.
+,
+2025
+; Du
+et al.
+,
+2025
+)
+have been developed, with their queries typically sourced from in-house datasets of raw user interactions with web-search-enabled LLM chatbots.
+However, these collected queries predominantly fall into a narrow set of categories, such as scientific reports or consulting-style solutions, and thus fail to reflect the diversity of real-world information needs.
+In contrast, Rednote has emerged as a popular search platform for daily-life information needs, covering a broad spectrum of topics ranging from travel and lifestyle to consumption and entertainment.
+Leveraging the massive user-interaction and content data on the Rednote platform, we collect the top 10,000 highly active users together with their historical interactions—including clicks, comments, and browsing records—to mine their latent deep research needs.
+For example, as shown in Figure
+2
+, if a user repeatedly browses or comments on notes related to ``Hong Kong Disneyland Duffy and Friends Springtime Festival'', we synthesize a corresponding deep research query that captures the user's underlying intent, such as ``During the `Duffy and Friends' Springtime limited-edition event at Hong Kong Disneyland in March 2026, how can one plan a counter-clockwise touring route to avoid crowds, and obtain the latest question bank and practical procedures for the staff survey gifts?''
+Concretely, we employ a strong LLM (i.e., Gemini-3-Flash
+(DeepMind,
+2025b
+)
+) to extract latent deep research interests from user interactions and reformulate them into well-structured deep research queries. Detailed prompts are provided in Appendix
+A.1
+.
+To ensure rigor and high quality, we further apply an inspection pipeline that distills 100 high-quality queries from an initial pool of 260,000 generated candidates.
+The pipeline combines automated LLM-based screening with human verification, together with an optional difficulty-expansion step in between.
+Specifically, we form a review committee powered by Gemini-3-Pro
+(DeepMind,
+2026b
+)
+to automatically evaluate each query along the following criteria:
+(i) naturalness and clarity: whether the query is fluent, unambiguous, and faithfully reflects a plausible user intent;
+(ii) indispensability of Rednote-specific knowledge: whether answering the query genuinely relies on Rednote's user-generated content or community insights, rather than being trivially solvable via generic web search, while ensuring that no user privacy is compromised;
+(iii) real-world plausibility: whether the query type aligns with realistic information-seeking behaviors observed in daily life, rather than representing a contrived or synthetic use case.
+Queries that pass this automatic review are then forwarded to human annotators for final verification, ensuring that the resulting benchmark is both authentic and challenging.
+3.2
+Statistics and Comparisons with Existing Benchmarks
+Our GALA benchmark consists of 100 carefully curated deep research queries.
+Following the taxonomy proposed in DeepResearchBench
+(Du
+et al.
+,
+2025
+)
+, each query is categorized into one of the following 22 topics:
+``Finance & Business'',
+``Science & Technology'',
+``Software Development'',
+``Eduction & Job'',
+``Health'',
+``Literature'',
+``History'',
+``Hardware'',
+``Industrial'',
+``Art & Design'',
+``Games'',
+``Crime & Law'',
+``Entertainment'',
+``Sports & Fitness'',
+``Software'',
+``Transportation'',
+``Religion'',
+``Home & Hobbies'',
+``Travel'',
+``Food & Dining'',
+``Fashion & Beauty'',
+``Social Life''.
+We adopt Gemini-3-Pro
+(DeepMind,
+2026b
+)
+as the query classifier; the detailed prompts are provided in Appendix
+A.2
+.
+The comparison reveals a clear divergence in topical focus across benchmarks.
+Existing benchmarks are heavily skewed toward professional and technical domains: DeepResearchBench
+(Du
+et al.
+,
+2025
+)
+is dominated by ``Science & Technology'' (26.8%),
+``Finance & Business'' (17.0%),
+and ``Education & Jobs'' (10.0%);
+DeepConsult
+(Consult,
+2025
+)
+is overwhelmingly concentrated in ``Finance & Business'' (85.3%), followed by ``Science & Technology'' (7.8%); and DeepResearchGym
+(Coelho
+et al.
+,
+2025
+)
+is led by ``Finance & Business'' (20.0%), ``Science & Technology'' (15.0%), ``History'' (14.0%), ``Social Life'' (13.0%), and ``Health'' (11.0%).
+In contrast, GALA exhibits a markedly different distribution centered on everyday-life domains, with ``Home & Hobbies'' (25.0%), ``Travel'' (18.0%), ``Fashion & Beauty'' (18.0%), and ``Education & Jobs'' (12.0%) as its dominant categories.
+This contrast highlights GALA's unique role in complementing existing benchmarks: rather than re-emphasizing professional research scenarios, GALA targets authentic, daily-life information needs that have been largely underrepresented in prior evaluations.
+For clarity, Figure
+6
+illustrates the top six taxonomic categories of GALA along with their corresponding distributions across DeepResearchBench, DeepConsult, and DeepResearchGym.
+As can be observed, the proposed GALA serves as a critical complement to existing benchmarks, offering essential coverage for the ``Home & Hobbies'', ``Travel'', and ``Fashion & Beauty'' domains that are notably underrepresented in the aforementioned datasets.
+3.3
+Evaluation Protocols
+One prevailing challenge in evaluating open-ended deep research reports is the absence of an exact ground truth for each query.
+To address this, we adopt the RACE metric proposed in DeepResearch Bench
+(Du
+et al.
+,
+2025
+)
+. The evaluation proceeds in two stages:
+(i)
+dynamic dimension weight allocation
+: An LLM (i.e., Gemini-3-Flash
+(DeepMind,
+2025b
+)
+in practice), acting as a meta-evaluator, analyzes the input query to determine the relative importance of four evaluation dimensions: Comprehensiveness, Insight, Instruction-Following, and Readability.
+(ii)
+reference-based pair-wise scoring
+: A separate LLM (i.e., Gemini-3-Flash
+(DeepMind,
+2025b
+)
+in practice) then scores the target report against criteria derived for each dimension.
+The final score is computed as a weighted summation over the per-dimension scores.
+Since RACE evaluation requires a reference report to produce pairwise scores, we release—alongside the open-sourced queries—reports generated by our AgentDisCo to serve as the corresponding reference reports.
+We do not adopt the FACT metric, which is also developed in DeepResearch Bench
+(Du
+et al.
+,
+2025
+)
+.
+FACT verifies the factual accuracy of references by fetching their corresponding web content; however, as time passes, many referenced web pages become inaccessible (e.g., returning 404 errors), making the metric unreliable for reproducible evaluation.
+4
+Experiments
+4.1
+Setups
+Benchmarks.
+We evaluate AgentDisCo on three publicly available benchmarks, together with our proposed GALA benchmark, as detailed below.
+•
+DeepResearch Bench
+(Du
+et al.
+,
+2025
+)
+comprises 100 PhD-level complex research tasks meticulously formulated by domain experts across 22 distinct fields, including Science & Technology, Finance & Business, Software Engineering, and Art & Design.
+•
+DeepConsult
+(Consult,
+2025
+)
+is a specialized collection of prompts tailored for in-depth research within the business and consulting domains. Its queries span a wide range of topics, such as marketing strategy, financial analysis, emerging technology trends, and business planning.
+•
+DeepResearchGym
+(Coelho
+et al.
+,
+2025
+)
+is used to assess performance on real-world, complex queries. It contains 100 queries sampled from the large-scale Researchy Questions dataset
+(Rosset
+et al.
+,
+2024
+)
+, which comprises approximately 96,000 authentic information-seeking queries.
+•
+GALA
+is a deep research benchmark for general AI life assistants, introduced in Section
+3
+.
+Metrics.
+We adopt the official evaluation metrics and recommended judge LLMs for each benchmark.
+•
+DeepResearch Bench
+(Du
+et al.
+,
+2025
+)
+employs two suites of metrics to evaluate different aspects of the system's output:
+(i) RACE (Report Quality) assesses the quality of the generated report against a reference report along four dimensions—Comprehensiveness (Comp.), Insight/Depth (Insight), Instruction-Following (Inst.), and Readability (Read.)—with an overall score computed as a weighted sum of these components.
+(ii) FACT (Web Retrieval via Google Search) measures the effectiveness and reliability of the information retrieval process, including Citation Accuracy (C. Acc.) and the Average Effective Citations per Task (Eff. c.). Following the benchmark's protocol against Gemini-2.5-Pro-DeepResearch, we adopt Gemini-2.5-Pro
+(DeepMind,
+2025a
+)
+as the judge model.
+•
+DeepConsult
+(Consult,
+2025
+)
+evaluates performance via pairwise comparison against the OpenAI-DeepResearch baseline. The primary metrics are win rate, tie rate, and loss rate, supplemented by an average quality score. The judge model is GPT-4.1-20250414
+(OpenAI,
+2025b
+)
+.
+•
+DeepResearchGym
+(Coelho
+et al.
+,
+2025
+)
+employs an LLM judge to assess the generated report along several quality dimensions, including clarity, insightfulness, depth, balance, breadth, and support, as well as an overall average quality score. The judge model is GPT-4.1-mini-20250414
+(OpenAI,
+2025c
+)
+.
+•
+GALA
+evaluates report quality using the RACE metric with Gemini-3-Flash
+(DeepMind,
+2025b
+)
+as the judge model.
+Table 1:
+Performance of agents on DeepResearch Bench in terms of comprehensiveness (Comp.), insight, instruction-following (Inst.), readability (Read.), effective citations (Eff. c.), and citation accuracy (C. acc.). The best results are highlighted with purple color, and the second-best results are highlighted with underlines.
+RACE
+FACT
+Agent systems
+Overall
+Comp.
+Insight
+Inst.
+Read.
+Eff. c.
+C. acc.
+Langchain-Open-Deep-Research
+43.44
+42.97
+39.17
+48.09
+45.22
+-
+-
+Doubao-Research
+44.34
+44.84
+40.56
+47.95
+44.69
+52.62
+52.86
+Kimi-Research
+44.64
+44.96
+41.97
+47.14
+45.59
+-
+-
+Claude-Research
+45.00
+45.34
+42.79
+47.58
+44.66
+-
+-
+Openai-Deepresearch
+46.45
+46.46
+43.73
+49.39
+47.22
+39.79
+75.01
+Gemini-2.5-Pro-Deepresearch
+49.71
+49.51
+49.45
+50.12
+50.00
+165.34
+78.30
+AgentDisCo
+(Gemini-2.5-Pro)
+51.44
+51.23
+52.49
+51.57
+50.39
+63.94
+89.06
+AgentDisCo w/ Harness
+(Gemini-2.5-Pro)
+52.11
+51.89
+53.43
+51.87
+50.45
+69.65
+89.55
+AgentDisCo
+(Claude-Opus-4.6)
+54.02
+53.38
+56.65
+53.11
+51.53
+89.88
+93.56
+Compared Systems
+.
+We benchmark our AgentDisCo system against a suite of leading deep research agents available on the market:
+LangChain-Open-Deep-Research
+(LangChain, Inc.,
+2023
+)
+,
+Doubao-Research
+(Research,
+2026a
+)
+,
+Kimi-Research
+(Research,
+2025b
+)
+,
+Claude-Research
+(anthropic,
+2025
+)
+,
+OpenAI-DeepResearch
+(OpenAI,
+2025a
+)
+, and
+Gemini-2.5-Pro-DeepResearch
+(Research,
+2025a
+)
+.
+Their results on the three public benchmarks are taken directly from
+Li
+et al.
+(
+2025
+); Han
+et al.
+(
+2025
+)
+.
+For the GALA benchmark, to construct competitive baselines, our human annotation team manually collected reports from the official web interfaces of
+Doubao-Research
+(Research,
+2026a
+)
+and
+Qwen-Research
+(Research,
+2026c
+)
+, as well as outputs from
+OpenAI o3-DeepResearch
+(Research,
+2026b
+)
+obtained via its API, with all data acquired in
+April 2026
+.
+In our evaluations, AgentDisCo, instantiated with Gemini-2.5-Pro, serves as the reference system. To analyze the effect of retrieval-source selection, we further introduce two variants.
+AgentDisCo w/ Rednote
+replaces the default retrieval component with the Rednote Search Engine, enabling the agent to retrieve information from Rednote-specific content.
+In addition,
+AgentDisCo w/ Rednote & Google
+performs joint retrieval over both the Rednote Search Engine and Google Search Engine, allowing us to examine whether combining social-media-oriented and general web search sources can provide complementary evidence for report generation.
+Table 2:
+Performance of agents on DeepConsult in terms of win rate and average scores and on DeepResearchGym in terms of clarity (Cla.), depth, balance (Bal.), breadth (Brea.), support (Sup.), and insightfulness (Ins.). The best results are highlighted with purple color, and the second-best results are highlighted with underlines.
+DeepConsult
+DeepResearchGym
+Agent systems
+Win
+Tie
+Lose
+Overall
+Cla.
+Depth
+Bal.
+Brea.
+Sup.
+Ins.
+Overall
+Doubao-research
+29.95
+40.35
+29.70
+5.42
+68.85
+93.12
+83.96
+93.33
+84.38
+83.12
+84.46
+Claude-research
+25.00
+38.89
+36.11
+4.60
+86.67
+96.88
+84.41
+96.56
+26.77
+90.22
+80.25
+Openai-deepresearch
+0.00
+100.00
+0.00
+5.00
+84.90
+98.10
+89.80
+97.40
+88.40
+89.00
+91.27
+Gemini-2.5-pro-deepresearch
+61.27
+31.13
+7.60
+6.70
+90.71
+99.90
+93.37
+99.69
+95.00
+97.45
+96.02
+AgentDisCo
+(Gemini-2.5-Pro)
+53.26
+37.50
+9.23
+6.75
+90.50
+100.00
+93.75
+100.00
+96.25
+93.75
+95.63
+AgentDisCo w/ Harness
+(Gemini-2.5-Pro)
+56.86
+32.47
+10.67
+6.86
+90.98
+100.00
+94.30
+100.00
+97.73
+95.22
+96.21
+AgentDisCo
+(Claude Opus 4.6)
+65.88
+22.47
+11.65
+7.06
+90.85
+100.00
+97.85
+100.00
+98.93
+98.66
+97.54
+4.2
+Main Results
+Results on DeepResearch Bench.
+As shown in Table
+1
+, AgentDisCo consistently outperforms existing deep-research agent systems on DeepResearch Bench.
+When using Gemini-2.5-Pro as the backbone model, AgentDisCo achieves an overall RACE score of 51.44, surpassing the prior system based on Gemini-2.5-Pro, i.e., Gemini-2.5-Pro-Deepresearch.
+The improvement is particularly pronounced in insight, comprehensiveness, and instruction following, where AgentDisCo obtains 52.49, 51.23, 51.57, respectively, compared with 49.45, 49.51, 50.12 from Gemini-2.5-Pro-Deepresearch.
+In contrast, the gain in readability is relatively moderate, suggesting that the advantage of AgentDisCo does not mainly come from more fluent surface-level writing, but rather from producing more substantive, better-supported, and better-structured research content.
+This improvement can be attributed to the disentangled yet collaborative design between the critic agent and the generator agent in our AgentDisCo framework.
+The critic agent iteratively evaluates the intermediate report, identifies missing aspects, weak arguments, and insufficient evidence, and then provides targeted feedback to guide subsequent generation.
+Meanwhile, the generator agent incorporates this feedback to expand the research scope, refine the argument structure, and strengthen evidence grounding.
+Such an iterative critic–generator collaboration naturally improves comprehensiveness and insight, as the system is encouraged to go beyond a single-pass synthesis and progressively discover under-explored perspectives.
+Moreover, although AgentDisCo does not produce the largest number of effective citations, it achieves substantially higher citation accuracy.
+Specifically, AgentDisCo with Gemini-2.5-Pro obtains a citation accuracy of 89.06, improving over Gemini-2.5-Pro-Deepresearch by over 10 points. This indicates that AgentDisCo favors reliable and relevant evidence usage rather than simply increasing the citation count.
+We further evaluate the effect of the harness optimization. AgentDisCo w/ Harness improves the Gemini-2.5-Pro-based AgentDisCo from 51.44 to 52.11 in overall RACE score, with consistent gains across all RACE dimensions, including comprehensiveness, insight, instruction-following, and readability.
+It also improves factual grounding, increasing effective citations from 63.94 to 69.65 and citation accuracy from 89.06 to 89.55.
+These results demonstrate that the harness optimization provides a stable additional benefit by better coordinating the interaction process and improving the reliability of evidence integration.
+Finally, we instantiate AgentDisCo with a stronger frontier backbone model, Claude-Opus-4.6
+(anthropic,
+2026
+)
+, to examine the scalability of our framework.
+AgentDisCo with Claude-Opus-4.6 achieves the best overall performance, reaching 54.02 on RACE.
+Notably, it obtains a substantial insight score of 56.65, far exceeding all other systems, which suggests that AgentDisCo can effectively leverage stronger reasoning capabilities from advanced LLMs.
+It also achieves the highest citation accuracy of 93.56, showing that the framework remains highly reliable when scaled to a more capable base model.
+Overall, these results indicate that AgentDisCo is both effective and scalable: its disentangled yet collaborative critic-generator mechanism improves research depth, evidence reliability, and report quality across different backbone models.
+Results on DeepConsult and DeepResearchGym.
+To examine whether AgentDisCo generalizes beyond our main evaluation setting, we further evaluate it on DeepConsult and DeepResearchGym, as reported in Table
+2
+.
+Overall, AgentDisCo exhibits strong and robust performance across both benchmarks.
+With Gemini-2.5-Pro as the backbone, AgentDisCo achieves an overall score of 6.75 on DeepConsult, slightly surpassing the Gemini-2.5-Pro-deepresearch baseline in average score.
+On DeepResearchGym, it obtains nearly perfect scores in both Depth and Breadth, indicating that the proposed iterative research procedure is effective in expanding both the depth and coverage of the generated reports.
+As analyzed in the previous subsection, we further evaluate the effect of the harness optimization.
+Compared with the vanilla Gemini-based AgentDisCo, AgentDisCo w/ Harness improves the DeepConsult win rate from 53.26% to 56.86% and the overall score from 6.75 to 6.86.
+On DeepResearchGym, the harness also raises the overall score from 95.63 to 96.21, yielding improvements in clarity, balance, support, and insightfulness while preserving nearly perfect scores in Depth and Breadth.
+These results suggest that the harness optimization does not merely increase coverage but also improves the reliability and controllability of the agent execution process, allowing the planned research workflow to be more effectively translated into high-quality final reports.
+Moreover, we instantiate AgentDisCo with a stronger frontier backbone model, Claude-Opus-4.6
+(anthropic,
+2026
+)
+, to examine the scalability of our framework. This variant achieves the best performance on both benchmarks: it obtains the highest DeepConsult win rate of 65.88% and the best overall score of 7.06, and also achieves the highest DeepResearchGym overall score of 97.54. In particular, it ranks first in Balance, Support, and Insightfulness, while maintaining perfect scores in Depth and Breadth.
+These results indicate that AgentDisCo can effectively leverage stronger underlying models, suggesting that the proposed framework scales favorably with frontier model capability.
+Taken together, the results provide evidence for the effectiveness of AgentDisCo's core design.
+The consistently high Depth and Breadth scores reflect the benefit of the planner's iterative research cycle, which enables the system to progressively expand and refine the information space beyond static one-shot planning.
+Results on GALA.
+Beyond existing benchmarks, we further construct a lifestyle-oriented deep research benchmark, GALA, as introduced in Section
+3
+.
+Table
+3
+reports the evaluation results in terms of comprehensiveness, insight, instruction-following, and readability.
+In this reference-based evaluation, AgentDisCo, instantiated with Gemini-2.5-Pro, serves as the reference system and is therefore assigned a score of 50.00 across all dimensions.
+Notably, mainstream deep research systems, including Doubao-Research, Qwen-Research, and OpenAI o3-DeepResearch, obtain lower overall scores than this reference.
+This result highlights the advantage of the AgentDisCo framework itself: rather than relying solely on the capability of a strong backbone model, AgentDisCo benefits from its structured workflow that combines iterative planning, targeted evidence acquisition, and hierarchical synthesis, which is particularly important for lifestyle-oriented research tasks requiring practical relevance, contextual understanding, and user-aligned recommendations.
+We next examine the effect of harness optimization. AgentDisCo w/ Harness improves the overall score from 50.00 to 50.58, with the most evident gain appearing in insight.
+This suggests that the harness helps stabilize the execution of the multi-step research workflow and enables the agent to produce more informative and analytically useful responses.
+We then study the impact of retrieval-source selection.
+From the table, we can observe that AgentDisCo w/ Rednote achieves a higher overall score of 51.02 and obtains the best readability score among all systems.
+This indicates that Rednote provides domain-relevant lifestyle content that aligns well with the information needs in GALA, leading to responses that are more natural and accessible for lifestyle-oriented scenarios.
+Combining domain-specific retrieval with harness optimization yields the strongest performance.
+AgentDisCo w/ Rednote & Harness achieves the best overall score of 51.90 and ranks first in comprehensiveness, insight, and instruction-following.
+In particular, its insight score reaches 53.44, showing that lifestyle-oriented social content, when integrated through a more reliable execution harness, can substantially improve the practical and contextual value of the generated reports.
+This demonstrates that the gains from Rednote are further amplified when the agent's research process is better controlled and more consistently executed.
+Table 3:
+Performance of agents on our proposed GALA benchmark in terms of comprehensiveness (Comp.), insight, instruction-following (Inst.), and readability (Read.). The best results are highlighted in purple, and the second-best results are underlined.
+RACE
+Agent systems
+Overall
+Comp.
+Insight
+Inst.
+Read.
+Doubao-Research (2026-04)
+49.82
+50.87
+47.42
+50.65
+50.86
+Qwen-Research (2026-04)
+46.69
+45.38
+45.36
+47.23
+49.56
+OpenAI o3-DeepResearch (2026-04)
+45.88
+45.37
+42.88
+48.04
+47.72
+AgentDisCo
+(Gemini-2.5-Pro)
+50.00
+50.00
+50.00
+50.00
+50.00
+AgentDisCo w/ Harness
+(Gemini-2.5-Pro)
+50.58
+50.41
+51.24
+50.16
+49.85
+AgentDisCo w/ Rednote
+(Gemini-2.5-Pro)
+51.02
+50.88
+51.11
+51.25
+50.95
+AgentDisCo w/ Rednote & Harness
+(Gemini-2.5-Pro)
+51.90
+51.61
+53.44
+51.78
+50.67
+AgentDisCo w/ Rednote & Google
+(Gemini-2.5-Pro)
+50.95
+51.21
+50.44
+50.78
+49.79
+4.3
+Analysis
+Statistics of Outline Optimizations.
+One of the core ideas of AgentDisCo is its disentangled yet collaborative framework, in which different agents are assigned specialized roles and interact through an iterative optimization process.
+To directly assess whether this design improves the quality of the generated outline, we evaluate the effect of our outline optimization module in isolation.
+Since the optimization process is initiated by the critic agents after an initial outline has been produced, at least two rounds are required to observe the effect of critic-guided refinement.
+To isolate and quantify the contribution of outline optimization, we conduct an ablation study on the end-to-end benchmarks, as reported in Figures
+8
+and
+8
+.
+Specifically, we collect samples from DeepResearch Bench and DeepResearchGym and apply up to three rounds of outline optimization, while keeping the subsequent writing strategy unchanged across all settings.
+This design ensures that performance differences can be primarily attributed to the quality of the optimized outlines rather than variations in the writing process.
+The benefits of iterative refinement are consistent across both benchmarks.
+On DeepResearch Bench, the overall score increases steadily as the number of optimization rounds grows, with particularly notable improvements in comprehensiveness and insight.
+This supports our hypothesis that each optimization round enables the planner to construct a more detailed, coherent, and logically organized outline.
+A similar trend is observed on DeepResearchGym, where later optimization rounds achieve substantially stronger scores in depth and breadth, indicating more exhaustive coverage of the target topic.
+Figure 7:
+End-to-end scores with varying rounds of outline optimization on Deepresearch Bench.
+Figure 8:
+End-to-end scores with varying rounds of outline optimization on DeepresearchGym.
+Consistency between Harness-Based Critic Optimization and End-to-End Performance.
+To evaluate the effectiveness of the proposed harness, we examine whether improvements measured by the harness are consistent with end-to-end performance gains.
+In the scoring agent of our harness framework, whose detailed prompts are provided in Appendix
+B.2
+, we introduce an intermediate metric, named Search Coverage, ranging from 0 to 100, to quantify the quality and coverage of the generated search queries.
+A higher Search Coverage score indicates that the queries are more likely to capture the key aspects required for answering the research question.
+Specifically, we evaluate the Search Coverage scores at optimization rounds 0, 10, and 20, and compare them with the corresponding end-to-end scores on DeepResearch Bench. To reduce evaluation cost while maintaining a representative assessment, we randomly sample 50 examples from DeepResearch Bench as the evaluation pool.
+As shown in Figure
+9
+, Search Coverage increases from 62.50 at round 0 to 79.25 at round 10 and further to 82.05 at round 20. This trend is accompanied by a consistent improvement in the end-to-end overall score, which increases from 51.41 to 51.82 and then to 52.11.
+These results indicate that the harness-based optimization signal is well aligned with downstream benchmark performance.
+In particular, improving the coverage and quality of search queries leads to more effective evidence acquisition, which in turn contributes to better final reports. Therefore, the proposed harness provides a meaningful and practical intermediate optimization objective for improving end-to-end deep research performance.
+Figure 9:
+Consistency of harness optimization over critic agent to end-to-end optimization with varying rounds of harness optimization on Deepresearch Bench.
+Superiority of Rednote Search over Life-style Search Queries.
+To better understand the role of retrieval sources in lifestyle-oriented deep research, we further compare Rednote Search with general web search.
+Although both sources can be queried with lifestyle-related search queries, they differ substantially in content style and information structure: Google Search primarily retrieves general web pages, while Rednote Search provides user-generated, experience-oriented, and scenario-specific content that is often more aligned with daily-life decision making.
+This raises an important question: whether the improvement comes merely from using lifestyle-style queries, or from the domain-specific characteristics of Rednote as a retrieval source.
+Besides the results reported in Section
+4.2
+, we further evaluate joint retrieval over Rednote and Google and report the results in Table
+3
+.
+AgentDisCo w/ Rednote & Google obtains an overall score of 50.95, which is substantially higher than using the default Google-based retrieval alone, but slightly lower than using Rednote alone. Notably, joint retrieval achieves the second-best comprehensiveness score of 51.21, indicating that Google can complement Rednote by broadening factual and topical coverage.
+However, this broader coverage does not translate into better overall performance: compared with AgentDisCo w/ Rednote, the joint-retrieval variant shows lower scores in insight, instruction-following, and readability. This suggests that general web search may introduce less lifestyle-specific or less user-oriented evidence, increasing the burden of evidence filtering and synthesis.
+Overall, these findings indicate that the advantage of Rednote does not simply come from issuing lifestyle-related queries, but from the nature of the retrieved content itself. Rednote contributes domain-specific, experience-rich, and practically grounded evidence, which is particularly valuable for GALA-style tasks.
+Meanwhile, adding Google can improve coverage, but without effective filtering and synthesis, increased retrieval breadth may introduce noise and reduce readability.
+Therefore, for lifestyle-oriented deep research, domain-relevant retrieval quality is more important than retrieval breadth alone.
+5
+Real-World Applications and Conclusion
+We apply AgentDisCo in our AI
+Our AgentDisCo without render agent have domain-specific information pool, and
+In this paper, we presented
+AgentDisCo
+, a disentangled and collaborative agentic framework for open-ended deep research. By separating information exploration from information exploitation and formulating their interaction as an iterative adversarial optimization process, AgentDisCo enables critic and generator agents to progressively refine search queries and research outlines before final report synthesis. We further introduced a meta-optimization harness that automatically discovers reusable design strategies for improving the critic agent, allowing the framework to enhance its own search and planning behavior with limited human intervention.
+Extensive experiments on DeepResearchBench, DeepConsult, and DeepResearchGym demonstrate that AgentDisCo achieves competitive or superior performance compared with leading closed-source deep research systems. To better reflect real-world user needs, we also introduced
+GALA
+, a lifestyle-oriented deep research benchmark mined from users' browsing histories, and showed that AgentDisCo is effective in this more practical setting.
+Finally, we developed a rendering agent and a product demonstration, ``AutoResearch Your Interest'', to make deep research outputs more accessible and personalized for end users. We release our benchmark, code, demo, and evaluation harness to facilitate future research on open-ended, user-centered deep research agents.
+References
+anthropic (2025)
+Meet claude
+.
+External Links:
+Link
+Cited by:
+§1
+,
+§4.1
+.
+anthropic (2026)
+Introducing claude opus 4.6
+.
+External Links:
+Link
+Cited by:
+§4.2
+,
+§4.2
+.
+J. Coelho, J. Ning, J. He, K. Mao, A. Paladugu, P. Setlur, J. Jin, J. Callan, J. Magalh~aes, B. Martins,
+et al.
+(2025)
+Deepresearchgym: a free, transparent, and reproducible evaluation sandbox for deep research
+.
+arXiv preprint arXiv:2505.19253
+.
+Cited by:
+§1
+,
+§3.1
+,
+§3.2
+,
+3rd item
+,
+3rd item
+.
+D. Consult (2025)
+Deep consult
+.
+External Links:
+Link
+Cited by:
+§1
+,
+§3.1
+,
+§3.2
+,
+2nd item
+,
+2nd item
+.
+G. DeepMind (2025a)
+Gemini 2.5
+.
+External Links:
+Link
+Cited by:
+§1
+,
+§2.2
+,
+§2.5
+,
+1st item
+.
+G. DeepMind (2025b)
+Gemini-3-flash
+.
+External Links:
+Link
+Cited by:
+§1
+,
+§3.1
+,
+§3.3
+,
+4th item
+.
+G. DeepMind (2026a)
+Gemini 3 pro image
+.
+External Links:
+Link
+Cited by:
+§2.5
+.
+G. DeepMind (2026b)
+Gemini 3 pro
+.
+External Links:
+Link
+Cited by:
+§3.1
+,
+§3.2
+.
+M. Du, B. Xu, C. Zhu, X. Wang, and Z. Mao (2025)
+Deepresearch bench: a comprehensive benchmark for deep research agents
+.
+arXiv preprint arXiv:2506.11763
+.
+Cited by:
+§1
+,
+§3.1
+,
+§3.2
+,
+§3.3
+,
+§3.3
+,
+1st item
+,
+1st item
+.
+R. Han, Y. Chen, Z. CuiZhu, L. Miculicich, G. Sun, Y. Bi, W. Wen, H. Wan, C. Wen, S. Maître, G. Lee, V. Tirumalashetty, E. Xue, Z. Zhang, S. Haykal, B. Gokturk, T. Pfister, and C. Lee (2025)
+Deep researcher with test-time diffusion
+.
+External Links:
+2507.16075
+,
+Link
+Cited by:
+§1
+,
+§4.1
+.
+LangChain, Inc. (2023)
+LangChain: building applications with LLMs through composability
+.
+External Links:
+Link
+Cited by:
+§4.1
+.
+Y. Lee, R. Nair, Q. Zhang, K. Lee, O. Khattab, and C. Finn (2026)
+Meta-harness: end-to-end optimization of model harnesses
+.
+arXiv preprint arXiv:2603.28052
+.
+Cited by:
+§1
+.
+Y. Lei, S. Si, W. Wang, Y. Wu, G. Chen, F. Qi, and M. Sun (2025)
+RhinoInsight: improving deep research through control mechanisms for model behavior and context
+.
+arXiv preprint arXiv:2511.18743
+.
+Cited by:
+§1
+.
+Z. Li, X. Guan, B. Zhang, S. Huang, H. Zhou, S. Lai, M. Yan, Y. Jiang, P. Xie, F. Huang, J. Zhang, and J. Zhou (2025)
+WebWeaver: structuring web-scale evidence with dynamic outlines for open-ended deep research
+.
+External Links:
+2509.13312
+,
+Link
+Cited by:
+§1
+,
+§2.4
+,
+§4.1
+.
+Q. Ma, S. Wang, Y. Chen, Y. Tang, Y. Yang, C. Guo, B. Gao, Z. Xing, Y. Sun, and Z. Zhang (2025)
+Human-agent collaborative paper-to-page crafting for under $0.1
+.
+In
+arXiv preprint arXiv:2510.19600
+,
+External Links:
+Link
+Cited by:
+§2.5
+.
+OpenAI (2025a)
+Deep research system card
+.
+External Links:
+Link
+Cited by:
+§1
+,
+§1
+,
+§4.1
+.
+OpenAI (2025b)
+GPT-4.1-20250414.
+.
+External Links:
+Link
+Cited by:
+2nd item
+.
+OpenAI (2025c)
+GPT-4.1-mini-20250414.
+.
+External Links:
+Link
+Cited by:
+3rd item
+.
+W. Pang, K. Q. Lin, X. Jian, X. He, and P. Torr (2025)
+Paper2Poster: towards multimodal poster automation from scientific papers
+.
+In
+arXiv preprint arXiv:2505.21497
+,
+External Links:
+Link
+Cited by:
+§2.5
+.
+D. D. Research (2026a)
+Doubao deep research
+.
+External Links:
+Link
+Cited by:
+§1
+,
+§1
+,
+§4.1
+,
+§4.1
+.
+G. Research (2025a)
+Gemini research
+.
+External Links:
+Link
+Cited by:
+§1
+,
+§4.1
+.
+K. D. Research (2025b)
+Kimi deep research
+.
+External Links:
+Link
+Cited by:
+§4.1
+.
+O. D. Research (2026b)
+O3 deep research
+.
+External Links:
+Link
+Cited by:
+§1
+,
+§4.1
+.
+Q. D. Research (2026c)
+Qwen deep research
+.
+External Links:
+Link
+Cited by:
+§1
+,
+§4.1
+.
+S. Robertson and H. Zaragoza (2009)
+The probabilistic relevance framework: bm25 and beyond
+.
+Vol.
+4
+,
+Now Publishers Inc
+.
+Cited by:
+§2.3
+.
+C. Rosset, H. Chung, G. Qin, E. C. Chau, Z. Feng, A. Awadallah, J. Neville, and N. Rao (2024)
+Researchy questions: a dataset of multi-perspective, decompositional questions for llm web agents
+.
+arXiv preprint arXiv:2402.17896
+.
+Cited by:
+3rd item
+.
+T. Sun, E. Pan, Z. Yang, K. Sui, J. Shi, X. Cheng, T. Li, W. Huang, G. Zhang, J. Yang, and Z. Li (2025)
+P2P: automated paper-to-poster generation and fine-grained benchmark
+.
+In
+arXiv preprint arXiv:2505.17104
+,
+External Links:
+Link
+Cited by:
+§2.5
+.
+Z. Yan, J. Jin, Y. Ma, S. Wang, J. Hu, W. Jiao, Y. Lu, and L. Zhang (2026)
+GlyphBanana: advancing precise text rendering through agentic workflows
+.
+In
+arXiv preprint arXiv:2603.12155
+,
+External Links:
+Link
+Cited by:
+§2.5
+.
+Z. Zhang, X. Zhang, J. Wei, Y. Xu, and C. You (2025a)
+PosterGen: aesthetic-aware paper-to-poster generation via multi-agent llms
+.
+In
+arXiv preprint arXiv:2508.17188
+,
+Cited by:
+§2.5
+.
+Z. Zhang, X. Zhang, J. Wei, Y. Xu, and C. You (2025b)
+Postergen: aesthetic-aware paper-to-poster generation via multi-agent llms
+.
+arXiv preprint arXiv:2508.17188
+.
+Cited by:
+§1
+.
+Appendix
+Appendix A
+Prompt Design
+A.1
+Prompt for Deep Research Query Miner
+As depicted in Figure
+2
+, the query miner is designed to elicit users' latent interests by systematically analyzing their browsing history.
+The detailed prompts are listed below.
+A.2
+Prompt for Deep Research Query Classification
+As discussed in Section
+3
+, to facilitate the analysis of complex research queries, we introduce a query classifier, the details of which are elaborated as follows.
+A.3
+Prompt for Planner Agent
+As described in Section
+2
+, the primary objective of our planner agent is to interpret user intent and generate corresponding guidance cues and response style specifications to direct the subsequent agents accordingly.
+The detailed prompt is listed as follows.
+A.4
+Prompt for Outline Critic Agent
+As introduced in Section
+2
+, the outline critic agent is designed to evaluate the input outline and subsequently refine the corresponding blueprints along with their accompanying search queries.
+The detailed prompt is shown as follows.
+A.5
+Prompt for Outline Generator Agent
+As specified in Section
+2
+, the outline generator collaborates with the outline critic agent in an iterative refinement process to progressively optimize the generated outline.
+A.6
+Prompt for Writer Agent
+As described in Section
+2
+, the writer agent operates sequentially, commencing with the first chapter from scratch, whereby each subsequent chapter is generated by following a continuation paradigm, taking the previously written chapters as contextual inputs.
+Appendix B
+Harness Optimization
+B.1
+Harness Instruction
+One of the key components of our harness is the skill markdown file, which explicitly defines the permissible and impermissible operations for the code agent (i.e., Claude Code, as employed in this study).
+B.2
+Prompts in Harness
+As introduced in Section
+2
+, the outline generator agent is repurposed as a scorer agent, the prompt of which is presented as follows.
+Figure 10:
+Gallery of diverse template styles and types
+, including slides, posters, and portrait-format images. Our render agent offers extensive stylistic choices, accommodating diverse user preferences.
+Appendix C
+Gallery of Templates
+C.1
+Gallery of Templates in Render Agent
+As described in Section
+2.5
+, the render agent offers a diverse collection of plug-in style templates, representative examples of which are illustrated in Figure
+10
+.
+Experimental support, please
+view the build logs
+for errors. Generated by
+L
+A
+T
+E
+xml
+.
+Instructions for reporting errors
+We are continuing to improve HTML versions of papers, and your feedback helps enhance accessibility and mobile
+support. To report errors in the HTML that will help us improve conversion and rendering, choose any of the
+methods listed below:
+Click the "Report Issue"
+(
+)
+button, located in the page header.
+Tip:
+You can select the relevant text first, to include it in your report.
+Our team has already identified
+the following issues
+. We appreciate your time reviewing and reporting rendering errors we
+may not have found yet. Your efforts will help us improve the HTML versions for all readers, because disability
+should not be a barrier to accessing research. Thank you for your continued support in championing open access for
+all.
+Have a free development cycle? Help support accessibility at arXiv! Our collaborators at LaTeXML maintain a
+list of packages that need conversion
+, and welcome
+developer contributions
+.
+We gratefully acknowledge support from
+our
+major funders
+,
+member institutions
+,
+,
+and all contributors.
+About
+·
+Help
+·
+Contact
+·
+Subscribe
+·
+Copyright
+·
+Privacy
+·
+Accessibility
+·
+Operational Status
+(opens in new tab)
+Major funding support from
