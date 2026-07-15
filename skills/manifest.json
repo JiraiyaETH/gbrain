@@ -278,6 +278,11 @@
       "name": "skill-optimizer",
       "path": "skill-optimizer/SKILL.md",
       "description": "Self-evolving skill optimization via gbrain skillopt — SkillOpt-paper-grounded text-space optimizer with validation gating (median-of-3 + epsilon=0.05), bundled-skill safety, bootstrap review sentinel, per-skill DB lock, and atomic versioned writes."
+    },
+    {
+      "name": "design-heist",
+      "path": "design-heist/SKILL.md",
+      "description": "Point at a website (or app/deck), extract its design language and signature components, re-create them until they pass a taste gate, and encode the result as a reusable brand book in ~/Projects/design-library. Output is a transferable playbook (tokens, motion physics, component recipes), never a clone."
     }
   ],
   "dependencies": {
