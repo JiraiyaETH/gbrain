@@ -335,6 +335,14 @@ function collectValidationErrors(
         // Explicit `---` opener → ≥1 reserved key (observed dream corruption).
         // Bare-key opener → ≥2 DISTINCT reserved keys (avoid false-rejecting a
         // single-reserved-key YAML doc example in a body).
+        //
+        // KNOWN LIMITATION (Codex QA round 2): a body-leading unfenced YAML
+        // EXAMPLE that itself contains ≥2 distinct reserved keys (e.g. `type:`
+        // + `title:`) closed by `---` is byte-identical to the real dream
+        // double-frontmatter corruption, so it IS rejected here on purpose
+        // (fail-closed). The caller-facing error tells them to fence the example
+        // (```yaml … ```); a legitimate doc example should be fenced regardless.
+        // Pinned by the 'KNOWN LIMITATION: unfenced 2-reserved-key …' test.
         const reservedThresholdMet = explicitOpener
           ? reservedSeen.size >= 1
           : reservedSeen.size >= 2;

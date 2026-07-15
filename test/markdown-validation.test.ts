@@ -320,18 +320,39 @@ describe('parseMarkdown validation surface', () => {
       expect(parsed.errors).toEqual([]);
     });
 
-    // P1-2 (Codex QA): a documentation page whose BODY leads with an unfenced
-    // YAML example that happens to contain ONE reserved key (`type:`) plus
-    // domain keys, closing at `---`, must NOT be hard-rejected. The bare-key
-    // opener path now requires ≥2 DISTINCT reserved keys.
-    test('doc page with a single-reserved-key unfenced YAML example is ACCEPTED (P1-2)', () => {
+    // P1-2 (Codex QA round 2): a documentation page whose BODY LEADS DIRECTLY
+    // with an unfenced YAML example — the FIRST non-empty body line is the
+    // reserved-key line itself (`type: concept`), so the bare-key-opener path
+    // IS entered and the ≥2-DISTINCT-reserved-keys rule is actually exercised.
+    // With ONE reserved key (`type:`) plus domain keys, closing at `---`, it
+    // must NOT be hard-rejected. (The earlier version of this test led with a
+    // prose line, so `startsSecondBlock` was false and the detector never ran —
+    // it was vacuous and passed even before the ≥2 rule existed.)
+    test('doc page with a single-reserved-key body-leading unfenced YAML example is ACCEPTED (P1-2)', () => {
       const md =
         `${fence}\ntype: guide\ntitle: How pages are typed\n${fence}\n\n` +
-        `A page's frontmatter looks like this:\n\n` +
         `type: concept\nheading: Do Things That Don't Scale\naudience: founders\n` +
         `---\n\nThat closing rule ends the example.`;
       const parsed = parseMarkdown(md, undefined, { validate: true });
       expect(parsed.errors!.map(e => e.code)).not.toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    // KNOWN LIMITATION (Codex QA round 2, P1-B): a body-leading unfenced YAML
+    // EXAMPLE that contains TWO distinct reserved keys (`type:` + `title:`),
+    // closed by `---`, is INDISTINGUISHABLE from the real dream double-frontmatter
+    // corruption — same byte shape. We reject it ON PURPOSE (fail-closed): callers
+    // get an actionable error telling them to fence the example (```yaml … ```),
+    // which is the documented escape hatch. A legitimate doc example should be
+    // fenced anyway. This test pins the rejection so the limitation is a
+    // deliberate, documented contract — not an accidental regression.
+    test('KNOWN LIMITATION: unfenced 2-reserved-key body-leading YAML example is rejected (fence it)', () => {
+      const md =
+        `${fence}\ntype: guide\ntitle: How pages are typed\n${fence}\n\n` +
+        `type: concept\ntitle: Do Things That Don't Scale\naudience: founders\n` +
+        `---\n\nThat closing rule ends the example.`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      // Rejected on purpose — the fix is to fence the example, not to loosen the guard.
+      expect(parsed.errors!.map(e => e.code)).toContain('DUPLICATE_FRONTMATTER');
     });
 
     // P1-2 corruption guard: a bare-key-led region with TWO reserved keys
