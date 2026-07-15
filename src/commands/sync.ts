@@ -12,6 +12,7 @@ import {
   resolveSlugForPath,
   unacknowledgedSyncFailures,
   acknowledgeFailures,
+  clearSentinelFailures,
   loadSyncFailures,
   formatCodeBreakdown,
   applySyncFailureGate,
@@ -1787,6 +1788,13 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       detachedWorkingTreeManifest.renamed.length > 0);
 
   if (lastCommit === headCommit && !versionMismatch && !versionNeverSet && !hasDetachedWorkingTreeChanges) {
+    // Self-heal a resolved history rewrite: an `up_to_date` return means HEAD
+    // matches the bookmark, so no rewrite is live. Clear any stale `<head>`
+    // sentinel for this source — this short-circuit never reaches the failure
+    // gate (which does the same reconcile), so without this the sentinel from a
+    // past force-push would wedge doctor's sync_failures at FAIL forever,
+    // unreachable by --skip-failed / --retry-failed (issue #1939 follow-up).
+    clearSentinelFailures(opts.sourceId ?? DEFAULT_SOURCE_ID);
     return {
       status: 'up_to_date',
       fromCommit: lastCommit,

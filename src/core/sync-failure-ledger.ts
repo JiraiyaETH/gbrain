@@ -499,6 +499,32 @@ export function clearFailures(sourceId: string, paths: string[]): void {
 }
 
 /**
+ * Remove stale infra-sentinel rows (`<head>`, …) for one source. A sentinel
+ * records "a history rewrite was detected on THIS source during a past run" —
+ * it HARD-BLOCKS and is never acknowledged by `--skip-failed` (a rewrite must
+ * block advancing the bookmark to a tree that's gone). But once a LATER sync
+ * run for that source completes WITHOUT re-detecting a rewrite (up_to_date,
+ * synced, or first_sync), the source has re-baselined against live HEAD and the
+ * old sentinel is stale — it would otherwise wedge doctor's `sync_failures`
+ * check at FAIL forever, unreachable by any CLI path (acknowledge/auto-skip both
+ * refuse sentinels; the pinned SHA is gone so retry never re-drains it).
+ *
+ * Source-scoped (never touches another source's rows — #1939 Codex #2). Returns
+ * the number of sentinel rows removed. No-op when the source has none.
+ */
+export function clearSentinelFailures(sourceId: string): number {
+  return withLedgerLock(() => {
+    const entries = loadSyncFailures();
+    const kept = entries.filter(
+      e => !(e.source_id === sourceId && !isSkippablePath(e.path)),
+    );
+    const removed = entries.length - kept.length;
+    if (removed > 0) _writeAll(kept);
+    return removed;
+  });
+}
+
+/**
  * Acknowledge OPEN file failures (human `--skip-failed`). Scoped to one
  * source when `sourceId` is given (never acks another source — #1939 Codex
  * #2). Sentinels (`<head>`) are NEVER acknowledged this way.
@@ -693,6 +719,16 @@ export async function applySyncFailureGate(input: SyncGateInput): Promise<SyncGa
   const threshold = input.threshold ?? resolveAutoSkipThreshold();
   const sentinels = input.failedFiles.filter(f => !isSkippablePath(f.path));
   const fileFailures = input.failedFiles.filter(f => isSkippablePath(f.path));
+
+  // Self-heal a resolved history rewrite: this run produced NO fresh sentinel,
+  // so any pre-existing `<head>` row for this source is stale (the source has
+  // re-baselined against live HEAD). Clear it — nothing else can (acknowledge
+  // and auto-skip both refuse sentinels; the pinned SHA is gone so retry never
+  // re-drains it). Guarded by sentinels.length so a run that DID detect a
+  // rewrite still hard-blocks below.
+  if (sentinels.length === 0) {
+    clearSentinelFailures(input.sourceId);
+  }
 
   // Fast path: clean run touched no failures and no successes — nothing to
   // reconcile in the ledger, just advance.

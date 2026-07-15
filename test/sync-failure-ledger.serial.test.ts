@@ -119,6 +119,29 @@ describe('#3 sentinel never auto-skips', () => {
     expect(isSkippablePath('people/x.md')).toBe(true);
     expect(isSkippablePath('<head>')).toBe(false);
   });
+
+  test('clearSentinelFailures removes only sentinel rows for the given source', async () => {
+    const { recordFailures, clearSentinelFailures, loadSyncFailures } = await L();
+    recordFailures('s', [{ path: '<head>', error: 'rewrite' }], 'c1');
+    recordFailures('s', [{ path: 'people/x.md', error: 'YAML parse failed' }], 'c1');
+    recordFailures('other', [{ path: '<head>', error: 'rewrite' }], 'c1');
+
+    const removed = clearSentinelFailures('s');
+    expect(removed).toBe(1);
+    const rows = loadSyncFailures();
+    // 's' keeps its real file failure; 'other' keeps its sentinel.
+    expect(rows.map(r => `${r.source_id}:${r.path}`).sort()).toEqual([
+      'other:<head>',
+      's:people/x.md',
+    ]);
+  });
+
+  test('clearSentinelFailures is a no-op when the source has no sentinel', async () => {
+    const { recordFailures, clearSentinelFailures, loadSyncFailures } = await L();
+    recordFailures('s', [{ path: 'a.md', error: 'e' }], 'c1');
+    expect(clearSentinelFailures('s')).toBe(0);
+    expect(loadSyncFailures().length).toBe(1);
+  });
 });
 
 describe('#7 legacy normalization + dup collapse', () => {
@@ -306,6 +329,48 @@ describe('#5 + #6 applySyncFailureGate orchestration', () => {
     expect(r.advanced).toBe(false);
     expect(r.sentinelBlocked).toBe(true);
     expect(advanced).toBe(false);
+  });
+
+  test('a run with no fresh sentinel self-heals a stale sentinel (resolved rewrite)', async () => {
+    // Repro: a past force-push recorded a `<head>` sentinel; the source has
+    // since re-baselined so a later run produces no sentinel. That run must
+    // clear the stale row — nothing else can (ack/auto-skip refuse sentinels;
+    // the pinned SHA is gone so retry never re-drains it).
+    const { recordFailures, applySyncFailureGate, loadSyncFailures } = await L();
+    recordFailures('s', [{ path: '<head>', error: 'git history rewritten' }], 'deadbeef');
+    expect(loadSyncFailures().length).toBe(1);
+    const r = await applySyncFailureGate({
+      sourceId: 's', failedFiles: [], succeededPaths: [], commit: 'c-new',
+      skipFailed: false, advance: async () => {},
+    });
+    expect(r.advanced).toBe(true);
+    expect(r.sentinelBlocked).toBe(false);
+    expect(loadSyncFailures().length).toBe(0);
+  });
+
+  test('self-heal is source-scoped: another source keeps its sentinel', async () => {
+    const { recordFailures, applySyncFailureGate, loadSyncFailures } = await L();
+    recordFailures('s1', [{ path: '<head>', error: 'rewrite' }], 'c1');
+    recordFailures('s2', [{ path: '<head>', error: 'rewrite' }], 'c1');
+    await applySyncFailureGate({
+      sourceId: 's1', failedFiles: [], succeededPaths: [], commit: 'c2',
+      skipFailed: false, advance: async () => {},
+    });
+    const rows = loadSyncFailures();
+    expect(rows.length).toBe(1);
+    expect(rows[0].source_id).toBe('s2');
+  });
+
+  test('a run that DID re-detect the rewrite still hard-blocks (no self-heal)', async () => {
+    const { recordFailures, applySyncFailureGate, loadSyncFailures } = await L();
+    recordFailures('s', [{ path: '<head>', error: 'rewrite' }], 'c1');
+    const r = await applySyncFailureGate({
+      sourceId: 's', failedFiles: [{ path: '<head>', error: 'rewrite again' }],
+      succeededPaths: [], commit: 'c2', skipFailed: false, advance: async () => {},
+    });
+    expect(r.advanced).toBe(false);
+    expect(r.sentinelBlocked).toBe(true);
+    expect(loadSyncFailures().length).toBe(1);
   });
 
   test('succeeded paths clear prior failures even with no new failures', async () => {
