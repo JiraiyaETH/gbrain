@@ -11,7 +11,8 @@ description: |
   is retrieval-gap (the page exists in a searched source, first search missed or
   underranked it → eval candidate) vs coverage-gap (page genuinely absent →
   capture-queue item, never an eval candidate). Appends one source-aware JSON
-  line per miss to the qrels candidates log with zero ceremony; periodic verified
+  line per NEEDED PAGE to the qrels candidates log with zero ceremony (a
+  multi-page miss becomes sibling lines, one class each); periodic verified
   promotion moves confirmed retrieval-gaps into the gating goldset.
 triggers:
   - "log this retrieval miss"
@@ -67,7 +68,7 @@ This skill guarantees:
 - **Relevance ≠ existence.** A class of `retrieval-gap` requires confirming (via
   `get_page`) that the page actually ANSWERS the query at the version that was
   live at miss time — not merely that a page with that slug exists.
-- **Zero-ceremony capture**: one JSON line appended to
+- **Zero-ceremony capture**: one JSON line **per needed page** appended to
   `~/.gbrain/qrels/<profile>/candidates.jsonl` (file created if missing;
   `<profile>` = the brain's qrels profile dir, `jiraiya` on this host), with the
   operator's phrasing preserved **verbatim** AND the exact executed search
@@ -77,8 +78,8 @@ This skill guarantees:
   field instead and let the promotion step exclude it. The capturing agent is not
   a neutral judge of its own query.
 - **Verified promotion** (only when asked or during eval maintenance):
-  candidates classified `retrieval-gap`/`ranking-gap` whose needed refs are
-  confirmed to still resolve (same `source_id::slug`) get promoted into the
+  candidate lines classified `retrieval-gap`/`ranking-gap` whose single needed ref
+  is confirmed to still resolve (same `source_id::slug`) get promoted into the
   gating goldset files in the qrels-file federated shape; all other classes route
   to their destination (capture queue, content-maintenance, or drop). An eval
   item is never created for a page that does not exist in a searched source.
@@ -86,14 +87,17 @@ This skill guarantees:
 ## The classes (source-aware)
 
 A miss is classified **per needed page**, against the sources that were actually
-searched. A single task can produce a `mixed` outcome (one page a retrieval-gap,
-another a coverage-gap) — carry a per-target `class` ARRAY (one entry per
-`needed` ref, same order); do not force a single verdict onto a multi-page miss.
+searched. **One log line = one needed page = one class** (see Phase 3). A single
+task that needed several pages produces several sibling lines — one per needed
+page, each with its own single class. This keeps every line independently
+verifiable and promotable: a `retrieval-gap` line promotes on its own even if a
+sibling line from the same task is a `coverage-gap`. There is no `mixed` verdict
+and no per-line class array — the split across pages IS the split across lines.
 
 | Class | Meaning | Eval-eligible? | Destination |
 |---|---|---|---|
 | `retrieval-gap` | Page EXISTS in a searched source and ANSWERS the query, but the first search did not return it at all. | Yes | Gating qrels after verification. |
-| `ranking-gap` | Page WAS returned by the first search but ranked below the depth the agent read (e.g. rank 14 with `k`/inspection cutoff 10). | Yes — but promote to a family whose pipeline matches (see Phase 4). | Gating qrels (ranking family). |
+| `ranking-gap` | Page WAS returned by the first search but ranked below the `read_depth` the agent actually inspected (e.g. `k`=20 so the page came back at rank 14, but the agent only read the top `read_depth`=10). Requires `k` ≥ the observed rank. | Yes — but promote to a family whose pipeline matches (see Phase 4). | Gating qrels (ranking family). |
 | `scope-gap` | Page exists but only in a source/brain that was NOT in the search scope (federation/routing miss, not a ranking failure). | No (it's a routing/config issue) | Fix the search scope / note the routing gap; not a qrels item. |
 | `stale-or-wrong` | A page was returned/exists but its content is stale or wrong for what was asked; the correct answer is elsewhere or absent. | No | Content maintenance (enrich/citation-fixer), not qrels. |
 | `coverage-gap` | The needed page is **genuinely absent** from every searched source. | No | Capture queue (page/idea to create). |
@@ -170,48 +174,50 @@ Decide the class per needed page (see the class table above):
   `unverified`.
 
 ### 3. Log (zero ceremony, source-aware)
-Append exactly one JSON line per needed page to
-`~/.gbrain/qrels/<profile>/candidates.jsonl` (create the file and its parent dir
-if missing; `<profile>` is the brain's qrels dir — `jiraiya` on this host). Do not
-pretty-print; one object per line. Schema:
+**One log line = one needed page.** Append exactly one JSON line **per needed
+page** to `~/.gbrain/qrels/<profile>/candidates.jsonl` (create the file and its
+parent dir if missing; `<profile>` is the brain's qrels dir — `jiraiya` on this
+host). A task that needed several pages produces several sibling lines that share
+the same prompt/query/k/first_search_returned but each carry ONE `needed` ref and
+ONE `class`. Do not pretty-print; one object per line. Schema:
 
 ```json
-{"id":"rml-2026-07-15-a1b2","ts":"2026-07-15T14:32:00Z","brain_id":"host","searched_sources":["default"],"verbatim_prompt":"what's the current status of the consortium?","search_query":"consortium status","k":10,"first_search_returned":[{"source_id":"default","slug":"companies/acme-example","rank":1},{"source_id":"default","slug":"meetings/2026-04-03","rank":2}],"read_depth":10,"needed":[{"source_id":"default","slug":"projects/consortium-status","observed_rank":null}],"class":[{"source_id":"default","slug":"projects/consortium-status","class":"retrieval-gap"}],"query_quality":"clean","trace":"live","status":"pending","notes":"exists under projects/, git log confirms live page; not returned in first search"}
+{"id":"rml-2026-07-15-a1b2","ts":"2026-07-15T14:32:00Z","brain_id":"host","searched_sources":["default"],"verbatim_prompt":"what's the current status of the consortium?","search_query":"consortium status","k":10,"first_search_returned":[{"source_id":"default","slug":"companies/acme-example","rank":1},{"source_id":"default","slug":"meetings/2026-04-03","rank":2}],"read_depth":10,"needed":{"source_id":"default","slug":"projects/consortium-status","observed_rank":null},"class":"retrieval-gap","query_quality":"clean","trace":"live","status":"pending","notes":"exists under projects/, git log confirms live page; not returned in first search"}
 ```
 
 Field rules:
 - `id` — stable dedup key: `rml-<date>-<short-hash>` where the hash is over
-  (`brain_id` + sorted `searched_sources` + `search_query` + sorted `needed`
-  refs). Two agents logging the same miss produce the same `id`; if the file
-  already has that `id`, don't append a duplicate.
+  (`brain_id` + sorted `searched_sources` + `search_query` + this line's single
+  `needed` ref `source_id::slug`). Because each line carries exactly one needed
+  ref, sibling lines from the same multi-page task get DISTINCT ids (they differ
+  by their needed ref). Two agents logging the same page-miss produce the same
+  `id`; if the file already has that `id`, don't append a duplicate.
 - `ts` — ISO 8601 UTC, second precision (when the miss was captured).
 - `brain_id` — the brain that was searched (`host` for the personal brain).
 - `searched_sources` — the `source_id`(s) that were in the search scope. Required:
   a slug is meaningless without its source (qrels compares on `source_id::slug`).
 - `verbatim_prompt` — the operator's **actual words**, unedited. Never paraphrase,
-  clean up, or summarize. The phrasing is preserved for context and audit.
+  clean up, or summarize. The phrasing is preserved for context and audit. Repeats
+  identically across sibling lines from the same task.
 - `search_query` — the exact query string you issued (may equal the prompt; often
-  doesn't). This is the reproducible retrieval input.
+  doesn't). This is the reproducible retrieval input. Repeats across siblings.
 - `k` — REQUIRED. The search limit you requested for the first search (the `k`
   you passed, e.g. `10`). This is the retrieval budget, distinct from
   `read_depth` (how far down you actually read). Recording it lets promotion
-  reproduce the exact search that missed.
+  reproduce the exact search that missed. Repeats across siblings.
 - `first_search_returned` — the ranked results of your FIRST search as
   source-aware objects `{source_id, slug, rank}` (rank is 1-based, order
   preserved), matching the `needed`-ref shape so a slug is never recorded
-  without its source. `[]` if it returned nothing.
+  without its source. `[]` if it returned nothing. Repeats across siblings.
 - `read_depth` — the rank cutoff you actually inspected (so `ranking-gap` is
-  distinguishable from `retrieval-gap`). ≤ `k`.
-- `needed` — array of `{source_id, slug, observed_rank}` for each page you needed.
-  `observed_rank` = its rank in `first_search_returned`, or `null` if not
-  returned. For coverage-gap: the ref the page *should* have, with `notes` saying
-  it's absent.
-- `class` — a per-target ARRAY, one object `{source_id, slug, class}` per entry
-  in `needed`, in the SAME order as `needed` (element `i` classifies
-  `needed[i]`). `class` is one of the six class values in the table. A
-  single-page miss is a one-element array; a `mixed` multi-page miss carries one
-  class per needed ref (so one page can be `retrieval-gap` while another is
-  `coverage-gap` in the same line). Never collapse to a single scalar verdict.
+  distinguishable from `retrieval-gap`). ≤ `k`. Repeats across siblings.
+- `needed` — a SINGLE object `{source_id, slug, observed_rank}` for THIS line's
+  one needed page. `observed_rank` = its rank in `first_search_returned`, or
+  `null` if not returned. For a coverage-gap line: the ref the page *should* have,
+  with `notes` saying it's absent.
+- `class` — a SINGLE string: this page's class, one of the six values in the
+  table. There is no class array and no `mixed` value — a task whose pages split
+  across classes is recorded as sibling lines, one class each.
 - `query_quality` — your honest read of the query (`clean` | `suspect_typo` |
   `wrong_entity` | `context_dependent` | `malformed`). Recorded, never used to
   suppress.
@@ -232,12 +238,13 @@ verbatim.
 ### 4. Promote (only when asked, or during eval maintenance)
 When the operator says "promote the miss-log candidates" or during a goldset
 maintenance pass:
-1. Read `candidates.jsonl`. Consider only `status: "pending"` items; group by
-   per-target `class` (a `mixed` line contributes each of its `class[]` entries
-   to the relevant group).
-2. For each **retrieval-gap / ranking-gap**: re-verify every `needed` ref still
-   resolves to a live page in that `source_id` (`resolve_slugs`/`get_page`) AND
-   still answers the query. If a ref was deleted/renamed, or the page was only
+1. Read `candidates.jsonl`. Consider only `status: "pending"` lines; group by each
+   line's single `class` value. (Every line is already one page + one class, so
+   grouping is a straight partition — no per-line array to unpack.)
+2. For each **retrieval-gap / ranking-gap** line: re-verify its single `needed`
+   ref still resolves to a live page in that `source_id` (`resolve_slugs`/
+   `get_page`) AND still answers the query. If the ref was deleted/renamed, or the
+   page was only
    *created after* the miss (check git history — a page that didn't exist at miss
    time isn't evidence of a retrieval gap), reclassify or drop it. Never promote
    an item pointing at a gone or after-the-fact page.
@@ -289,10 +296,11 @@ maintenance pass:
 - **Existence = relevance.** A page with the right slug that doesn't actually
   answer the query (or was stale/wrong at miss time) is NOT a retrieval-gap.
   Confirm the content answers, at the version live at miss time.
-- **Forcing a binary class onto a multi-page or edge-case miss.** Classify per
-  needed page; use `ranking-gap`, `scope-gap`, `stale-or-wrong`, and `unverified`
-  where they fit. A `scope-gap` (page in an unsearched source) promoted as a
-  retrieval-gap measures a routing bug as if it were a ranking bug.
+- **Cramming a multi-page miss into one line.** Emit ONE line per needed page,
+  each with its own single `class` — never a class array or a `mixed` verdict.
+  Classify per needed page; use `ranking-gap`, `scope-gap`, `stale-or-wrong`, and
+  `unverified` where they fit. A `scope-gap` (page in an unsearched source)
+  promoted as a retrieval-gap measures a routing bug as if it were a ranking bug.
 - **Paraphrasing the operator's prompt.** `verbatim_prompt` is preserved exactly
   for context/audit. The reproducible retrieval input is the separate
   `search_query`. Don't collapse the two or "normalize" the prompt.
