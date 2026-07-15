@@ -33,6 +33,12 @@ export interface CorrectnessGateOpts {
   /** Top-K for recall@K. Defaults to DEFAULT_QRELS_THRESHOLDS.k (10). */
   k?: number;
   /**
+   * Scope search to a single source (the `--source` CLI flag). When unset,
+   * search spans all sources — which silently contaminates metrics on a
+   * multi-source brain (e.g. code pages leaking into a prose gate).
+   */
+  sourceId?: string;
+  /**
    * Pluggable search function for tests. Default uses bare `hybridSearch`.
    * Tests inject a stub to drive deterministic per-query behavior without
    * a real brain.
@@ -131,8 +137,12 @@ export async function runCorrectnessGate(
     throw new Error('runCorrectnessGate: qrels file has no queries');
   }
   const k = opts.k ?? DEFAULT_QRELS_THRESHOLDS.k;
+  const sourceId = opts.sourceId;
   const searchFn = opts.searchFn ?? (async (e, q, o) => {
-    const results = await hybridSearch(e, q, { limit: o.limit });
+    const results = await hybridSearch(e, q, {
+      limit: o.limit,
+      ...(sourceId ? { sourceId } : {}),
+    });
     return results.map(r => ({ source_id: r.source_id, slug: r.slug }));
   });
 

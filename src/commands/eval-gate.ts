@@ -47,6 +47,7 @@ interface GateOpts {
   help?: boolean;
   baseline?: string;
   qrels?: string;
+  source?: string;
   k?: number;
   json?: boolean;
   thresholdJaccard?: number;
@@ -89,6 +90,9 @@ interface GateResult {
   };
 }
 
+/** Thrown by parseArgs on an unknown flag / stray positional; caller exits 2. */
+class GateUsageError extends Error {}
+
 function parseArgs(args: string[]): GateOpts {
   const opts: GateOpts = {};
   for (let i = 0; i < args.length; i++) {
@@ -105,6 +109,10 @@ function parseArgs(args: string[]): GateOpts {
         break;
       case '--qrels':
         opts.qrels = next;
+        i++;
+        break;
+      case '--source':
+        opts.source = next;
         i++;
         break;
       case '--json':
@@ -140,7 +148,11 @@ function parseArgs(args: string[]): GateOpts {
         i++;
         break;
       default:
-        break;
+        // Reject unknown flags / stray positionals instead of silently
+        // ignoring them — the silent-ignore is exactly what hid the
+        // `--source` no-op defect (a mistyped flag would score against the
+        // wrong corpus without any signal).
+        throw new GateUsageError(`unknown argument: ${arg}`);
     }
   }
   return opts;
@@ -157,6 +169,11 @@ Usage:
 Required (at least one):
   --baseline FILE              Baseline NDJSON from \`gbrain bench publish\`
   --qrels FILE                 Qrels JSON (\`{schema_version, queries: [...]}\` shape)
+
+Scope:
+  --source ID                  Scope correctness-gate search to one source
+                               (default: all sources). Multi-source brains
+                               MUST set this or metrics span every source.
 
 Thresholds (override baseline metadata; CLI > embedded > defaults):
   --threshold-jaccard FLOAT          Regression: mean Jaccard floor (default ${0.85})
@@ -285,6 +302,7 @@ function runCorrectnessGateDispatch(
   engine: BrainEngine,
   qrelsPath: string,
   k: number,
+  sourceId: string | undefined,
   cliOverrides: Pick<GateOpts, 'thresholdRecallAtK' | 'thresholdFirstRelevantHit' | 'thresholdExpectedTop1'>,
 ): Promise<GateResult['correctness_gate']> {
   return (async () => {
@@ -312,7 +330,10 @@ function runCorrectnessGateDispatch(
 
     let result: CorrectnessResult;
     try {
-      result = await runCorrectnessGate(engine, qrelsFile, { k });
+      result = await runCorrectnessGate(engine, qrelsFile, {
+        k,
+        ...(sourceId ? { sourceId } : {}),
+      });
     } catch (err) {
       return {
         ran: true,
@@ -427,7 +448,17 @@ function printHumanOutput(result: GateResult): void {
 }
 
 export async function runEvalGate(engine: BrainEngine, args: string[]): Promise<void> {
-  const opts = parseArgs(args);
+  let opts: GateOpts;
+  try {
+    opts = parseArgs(args);
+  } catch (err) {
+    if (err instanceof GateUsageError) {
+      console.error(`Error: ${err.message}\n`);
+      printHelp();
+      process.exit(2);
+    }
+    throw err;
+  }
   if (opts.help) {
     printHelp();
     return;
@@ -468,7 +499,7 @@ export async function runEvalGate(engine: BrainEngine, args: string[]): Promise<
 
   if (opts.qrels) {
     const k = opts.k ?? DEFAULT_QRELS_THRESHOLDS.k;
-    result.correctness_gate = await runCorrectnessGateDispatch(engine, opts.qrels, k, {
+    result.correctness_gate = await runCorrectnessGateDispatch(engine, opts.qrels, k, opts.source, {
       thresholdRecallAtK: opts.thresholdRecallAtK,
       thresholdFirstRelevantHit: opts.thresholdFirstRelevantHit,
       thresholdExpectedTop1: opts.thresholdExpectedTop1,

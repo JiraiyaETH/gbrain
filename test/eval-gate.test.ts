@@ -13,7 +13,7 @@
  *   - D3 fail-closed on subprocess (in-process throw, in our case)
  */
 
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll, beforeEach, mock } from 'bun:test';
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -138,6 +138,61 @@ describe('eval gate: usage errors', () => {
       runEvalGate(engine, ['--qrels', '/tmp/does-not-exist-12345.json']),
     );
     expect(out.exitCode).toBe(2);
+  });
+});
+
+describe('eval gate: --source scoping (defect fix)', () => {
+  test('unknown flag → exit 2 with usage (no longer silently ignored)', async () => {
+    // The silent-ignore of unknown flags is exactly what hid the `--source`
+    // no-op defect: a mistyped or unhandled flag scored against the wrong
+    // corpus with zero signal. Reject → exit 2.
+    const out = await withExitCapture(() =>
+      runEvalGate(engine, ['--qrels', '/tmp/whatever.json', '--soruce', 'default']),
+    );
+    expect(out.exitCode).toBe(2);
+  });
+
+  test('--source is parsed and forwarded to hybridSearch as sourceId', async () => {
+    // Stub hybridSearch to capture the opts it receives, then drive the
+    // correctness gate's DEFAULT searchFn (built inside runCorrectnessGate)
+    // through it. Pins: opts.source → dispatch → runCorrectnessGate.sourceId
+    // → default searchFn → hybridSearch({ sourceId }).
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    mock.module('../src/core/search/hybrid.ts', () => ({
+      hybridSearch: async (_e: unknown, _q: string, o?: Record<string, unknown>) => {
+        seen.push(o);
+        return [] as unknown[];
+      },
+    }));
+    // Re-import the gate AFTER the module mock so it binds the stub.
+    const { runCorrectnessGate } = await import('../src/core/bench/correctness-gate.ts');
+    await runCorrectnessGate(
+      engine,
+      { schema_version: 1, queries: [{ query_id: 'q1', query: 'x', relevant: [{ slug: 's' }] }] } as any,
+      { k: 10, sourceId: 'default' },
+    );
+    expect(seen.length).toBe(1);
+    expect(seen[0]?.sourceId).toBe('default');
+    mock.restore();
+  });
+
+  test('no --source → hybridSearch called WITHOUT sourceId (unchanged behavior)', async () => {
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    mock.module('../src/core/search/hybrid.ts', () => ({
+      hybridSearch: async (_e: unknown, _q: string, o?: Record<string, unknown>) => {
+        seen.push(o);
+        return [] as unknown[];
+      },
+    }));
+    const { runCorrectnessGate } = await import('../src/core/bench/correctness-gate.ts');
+    await runCorrectnessGate(
+      engine,
+      { schema_version: 1, queries: [{ query_id: 'q1', query: 'x', relevant: [{ slug: 's' }] }] } as any,
+      { k: 10 },
+    );
+    expect(seen.length).toBe(1);
+    expect('sourceId' in (seen[0] ?? {})).toBe(false);
+    mock.restore();
   });
 });
 
