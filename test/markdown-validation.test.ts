@@ -230,4 +230,94 @@ describe('parseMarkdown validation surface', () => {
     const nb = parsed.errors!.find(e => e.code === 'NULL_BYTES');
     expect(nb?.line).toBeGreaterThanOrEqual(1);
   });
+
+  describe('DUPLICATE_FRONTMATTER', () => {
+    // The dream-cycle double-frontmatter corruption: a valid first block, then
+    // the body leads with a second `---` … `---` YAML block.
+    test('second frontmatter block after a valid first one', () => {
+      const md =
+        `${fence}\ntype: personal\ntitle: 'A'\ndream_generated: true\n${fence}\n\n` +
+        `title: A\nrelevant_to:\n  - projects/x\n${fence}\n# A\n\nbody`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      const e = parsed.errors!.find(e => e.code === 'DUPLICATE_FRONTMATTER');
+      expect(e).toBeDefined();
+      expect(e!.line).toBeGreaterThan(1);
+    });
+
+    test('body-only page (no frontmatter) does NOT trip it', () => {
+      // Body-only is a historically-valid MCP calling convention; MISSING_OPEN
+      // may fire but DUPLICATE_FRONTMATTER must not.
+      const md = '# Just a heading\n\nsome body text';
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).not.toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    test('body-leading horizontal rule is NOT flagged', () => {
+      // A real `---` horizontal rule followed by prose (no closing `---` YAML
+      // block, no key: lines) must not be mistaken for a second block.
+      const md = `${fence}\ntype: note\ntitle: hi\n${fence}\n\n---\n\nsome prose after a rule`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).not.toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    test('two horizontal rules with prose (no key: lines) NOT flagged', () => {
+      const md = `${fence}\ntype: note\ntitle: hi\n${fence}\n\n---\nsome prose\n---\nmore prose`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).not.toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    test('code fence with dashes is NOT flagged', () => {
+      const md =
+        `${fence}\ntype: note\ntitle: hi\n${fence}\n\n` +
+        '```yaml\nfoo: bar\n```\n\nbody';
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).not.toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    test('Timeline separator (--- before ## Timeline) is NOT flagged', () => {
+      const md =
+        `${fence}\ntype: note\ntitle: hi\n${fence}\n\ncompiled truth\n\n` +
+        `---\n## Timeline\n- **2026-01-01** | thing happened`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).not.toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    test('key-led compiled truth with prose + Timeline separator NOT flagged', () => {
+      // A body that OPENS key-shaped (`status: active`) but then runs prose
+      // before the standard `---` Timeline separator is a normal two-layer
+      // page, not a second frontmatter block. Regression for the
+      // prose-lines-silently-skipped false positive.
+      const md =
+        `${fence}\ntype: project\ntitle: hi\n${fence}\n\n` +
+        `status: active\n\nCompiled truth prose paragraph.\n\n` +
+        `---\n## Timeline\n- **2026-01-01** | thing happened`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).not.toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    test('non-reserved key summary block above a rule NOT flagged (contract shape)', () => {
+      // Pure `key:` summary block above `---` (the contract archetype) uses
+      // domain keys, not reserved frontmatter keys — must not be flagged.
+      const md =
+        `${fence}\ntype: contract\ntitle: hi\n${fence}\n\n` +
+        `client: acme-example\nfee: 40000 USDC\nterm: 3 months\n\n` +
+        `---\n## Agreement text\n\nfull text here`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).not.toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    test('explicit re-opened block with reserved keys IS flagged (3-fence corruption)', () => {
+      const md =
+        `${fence}\ntype: personal\ntitle: hi\n${fence}\n\n` +
+        `---\nrelevant_to:\n  - projects/x\ntags: [a]\n---\n\n# Title\n\nbody`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors!.map(e => e.code)).toContain('DUPLICATE_FRONTMATTER');
+    });
+
+    test('normal frontmatter page is clean', () => {
+      const md = `${fence}\ntype: concept\ntitle: hi\n${fence}\n\nbody`;
+      const parsed = parseMarkdown(md, undefined, { validate: true });
+      expect(parsed.errors).toEqual([]);
+    });
+  });
 });

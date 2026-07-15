@@ -48,6 +48,7 @@ const FRONTMATTER_RULE_NAMES: Record<ParseValidationCode, string> = {
   NESTED_QUOTES: 'frontmatter-nested-quotes',
   NON_STRING_FIELD: 'frontmatter-non-string-field',
   EMPTY_FRONTMATTER: 'frontmatter-empty',
+  DUPLICATE_FRONTMATTER: 'frontmatter-duplicate-block',
 };
 
 /** Codes whose lint findings are fixable by `gbrain frontmatter validate --fix`. */
