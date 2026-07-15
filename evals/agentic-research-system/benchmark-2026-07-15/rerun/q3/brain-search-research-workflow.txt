@@ -1,0 +1,2 @@
+[0.0000] docs/architecture/key_files -- Trust posture: per-call `schema_pack` opt STAYS rejected for remote callers via `op-trust-gate.ts`.
+

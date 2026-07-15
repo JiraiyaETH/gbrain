@@ -1,0 +1,1 @@
+[0.4223] docs/architecture/key_files -- `normalizeAliasList(value)` coerces a frontmatter scalar / array / comma-list / garbage into a dedup

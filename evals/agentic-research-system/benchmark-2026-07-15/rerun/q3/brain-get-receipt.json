@@ -1,0 +1,82 @@
+[
+  {
+    "slug": "skills/agentic-research-system/skill",
+    "file": "brain-page-skills--agentic-research-system--skill.txt",
+    "exit_code": 0,
+    "latency_seconds": 2.646883,
+    "stdout_bytes": 21742,
+    "stderr_bytes": 0
+  },
+  {
+    "slug": "skills/agentic-research-system/changelog",
+    "file": "brain-page-skills--agentic-research-system--changelog.txt",
+    "exit_code": 0,
+    "latency_seconds": 2.553889,
+    "stdout_bytes": 842,
+    "stderr_bytes": 0
+  },
+  {
+    "slug": "docs/architecture/key_files",
+    "file": "brain-page-docs--architecture--key_files.txt",
+    "exit_code": 0,
+    "latency_seconds": 2.750793,
+    "stdout_bytes": 445162,
+    "stderr_bytes": 0
+  },
+  {
+    "slug": "src-core-skill-brain-first-ts",
+    "file": "brain-page-src-core-skill-brain-first-ts.txt",
+    "exit_code": 0,
+    "latency_seconds": 2.644398,
+    "stdout_bytes": 16618,
+    "stderr_bytes": 0
+  },
+  {
+    "slug": "scripts-check-skill-brain-first-sh",
+    "file": "brain-page-scripts-check-skill-brain-first-sh.txt",
+    "exit_code": 0,
+    "latency_seconds": 2.542729,
+    "stdout_bytes": 3805,
+    "stderr_bytes": 0
+  },
+  {
+    "slug": "scripts-live-brain-first-check-ts",
+    "file": "brain-page-scripts-live-brain-first-check-ts.txt",
+    "exit_code": 0,
+    "latency_seconds": 2.482141,
+    "stdout_bytes": 7411,
+    "stderr_bytes": 0
+  },
+  {
+    "slug": "test-skill-brain-first-test-ts",
+    "file": "brain-page-test-skill-brain-first-test-ts.txt",
+    "exit_code": 0,
+    "latency_seconds": 2.675449,
+    "stdout_bytes": 25440,
+    "stderr_bytes": 0
+  },
+  {
+    "slug": "test-regressions-v0-36-1-0-iron-rule-test-ts",
+    "file": "brain-page-test-regressions-v0-36-1-0-iron-rule-test-ts.txt",
+    "exit_code": 0,
+    "latency_seconds": 2.501434,
+    "stdout_bytes": 6913,
+    "stderr_bytes": 0
+  },
+  {
+    "slug": "test-think-with-calibration-test-ts",
+    "file": "brain-page-test-think-with-calibration-test-ts.txt",
+    "exit_code": 0,
+    "latency_seconds": 2.46962,
+    "stdout_bytes": 6663,
+    "stderr_bytes": 0
+  },
+  {
+    "slug": "src-core-brainstorm-orchestrator-ts",
+    "file": "brain-page-src-core-brainstorm-orchestrator-ts.txt",
+    "exit_code": 0,
+    "latency_seconds": 2.553659,
+    "stdout_bytes": 43848,
+    "stderr_bytes": 0
+  }
+]

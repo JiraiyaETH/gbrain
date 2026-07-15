@@ -1,0 +1,13 @@
+[0.3964] skills/agentic-research-system/skill -- Sources: https://arxiv.org/abs/2311.12983, https://webarena.dev/og/, https://arxiv.org/abs/2406.1204
+[0.3411] docs/architecture/key_files -- Mirrors `CLAUDE.md` intent via relative links. Claude Code keeps using `CLAUDE.md`.
+- `docs/UPGRADIN
+[0.0000] skills/agentic-research-system/templates/research-brief -- # Research Brief
+
+## Objective
+
+What decision or understanding should this research enable?
+
+## Deci
+[0.0000] skills-_brain-filing-rules-json -- [JSON] skills/_brain-filing-rules.json:1-278 module
+
+not full concepts, projects, sources, or author

@@ -1,0 +1,4089 @@
+AgentSearchBench: A Benchmark for AI Agent Search in the Wild
+Report GitHub Issue
+×
+Title:
+Content selection saved. Describe the issue below:
+Description:
+Submit without GitHub
+Submit in GitHub
+arXiv is now an independent nonprofit!
+Learn more
+×
+Back to arXiv
+Why HTML?
+Report Issue
+Back to Abstract
+Download PDF
+Abstract
+1
+Introduction
+2
+Related Work
+3
+Problem Formulation
+3.1
+Agent Search Problem
+3.2
+Task Query and Task Description
+3.3
+Task-Performance-Based Relevance
+4
+AgentSearchBench: A Benchmark for Agent Search
+4.1
+Large-Scale Realistic Agent Collection
+4.2
+Task Query Construction
+4.3
+Task Description Construction
+4.4
+Relevance Annotation
+5
+Benchmark Statistic
+6
+Agent Search Evaluation
+6.1
+Experimental Setup
+6.2
+Benchmarking Analysis
+6.3
+Benchmark Validation
+6.4
+Execution-Aware Probing
+7
+Conclusion
+References
+A
+More Details about AgentSearchBench
+A.1
+Schema Design
+A.2
+Example of Task Query and Task Description
+A.3
+Implementation Details of Benchmark Construction
+B
+More Details about Experimental Setup
+B.1
+Completeness Computation
+B.2
+The Baselines
+Retrieval
+Reranking
+B.3
+The Prompts
+C
+More Results
+C.1
+Performance on Each Realistic Queries
+C.2
+More Results on Indexing
+License: CC BY 4.0
+arXiv:2604.22436v1 [cs.AI] 24 Apr 2026
+AgentSearchBench: A Benchmark for AI Agent Search
+in the Wild
+Bin Wu
+,
+Arastun Mammadli
+∗
+,
+Xiaoyu Zhang,
+Emine Yilmaz
+Centre for Artificial Intelligence, University College London
+Equal ContributionCorresponding author:
+bin.wu.23@ucl.ac.uk
+Abstract
+The rapid growth of AI agent ecosystems is transforming how complex tasks are delegated and executed, creating a new challenge of identifying suitable agents for a given task. Unlike traditional tools, agent capabilities are often compositional and execution-dependent, making them difficult to assess from textual descriptions alone. However, existing research and benchmarks typically assume well-specified functionalities, controlled candidate pools, or only executable task queries, leaving realistic agent search scenarios insufficiently studied. We introduce AgentSearchBench, a large-scale benchmark for agent search in the wild, built from nearly 10,000 real-world agents across multiple providers. The benchmark formalizes agent search as retrieval and reranking problems under both executable task queries and high-level task descriptions, and evaluates relevance using execution-grounded performance signals. Experiments reveal a consistent gap between semantic similarity and actual agent performance, exposing the limitations of description-based retrieval and reranking methods. We further show that lightweight behavioral signals, including execution-aware probing, can substantially improve ranking quality, highlighting the importance of incorporating execution signals into agent discovery. Our code is available at
+https://github.com/Bingo-W/AgentSearchBench
+.
+1
+Introduction
+The rapid emergence of AI agentic systems is reshaping how humans accomplish complex tasks by enabling execution to be delegated to autonomous agents across a wide range of domains
+(Fang
+et al.
+,
+2025a
+; Gao
+et al.
+,
+2026
+)
+. Modern agents can reason, plan, and interact with external tools and services to complete multi-step objectives
+(Huang
+et al.
+,
+2024
+; Ferrag
+et al.
+,
+2025
+; Qin
+et al.
+,
+2025
+)
+. This progress has led to a rapidly expanding ecosystem of agentic components, ranging from general-purpose assistants to highly specialized task-oriented modules. As humans increasingly rely on agents developed by diverse third-party providers, a fundamental challenge arises:
+how can suitable agents be reliably identified and selected for a given task?
+Addressing this challenge is critical not only for end users seeking effective task completion, but also for developers and orchestration systems aiming to compose scalable and robust agentic workflows
+(Fourney
+et al.
+,
+2024
+; Hu
+et al.
+,
+2025
+)
+.
+However, identifying suitable agents is inherently challenging. Compared to traditional tools whose functionality is typically scoped to specific operations
+(Shi
+et al.
+,
+2025
+)
+, agent capabilities are often more compositional and execution-dependent, making them difficult to assess without observing task outcomes. As a result, textual descriptions provide only a partial signal of real competence
+(Qu
+et al.
+,
+2025
+; Wu
+et al.
+,
+2025a
+; Fang
+et al.
+,
+2025b
+)
+: agents with similar descriptions may perform differently in practice, while semantically dissimilar agents can achieve comparable results. This semantic–performance misalignment is further amplified in large and open agent ecosystems, where overlapping functionalities and non-uniform description formats make capability comparison difficult
+(Yuan
+et al.
+,
+2025b
+)
+. Consequently, agent search is fundamentally more complex than conventional tool retrieval or model selection.
+Despite growing interest in agentic systems, existing research and benchmarks have not yet provided a realistic setting for studying agent search (in Table
+1
+). Prior work on tool retrieval and related benchmarks primarily assumes that functionality can be inferred from structured descriptions or well-specified interfaces
+(Qin
+et al.
+,
+2024
+; Shi
+et al.
+,
+2025
+)
+, which does not capture the compositional and execution-dependent nature of agent capabilities. Meanwhile, recent studies on automated agentic system design typically evaluate methods in small-scale or controlled environments where candidate agents are clearly differentiated
+(Shang
+et al.
+,
+2025
+; Yuan
+et al.
+,
+2025a
+)
+. Such assumptions differ substantially from open ecosystems, where many agents exhibit overlapping capabilities and must be selected under uncertainty. Furthermore, existing tool and agent selection benchmarks largely focus on executable task queries with predefined inputs and outputs, whereas real-world agent discovery often begins from high-level task descriptions that are not directly executable. As a result, performance-grounded agent search in realistic open ecosystems remains insufficiently studied.
+To bridge these gaps, we introduce AgentSearchBench, a large-scale benchmark for agent search built from nearly 10,000 real-world agents. AgentSearchBench captures the diversity of open agent ecosystems by including agents from different providers with varying description styles, capability granularity, and functional overlap. Built on this resource, we formalize agent search as retrieval and reranking problems under both executable task queries and high-level task descriptions. Crucially, agent relevance is defined using execution-grounded performance signals rather than textual similarity. We further develop a scalable evaluation pipeline that generates task instances and converts execution outcomes into fine-grained relevance annotations for both retrieval and ranking assessment.
+Through extensive benchmarking experiments, we reveal a consistent gap between semantic similarity and actual task performance, providing empirical evidence for the execution-dependent nature of agent capabilities. Retrieval and reranking methods that rely primarily on matching task descriptions with agent documentation often fail to surface high-performing agents, particularly when search begins from high-level task descriptions where capability requirements are implicit. To better understand this limitation, we further study execution-aware probing, which augments description-based ranking with lightweight behavioral signals obtained from agent execution. Results show that even limited probing can substantially improve ranking quality, highlighting the importance of incorporating execution signals into realistic agent discovery pipelines.
+Our contributions can be summarized as follows:
+(1) We formulate agent search as a new retrieval and ranking problem under execution-dependent capability uncertainty.
+(2) We construct AgentSearchBench, a large-scale benchmark with nearly 10,000 real-world agents, supporting both executable task queries and high-level task descriptions under an execution-grounded evaluation framework.
+(3) We provide extensive empirical analysis revealing a substantial semantic–performance gap and demonstrate the effectiveness of lightweight behavioral probing for improving agent ranking.
+Agent/LLM/Tool
+#Candidates
+Realistic
+Task Type
+ToolBench
+(Qin
+et al.
+,
+2024
+)
+Tool
+16,464
+✓
+Exec.
+ToolRet
+(Shi
+et al.
+,
+2025
+)
+Tool
+43,215
+✓
+Exec.
+TREC 2025
+(Kanoulas
+et al.
+,
+2025
+)
+LLM
+1,131
+✓
+Exec.
+AgentSquare
+(Shang
+et al.
+,
+2025
+)
+Agent
+16
+✗
+Exec.
+OKC Bench
+(Yuan
+et al.
+,
+2025a
+)
+Agent
+127
+✗
+Exec.
+AgentSearchBench
+Agent
+9,759
+✓
+Exec. / Non-exec.
+Table 1:
+Comparison of AgentSearchBench with tool and agent retrieval benchmarks. “Realistic” indicates whether agents/tools are sourced from real-world platforms. “Task Type” indicates support for executable (Exec.) or non-executable (Non-exec.) task specifications.
+2
+Related Work
+Agentic Systems and Orchestration.
+Recent advances in agentic systems have enabled autonomous agents to solve complex tasks through reasoning, planning, and tool interaction
+(Huang
+et al.
+,
+2024
+; Ferrag
+et al.
+,
+2025
+; Qin
+et al.
+,
+2025
+)
+. As agent ecosystems rapidly expand, a key challenge is how to select suitable agents for a given task. Existing work focuses on agent design and orchestration, including multi-agent collaboration
+(Fourney
+et al.
+,
+2024
+; Hu
+et al.
+,
+2025
+)
+and workflow composition frameworks
+(Yue
+et al.
+,
+2025
+; Shang
+et al.
+,
+2025
+; Yuan
+et al.
+,
+2025a
+)
+, typically assuming a predefined and limited set of candidates. However, in open ecosystems with many overlapping agents
+(Yuan
+et al.
+,
+2025b
+; Wu
+et al.
+,
+2025a
+; Zhang
+et al.
+,
+2025a
+)
+, agent selection must be performed under significant capability uncertainty, motivating agent search as a distinct problem.
+Tool Retrieval and Selection.
+Existing works on tool retrieval and selection
+(Qin
+et al.
+,
+2024
+; Shi
+et al.
+,
+2025
+)
+aim to identify suitable tools for task execution. These methods typically retrieve tools based on textual descriptions or structured schemas
+(Tang
+et al.
+,
+2026
+; Lu
+et al.
+,
+2025
+; Qu
+et al.
+,
+2024
+)
+, and are primarily evaluated on executable task queries with predefined inputs and outputs
+(Qin
+et al.
+,
+2024
+; Qu
+et al.
+,
+2024
+)
+. While effective in such settings, these assumptions do not capture real-world agent search, which often begins from high-level and non-executable task descriptions. Moreover, agent capabilities are compositional, inconsistently documented, and execution-dependent, making textual similarity insufficient for assessing suitability. Recent work explores improving tool representations via schema unification or execution signals
+(Yuan
+et al.
+,
+2025b
+; Qu
+et al.
+,
+2025
+; Wu
+et al.
+,
+2025a
+)
+, but mainly focuses on tool usage rather than discovery over large candidate pools. In contrast, we formulate agent search as a performance-grounded problem that supports both executable queries and high-level task descriptions.
+Information Retrieval and Learning-to-Rank.
+Information retrieval and learning-to-rank provide the foundation for modeling agent search
+(Robertson and Zaragoza,
+2009
+; BehnamGhader
+et al.
+,
+2024
+)
+. Existing methods estimate relevance using textual similarity or annotated labels
+(Craswell
+et al.
+,
+2021
+;
+2025
+)
+. However, they assume relevance is static and observable without interaction, which does not hold for agents. In agent search, relevance is inherently execution-dependent, requiring evaluation through task performance. We therefore extend retrieval and ranking to incorporate execution-grounded relevance signals.
+3
+Problem Formulation
+3.1
+Agent Search Problem
+Agent search aims to retrieve and rank suitable agents from a large candidate repository given a user task. Let
+𝒯
+\mathcal{T}
+denote the task specification, and let
+𝒞
+=
+{
+a
+1
+,
+a
+2
+,
+…
+,
+a
+n
+}
+\mathcal{C}=\{a_{1},a_{2},\dots,a_{n}\}
+denote the candidate agent repository. Each agent is represented by descriptive documentation and, when available, an executable interface. An agent search system defines a scoring function
+f
+​
+(
+a
+,
+𝒯
+)
+f(a,\mathcal{T})
+that estimates the relevance of an agent
+a
+∈
+𝒞
+a\in\mathcal{C}
+to task
+𝒯
+\mathcal{T}
+, and produces a ranked list
+𝒪
+ranked
+=
+argsort
+a
+∈
+𝒞
+⁡
+f
+​
+(
+a
+,
+𝒯
+)
+.
+\displaystyle\mathcal{O}_{\mathrm{ranked}}=\operatorname{argsort}_{a\in\mathcal{C}}f(a,\mathcal{T}).
+(1)
+Agent search involves two objectives: (1) retrieving top-k agents capable of solving the task, and (2) ranking them according to task performance quality. Unlike traditional information retrieval, where relevance is determined by static content matching, agent search requires assessing functional capability through task execution.
+3.2
+Task Query and Task Description
+Agent search operates under different levels of task specification. We consider two types of inputs: executable task queries and high-level task descriptions.
+Task Query.
+A task query
+𝒯
+q
+\mathcal{T}_{q}
+is a concrete and executable instruction that can be directly evaluated by running an agent. Task queries include both single-agent tasks and multi-agent tasks composed of multiple executable subtasks
+(Qin
+et al.
+,
+2024
+; Shi
+et al.
+,
+2025
+)
+. Given a task query, the goal is to identify agents that can successfully complete the task and rank them based on their execution performance.
+Task Description.
+In many realistic scenarios, users provide high-level goals that are not directly executable. We denote such inputs as task descriptions
+𝒯
+d
+\mathcal{T}_{d}
+. To evaluate agent capability under these settings, each task description is associated with a set of executable task queries,
+𝒬
+​
+(
+𝒯
+d
+)
+=
+{
+𝒯
+q
+1
+,
+…
+,
+𝒯
+q
+m
+}
+\mathcal{Q}(\mathcal{T}_{d})=\{\mathcal{T}_{q_{1}},\dots,\mathcal{T}_{q_{m}}\}
+,
+which instantiate the high-level goal under different concrete scenarios. Agent relevance is then determined based on performance across
+𝒬
+​
+(
+𝒯
+d
+)
+\mathcal{Q}(\mathcal{T}_{d})
+, enabling evaluation of consistent capability rather than success on a single task instance.
+3.3
+Task-Performance-Based Relevance
+Relevance in agent search is defined based on task execution performance. For an executable task query
+𝒯
+q
+\mathcal{T}_{q}
+, we define the relevance of an agent
+a
+a
+using a task completion score
+y
+​
+(
+a
+,
+𝒯
+q
+)
+=
+E
+​
+(
+a
+,
+𝒯
+q
+)
+y(a,\mathcal{T}_{q})=\mathrm{E}(a,\mathcal{T}_{q})
+, where
+E
+\mathrm{E}
+evaluates the quality of the agent’s response (e.g., via LLM-as-a-judge). For a task description
+𝒯
+d
+\mathcal{T}_{d}
+, relevance cannot be evaluated directly. Instead, we aggregate performance over its associated queries:
+y
+​
+(
+a
+,
+𝒯
+d
+)
+=
+1
+|
+𝒬
+​
+(
+𝒯
+d
+)
+|
+​
+∑
+𝒯
+q
+∈
+𝒬
+​
+(
+𝒯
+d
+)
+y
+​
+(
+a
+,
+𝒯
+q
+)
+.
+\displaystyle y(a,\mathcal{T}_{d})=\frac{1}{|\mathcal{Q}(\mathcal{T}_{d})|}\sum_{\mathcal{T}_{q}\in\mathcal{Q}(\mathcal{T}_{d})}y(a,\mathcal{T}_{q}).
+(2)
+This formulation measures agent capability as consistent performance across multiple task instances, rather than relying on textual similarity or single-task outcomes.
+In practice, observed execution performance may not always align with documented capabilities. When an agent successfully solves a task that is not supported by its documentation, we treat the success as potentially less reliable than that of an agent whose documented functionality is consistent with its observed performance. Accordingly, we incorporate
+documentation–performance alignment
+as an auxiliary signal when constructing ranking labels, so that relevance reflects both task success and the reliability of that success.
+4
+AgentSearchBench: A Benchmark for Agent Search
+Figure 1:
+Task and Relevance Label Generation Pipeline of AgentSearchBench.
+We construct AgentSearchBench from a large-scale collection of real-world agents and generate tasks through a hierarchical process. We first create executable task queries, then derive high-level task descriptions grounded in query-level evidence. Relevance is obtained via execution-based evaluation and converted into retrieval and ranking labels. The overall pipeline is shown in Figure
+1
+.
+4.1
+Large-Scale Realistic Agent Collection
+We build a repository of nearly 10k agents collected from public platforms, including GPT store
+1
+1
+1
+https://chatgpt.com/gpts
+, Google Cloud Marketplace
+2
+2
+2
+https://cloud.google.com/marketplace
+, and AgentAI Platform
+3
+3
+3
+https://agent.ai/
+. By sourcing agents from real-world ecosystems rather than synthesizing them, AgentBase captures practical challenges such as capability overlap and inconsistent documentation, enabling realistic evaluation of agent search.
+4.2
+Task Query Construction
+We synthesize executable task queries from agent documentation following document-grounded task generation
+(Qin
+et al.
+,
+2024
+)
+. To reduce evaluation cost, we retrieve a candidate set of top-
+K
+K
+agents using a hybrid scoring function that combines BM25 (lexical)
+(Robertson and Zaragoza,
+2009
+)
+, BGE (semantic)
+(Xiao
+et al.
+,
+2024
+)
+, and ToolRet (tool-aware) retrieval
+(Shi
+et al.
+,
+2025
+)
+:
+s
+​
+(
+a
+,
+𝒯
+q
+)
+=
+α
+​
+s
+lexical
++
+β
+​
+s
+semantic
++
+γ
+​
+s
+tool
+.
+\displaystyle s(a,\mathcal{T}_{q})=\alpha\,s_{\text{lexical}}+\beta\,s_{\text{semantic}}+\gamma\,s_{\text{tool}}.
+(3)
+Retrieved agents are executed on each query and evaluated using a 5-point LLM-as-judge
+(Gu
+et al.
+,
+2024
+)
+. We filter out degenerate queries where no agent succeeds, or all agents succeed.
+Multi-agent queries are constructed by composing executable subtasks from capability-aligned clusters. We retain a composed query only if it semantically entails all subtasks via natural language inference (NLI)
+(Wu
+et al.
+,
+2025b
+)
+:
+Entail
+​
+(
+𝒯
+q
+multi
+,
+𝒯
+q
+(
+i
+)
+)
+=
+1
+,
+∀
+i
+.
+\displaystyle\mathrm{Entail}(\mathcal{T}_{q}^{\text{multi}},\mathcal{T}_{q}^{(i)})=1,\ \forall i.
+(4)
+4.3
+Task Description Construction
+We construct task descriptions by abstracting high-level objectives from clusters of semantically related queries. Given query clusters
+{
+𝒞
+1
+,
+…
+,
+𝒞
+M
+}
+\{\mathcal{C}_{1},\dots,\mathcal{C}_{M}\}
+, we remove outliers and generate a description
+𝒯
+d
+\mathcal{T}_{d}
+for each cluster using LLMs.
+To associate executable queries with each description, we apply a rubric-based judge
+(Sharma
+et al.
+,
+2026
+)
+that evaluates the relevance of each candidate query
+𝒯
+q
+\mathcal{T}_{q}
+to
+𝒯
+d
+\mathcal{T}_{d}
+from multiple aspects. Formally, let
+𝐫
+​
+(
+𝒯
+d
+,
+𝒯
+q
+)
+=
+(
+r
+1
+​
+(
+𝒯
+d
+,
+𝒯
+q
+)
+,
+…
+,
+r
+D
+​
+(
+𝒯
+d
+,
+𝒯
+q
+)
+)
+\mathbf{r}(\mathcal{T}_{d},\mathcal{T}_{q})=\big(r_{1}(\mathcal{T}_{d},\mathcal{T}_{q}),\dots,r_{D}(\mathcal{T}_{d},\mathcal{T}_{q})\big)
+denote the aspect-wise relevance scores. For each aspect
+d
+d
+, we select the top-2 queries according to
+r
+d
+r_{d}
+, and construct the associated query set as
+𝒬
+​
+(
+𝒯
+d
+)
+=
+⋃
+d
+=
+1
+D
+Top2
+𝒯
+q
+​
+r
+d
+​
+(
+𝒯
+d
+,
+𝒯
+q
+)
+\mathcal{Q}(\mathcal{T}_{d})=\bigcup_{d=1}^{D}\text{Top2}_{\mathcal{T}_{q}}\,r_{d}(\mathcal{T}_{d},\mathcal{T}_{q})
+,
+resulting in 10 queries when
+D
+=
+5
+D=5
+. To ensure reliable evaluation, we re-evaluate high-performing agents on missing subtasks and filter inconsistent task descriptions.
+4.4
+Relevance Annotation
+Relevance is derived from execution-based performance using a 5-point LLM-as-judge. For retrieval, we convert scores into binary labels:
+rel
+​
+(
+a
+,
+𝒯
+q
+)
+=
+𝟏
+​
+(
+y
+​
+(
+a
+,
+𝒯
+q
+)
+≥
+4
+)
+.
+\displaystyle\mathrm{rel}(a,\mathcal{T}_{q})=\mathbf{1}(y(a,\mathcal{T}_{q})\geq 4).
+(5)
+For multi-agent queries and task descriptions, we define graded relevance based on subtask completion:
+r
+​
+(
+a
+,
+𝒯
+)
+=
+1
+|
+𝒮
+​
+(
+𝒯
+)
+|
+​
+∑
+𝒯
+q
+∈
+𝒮
+​
+(
+𝒯
+)
+rel
+​
+(
+a
+,
+𝒯
+q
+)
+.
+\displaystyle r(a,\mathcal{T})=\frac{1}{|\mathcal{S}(\mathcal{T})|}\sum_{\mathcal{T}_{q}\in\mathcal{S}(\mathcal{T})}\mathrm{rel}(a,\mathcal{T}_{q}).
+(6)
+To account for documentation–performance misalignment, agents that successfully complete tasks without corresponding documented capability are assigned discounted relevance scores (e.g., 0.5). These signals are used to construct golden rankings for evaluation.
+5
+Benchmark Statistic
+Statistics
+# Total Agents
+9,759
+# Total Task
+3,211
+- # Single-Agent Task Query
+2,452
+- # Multi-Agent Task Query
+500
+- # Task Description
+259
+Avg. query per description
+10
+Avg. evaluated agents per query
+20
+# Total executions
+66,740
+(a)
+Overview statistics.
+(b)
+Agent diversity.
+(c)
+Task diversity.
+Figure 2:
+Benchmark statistics and semantic diversity of AgentSearchBench.
+(a)
+Relevant agents per query.
+(b)
+Score entropy.
+(c)
+Subtask coverage.
+Figure 3:
+Difficulty of Task Query and Task Description of AgentSearchBench.
+We summarize the scale of AgentSearchBench in Figure
+2
+. The benchmark contains nearly
+9,760
+agents collected from multiple open platforms, among which
+7,867
+provide executable interfaces. We construct
+2,952
+executable task queries and
+259
+task descriptions, each associated with an average of
+10
+queries. Each query is evaluated on the top-
+20
+retrieved agents, resulting in
+66,740
+execution runs. These statistics highlight the scale and execution-centric design of AgentSearchBench.
+Diversity and Difficulty.
+As shown in Figure
+2
+(b–c), both agents and tasks exhibit broad and long-tailed semantic distributions, reflecting diverse capability coverage. Figure
+3
+(a) shows that many queries have multiple relevant agents, making retrieval alone insufficient. Meanwhile, the entropy distribution in Figure
+3
+(b) indicates substantial performance variance across agents, motivating fine-grained reranking. Finally, Figure
+3
+(c) shows that agents typically cover only a subset of subtasks, highlighting partial and overlapping capabilities. Overall, AgentSearchBench provides a realistic and challenging setting for performance-grounded agent search.
+6
+Agent Search Evaluation
+Model
+Type
+NDCG
+Precision
+Recall
+Completeness
+@5
+@10
+@20
+@5
+@10
+@20
+@5
+@10
+@20
+@5
+@10
+@20
+Task Query
+SPLADE v2
+Sparse
+4.09
+3.49
+3.48
+4.09
+3.19
+2.29
+0.35
+1.35
+3.72
+2.90
+9.21
+18.93
+BM25
+Sparse
+32.41
+26.73
+22.68
+32.41
+24.56
+14.07
+2.62
+9.33
+21.36
+20.81
+38.10
+51.38
+ColBERT v2
+Dense
+27.71
+23.07
+20.47
+27.71
+21.14
+13.44
+2.12
+7.94
+19.68
+16.52
+33.89
+43.95
+Contriever MS-Marco
+Dense
+20.75
+17.43
+16.72
+20.75
+16.11
+11.12
+1.72
+6.34
+17.07
+15.04
+30.73
+45.11
+GTR-T5 Base
+Dense
+23.20
+19.50
+17.55
+23.20
+18.05
+11.51
+1.89
+6.87
+16.92
+16.00
+32.09
+44.63
+MiniLM-L6 v2
+Dense
+29.02
+25.28
+22.46
+29.02
+23.57
+14.97
+2.29
+8.63
+21.33
+18.23
+36.52
+51.52
+BGE-Large v1.5
+Dense
+31.78
+28.24
+26.14
+31.78
+26.48
+17.64
+2.48
+10.07
+25.49
+20.18
+38.61
+52.52
+COLT ToolLens
+Tool
+9.35
+8.12
+7.91
+9.35
+7.59
+5.47
+0.81
+2.92
+7.85
+6.95
+18.07
+30.61
+COLT ToolBench
+Tool
+16.25
+13.84
+12.28
+16.25
+12.81
+8.00
+1.30
+4.82
+12.13
+11.74
+25.39
+38.66
+Tool-Embed
+Tool
+34.02
+28.40
+25.67
+34.02
+26.37
+17.23
+2.50
+9.77
+24.46
+20.22
+38.14
+53.91
+ToolRet
+Tool
+37.52
+31.73
+28.87
+37.52
+29.36
+19.36
+2.85
+10.97
+27.80
+21.91
+42.18
+57.53
+E5-Mistral 7B
+Decoder-only
+19.57
+16.31
+15.29
+19.57
+14.99
+9.77
+1.60
+6.05
+15.62
+15.27
+30.71
+44.49
+Qwen-Embedding 8B
+Decoder-only
+25.25
+22.59
+21.43
+25.25
+21.32
+14.83
+1.94
+7.81
+21.14
+16.15
+33.17
+48.33
+Task Description
+SPLADE v2
+Sparse
+12.02
+8.24
+6.93
+12.02
+7.50
+6.11
+0.35
+0.83
+2.49
+0.00
+0.00
+0.48
+BM25
+Sparse
+16.35
+13.42
+10.78
+16.35
+12.50
+9.25
+0.46
+1.28
+3.69
+0.00
+0.00
+0.48
+ColBERT v2
+Dense
+15.38
+13.19
+12.80
+15.38
+12.31
+12.19
+0.27
+1.14
+5.12
+0.00
+0.48
+1.92
+Contriever MS-Marco
+Dense
+15.38
+15.03
+14.22
+15.38
+14.81
+13.37
+0.31
+1.49
+5.70
+0.00
+0.48
+1.92
+GTR-T5 Base
+Dense
+15.87
+15.03
+12.96
+15.87
+14.52
+11.92
+0.34
+1.56
+4.93
+0.00
+0.00
+1.92
+MiniLM-L6 v2
+Dense
+20.67
+17.69
+15.84
+20.67
+17.02
+14.57
+0.59
+1.84
+6.24
+0.00
+0.48
+1.44
+BGE-Large v1.5
+Dense
+23.08
+19.26
+16.07
+23.08
+18.08
+14.40
+0.42
+1.94
+6.12
+0.00
+0.96
+3.37
+COLT ToolLens
+Tool
+11.06
+10.11
+8.60
+11.06
+9.90
+7.88
+0.18
+1.05
+3.47
+0.00
+0.00
+0.96
+COLT ToolBench
+Tool
+12.50
+12.64
+11.57
+12.50
+12.60
+10.84
+0.28
+1.49
+4.53
+0.00
+0.48
+1.92
+Tool-Embed
+Tool
+21.15
+20.08
+17.19
+21.15
+19.81
+15.94
+0.42
+2.01
+6.41
+0.00
+0.48
+1.92
+ToolRet
+Tool
+21.15
+19.87
+17.21
+21.15
+19.13
+15.77
+0.37
+2.02
+6.69
+0.00
+0.96
+3.37
+E5-Mistral 7B
+Decoder-only
+15.87
+14.78
+11.56
+15.87
+14.71
+10.22
+0.33
+1.74
+4.58
+0.00
+0.48
+1.92
+Qwen-Embedding 8B
+Decoder-only
+20.67
+18.84
+16.51
+20.67
+18.08
+15.29
+0.46
+1.87
+6.15
+0.00
+0.00
+2.40
+Table 2:
+Retrieval results on Task Query
+T
+q
+T_{q}
+(Single-Agent and Multi-Agent Task Queries) and Task Descriptions
+T
+d
+T_{d}
+. We
+highlight
+the best performance in each type of model.
+Model
+Type
+NDCG
+Completeness
+NDCG
+Completeness
+@1
+@5
+@20
+@1
+@5
+@1
+@5
+@20
+@1
+@5
+Task Query
+Task Description
+Random Shuffle
+/
+51.43
+50.98
+74.61
+28.50
+61.00
+53.00
+48.27
+76.60
+0.00
+0.00
+MiniLM-L12 v2
+Cross-Encoder
+48.27
+48.06
+73.53
+28.50
+52.00
+48.00
+57.49
+81.58
+0.00
+0.00
+MXBAI Reranker Large
+Cross-Encoder
+52.09
+53.42
+76.32
+30.00
+58.00
+52.84
+61.33
+82.22
+0.00
+0.48
+BGE Reranker v2
+Cross-Encoder
+63.09
+59.84
+79.59
+30.50
+59.00
+54.31
+60.55
+81.97
+0.00
+0.96
+Tool-Rank 4B
+Tool
+63.84
+64.45
+81.78
+28.00
+59.50
+52.24
+61.12
+82.32
+0.00
+0.48
+Tool-Rank 8B
+Tool
+66.67
+64.36
+81.96
+30.50
+60.00
+53.92
+61.97
+82.76
+0.00
+0.96
+MonoT5 Base MS-Marco
+Decoder-only
+57.84
+57.37
+78.69
+27.00
+60.00
+52.31
+59.10
+81.33
+0.00
+0.96
+Qwen Reranker 0.6B
+Decoder-only
+63.34
+63.72
+81.08
+30.50
+58.50
+53.96
+60.47
+82.04
+0.00
+0.48
+Qwen Reranker 4B
+Decoder-only
+64.67
+64.53
+81.97
+29.50
+62.50
+58.00
+60.58
+82.84
+0.00
+0.00
+RankGPT Qwen-3 32B
+LLM-based
+61.00
+61.05
+80.18
+29.00
+58.50
+53.95
+60.78
+82.36
+0.00
+0.48
+RankGPT LLaMA-3.3 70B
+LLM-based
+61.09
+59.92
+79.80
+29.50
+53.50
+52.60
+61.24
+82.34
+0.00
+0.96
+RankGPT GPT-5.2
+LLM-based
+63.59
+64.57
+81.88
+30.50
+56.50
+66.00
+64.66
+84.69
+0.00
+0.00
+Table 3:
+Reranking results on Task Query
+T
+q
+T_{q}
+(Single-Agent and Multi-Agent Task Queries) and Task Descriptions
+T
+d
+T_{d}
+. We
+highlight
+the best performance in each type of model.
+6.1
+Experimental Setup
+We evaluate agent search under both executable task queries and high-level task descriptions. For retrieval, methods search over the full agent repository using binary relevance labels derived from execution outcomes. For reranking, each method is given the top-20 agents with highest execution-based relevance and is evaluated against the golden ranking induced by aggregated subtask completion performance.
+For retrieval, we report Precision, Recall, NDCG, and Completeness
+(Qu
+et al.
+,
+2024
+; Shi
+et al.
+,
+2025
+)
+. For reranking, we report NDCG and Completeness using graded relevance labels. We compare representative methods from four retrieval families, including sparse, dense, tool-aware, and decoder-only embedding models
+(Robertson and Zaragoza,
+2009
+; Formal
+et al.
+,
+2021
+; Santhanam
+et al.
+,
+2022
+; Izacard
+et al.
+,
+2022
+; Ni
+et al.
+,
+2022
+; Wang
+et al.
+,
+2021
+; Xiao
+et al.
+,
+2024
+; Shi
+et al.
+,
+2025
+; Lu
+et al.
+,
+2025
+; Qu
+et al.
+,
+2024
+)
+, and four reranking families, including cross-encoders, tool-specific rankers, decoder-only rerankers, and LLM-based rankers
+(Wang
+et al.
+,
+2021
+; Chen
+et al.
+,
+2024
+; Li
+et al.
+,
+2025
+; Lu
+et al.
+,
+2025
+; Nogueira
+et al.
+,
+2020
+; Zhang
+et al.
+,
+2025b
+; Sun
+et al.
+,
+2023
+; Ma
+et al.
+,
+2024
+)
+. All methods retrieve or rerank a fixed top-
+K
+K
+candidate set under the same evaluation protocol.
+6.2
+Benchmarking Analysis
+Table
+2
+shows retrieval performance under execution-based relevance. On task queries, tool-aware retrievers outperform dense and sparse baselines, while on task descriptions, dense retrievers become more competitive, with BGE achieving the strongest overall performance. However, performance drops substantially when moving from executable queries to high-level task descriptions, and completeness remains low across all methods, highlighting the difficulty of retrieving agents that can fully satisfy abstract requirements.
+Overall, these results indicate that while retrieval can capture coarse relevance, it struggles to identify agents with comprehensive task-solving capability, especially under high-level task specifications without explicit executable demands.
+Table
+3
+shows reranking results on execution-grounded candidate pools. On task queries, different model families achieve broadly similar performance, suggesting that surface-level signals are often sufficient for relatively concrete tasks. On task descriptions, however,
+decoder-only and LLM-based rerankers perform more strongly, possibly because their stronger generative capacity helps infer latent or implicit requirements behind high-level task descriptions.
+Nevertheless, completeness remains limited, showing that improved ordering does not fully resolve the challenge of identifying agents that can completely satisfy complex requirements.
+To further examine this limitation, Figure
+4
+compares accumulated golden performance under model rankings with the oracle ranking. All methods remain substantially below the oracle, with gains distributed gradually rather than concentrated at top ranks. This indicates that many high-performing agents are ranked too low, reflecting
+a misalignment between agent documentation and actual execution performance
+. This misalignment leads to a persistent semantic–performance gap, where documentation-based matching fails to accurately capture execution effectiveness.
+(a)
+Golden ranking accumulated agent scores on 2452 Single-Agent Task Queries.
+(b)
+Golden ranking accumulated agent scores on 500 Multi-Agent Task Queries.
+(c)
+Golden ranking accumulated agent scores on 259 Task Descriptions.
+Figure 4:
+The Gap between Surface-matching and Execution.
+6.3
+Benchmark Validation
+We validate the realism of our benchmark by comparing retrieval trends on synthetic queries with those on external realistic benchmarks. As shown in Figure
+5(a)
+, representative sparse, dense, and tool-aware retrievers exhibit consistent relative trends across settings: dense and tool-aware methods remain substantially stronger than sparse retrieval, while absolute performance on realistic queries is notably lower.
+This suggests that our synthetic benchmark preserves the relative performance ordering of different methods while providing a controlled evaluation setting.
+In contrast, realistic queries are inherently more difficult, as they do not guarantee the existence of highly relevant agents in the candidate pool, resulting in lower absolute performance.
+We further validate the reliability of LLM-based relevance annotation by comparing it with human judgments. Following the relevance label in our AgentSearchBench, we focus on binary relevance signals by grouping scores of 4–5 as positive and 1–3 as negative, which are the primary signals used in our benchmark. We conduct a human evaluation on 500 execution instances with three AI PhD-level annotators and observe high agreement between LLM-based and human judgments, with a Cohen’s kappa of
+κ
+=
+0.93
+\kappa=0.93
+and accuracy
+96.67
+%
+96.67\%
+.
+These results indicate that LLM-as-judge provides reliable supervision for large-scale evaluation, supporting its use for constructing execution-grounded relevance labels.
+(a)
+NDCG@5: Comparison between Realistic and Synthetic Single-agent Task Queries.
+(b)
+NDCG@5: description-only vs full-document indexing on 2,952 Task Queries.
+(c)
+NDCG@5: description-only vs full-document indexing on 259 Task Descriptions.
+Figure 5:
+Comparison between indexing and query realism.
+6.4
+Execution-Aware Probing
+We next study whether lightweight behavioral signals can improve agent ranking. First, we compare description-only indexing with full-document indexing that additionally includes usage examples. As shown in Figure
+5(b)
+and Figure
+5(c)
+, most methods improve under full-document indexing.
+These observations suggest that usage examples, often provided and verified by developers through execution, offer behavioral evidence beyond static descriptions.
+We then investigate explicit probing, where LLMs generate probing queries, candidate agents are executed on these queries, and the resulting responses are used as additional ranking signals. Figure
+6(a)
+shows that probing is most effective when the probing responses exhibit medium or high variance across agents, whereas low-variance probes provide limited discrimination. Using these execution-derived signals, most rerankers achieve consistent improvements as shown in Figure
+6(b)
+, demonstrating that
+lightweight behavioral probing can complement description-based ranking and better capture execution-level capability
+.
+(a)
+NDCG@5: win rate v.s. probe score variance
+Model
+NDCG@5
+NDCG@10
+BGE Reranker v2
+57.93
+80.76
+w/ Probing
+58.16
+↑
+\uparrow
++0.40%
+80.82
+↑
+\uparrow
++0.07%
+Tool-Rank 8B
+60.82
+82.09
+w/ Probing
+61.71
+↑
+\uparrow
++1.46%
+82.24
+↑
+\uparrow
++0.18%
+Qwen Reranker 4B
+60.96
+82.12
+w/ Probing
+61.91
+↑
+\uparrow
++1.56%
+82.38
+↑
+\uparrow
++0.32%
+RankGPT GPT-5.2
+61.25
+82.40
+w/ Probing
+59.60
+↓
+\downarrow
+-2.69%
+82.94
+↑
+\uparrow
++0.66%
+(b)
+Execution-Aware Probing enhancements on 100 Task Descriptions
+T
+d
+T_{d}
+.
+Figure 6:
+Execution-Aware Probing for Reranking on Task Description.
+7
+Conclusion
+We introduce AgentSearchBench, a large-scale benchmark for agent search in open ecosystems, covering nearly 10,000 real-world agents and supporting both executable task queries and high-level task descriptions. By grounding relevance in execution outcomes, our benchmark reveals a substantial semantic–performance gap: methods based on textual similarity often fail to identify the best-performing agents. While existing retrieval and reranking approaches provide useful coarse signals, they remain limited in capturing execution-dependent capability, especially for abstract and multi-step tasks. We show that incorporating lightweight behavioral signals, such as richer indexing and execution-aware probing, can improve ranking quality. These results highlight the importance of execution-aware methods and establish AgentSearchBench as a practical testbed for performance-grounded agent search.
+References
+P. BehnamGhader, V. Adlakha, M. Mosbach, D. Bahdanau, N. Chapados, and S. Reddy (2024)
+LLM2Vec: large language models are secretly powerful text encoders
+.
+CoRR
+abs/2404.05961
+.
+External Links:
+Link
+,
+Document
+,
+2404.05961
+Cited by:
+§2
+.
+A. Bigeard, L. Nashold, R. Krishnan, and S. Wu (2025)
+Finance agent benchmark: benchmarking llms on real-world financial research tasks
+.
+CoRR
+abs/2508.00828
+.
+External Links:
+Link
+,
+Document
+,
+2508.00828
+Cited by:
+§C.1
+.
+Center for AI Safety, Scale AI, and HLE Contributors Consortium (2026)
+A benchmark of expert-level academic questions to assess AI capabilities
+.
+Nature
+649
+,
+pp. 1139–1146
+.
+External Links:
+Document
+,
+2501.14249
+,
+Link
+Cited by:
+§C.1
+.
+J. Chen, S. Xiao, P. Zhang, K. Luo, D. Lian, and Z. Liu (2024)
+M3-embedding: multi-linguality, multi-functionality, multi-granularity text embeddings through self-knowledge distillation
+.
+In
+Findings of the Association for Computational Linguistics, ACL 2024,
+Bangkok, Thailand and virtual meeting, August 11-16, 2024
+,
+L. Ku, A. Martins, and V. Srikumar (Eds.)
+,
+Findings of ACL
+, Vol.
+ACL 2024
+,
+pp. 2318–2335
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§B.2
+,
+§6.1
+.
+N. Craswell, B. Mitra, E. Yilmaz, D. Campos, J. Lin, E. M. Voorhees, and I. Soboroff (2025)
+Overview of the trec 2022 deep learning track
+.
+arXiv preprint arXiv:2507.10865
+.
+Cited by:
+§2
+.
+N. Craswell, B. Mitra, E. Yilmaz, D. Campos, and J. Lin (2021)
+Ms marco: benchmarking ranking models in the large-data regime
+.
+In
+Proceedings of the 44th international ACM SIGIR conference on research and development in information retrieval
+,
+pp. 1566–1576
+.
+Cited by:
+§2
+.
+J. Fang, Y. Peng, X. Zhang, Y. Wang, X. Yi, G. Zhang, Y. Xu, B. Wu, S. Liu, Z. Li, Z. Ren, N. Aletras, X. Wang, H. Zhou, and Z. Meng (2025a)
+A comprehensive survey of self-evolving AI agents: A new paradigm bridging foundation models and lifelong agentic systems
+.
+CoRR
+abs/2508.07407
+.
+External Links:
+Link
+,
+Document
+,
+2508.07407
+Cited by:
+§1
+.
+W. Fang, Y. Zhang, K. Qian, J. Glass, and Y. Zhu (2025b)
+Play2prompt: zero-shot tool instruction optimization for llm agents via tool play
+.
+In
+Findings of the Association for Computational Linguistics: ACL 2025
+,
+pp. 26274–26290
+.
+Cited by:
+§1
+.
+M. A. Ferrag, N. Tihanyi, and M. Debbah (2025)
+From LLM reasoning to autonomous AI agents: A comprehensive review
+.
+CoRR
+abs/2504.19678
+.
+External Links:
+Link
+,
+Document
+,
+2504.19678
+Cited by:
+§1
+,
+§2
+.
+T. Formal, C. Lassance, B. Piwowarski, and S. Clinchant (2021)
+SPLADE v2: sparse lexical and expansion model for information retrieval
+.
+CoRR
+abs/2109.10086
+.
+External Links:
+Link
+,
+2109.10086
+Cited by:
+§B.2
+,
+§6.1
+.
+A. Fourney, G. Bansal, H. Mozannar, C. Tan, E. Salinas, E. Zhu, F. Niedtner, G. Proebsting, G. Bassman, J. Gerrits, J. Alber, P. Chang, R. Loynd, R. West, V. Dibia, A. Awadallah, E. Kamar, R. Hosn, and S. Amershi (2024)
+Magentic-one: A generalist multi-agent system for solving complex tasks
+.
+CoRR
+abs/2411.04468
+.
+External Links:
+Link
+,
+Document
+,
+2411.04468
+Cited by:
+§1
+,
+§2
+.
+H. Gao, J. Geng, W. Hua, M. Hu, X. Juan, H. Liu, S. Liu, J. Qiu, X. Qi, Q. Ren, Y. Wu, H. Wang, H. Xiao, Y. Zhou, S. Zhang, J. Zhang, J. Xiang, Y. Fang, Q. Zhao, D. Liu, C. Qian, Z. Wang, M. Hu, H. Wang, Q. Wu, H. Ji, and M. Wang (2026)
+A survey of self-evolving agents: what, when, how, and where to evolve on the path to artificial super intelligence
+.
+Trans. Mach. Learn. Res.
+2026
+.
+External Links:
+Link
+Cited by:
+§1
+.
+J. Gu, X. Jiang, Z. Shi, H. Tan, X. Zhai, C. Xu, W. Li, Y. Shen, S. Ma, H. Liu,
+et al.
+(2024)
+A survey on llm-as-a-judge
+.
+The Innovation
+.
+Cited by:
+§4.2
+.
+M. Hu, Y. Zhou, W. Fan, Y. Nie, Z. Ye, B. Xia, T. Sun, Z. Jin, Y. Li, Z. Zhang, Y. Wang, Q. Ye, B. Ghanem, P. Luo, and G. Li (2025)
+OWL: optimized workforce learning for general multi-agent assistance in real-world task automation
+.
+In
+The Thirty-ninth Annual Conference on Neural Information Processing Systems
+,
+External Links:
+Link
+Cited by:
+§1
+,
+§2
+.
+X. Huang, W. Liu, X. Chen, X. Wang, H. Wang, D. Lian, Y. Wang, R. Tang, and E. Chen (2024)
+Understanding the planning of LLM agents: A survey
+.
+CoRR
+abs/2402.02716
+.
+External Links:
+Link
+,
+Document
+,
+2402.02716
+Cited by:
+§1
+,
+§2
+.
+G. Izacard, M. Caron, L. Hosseini, S. Riedel, P. Bojanowski, A. Joulin, and E. Grave (2022)
+Unsupervised dense information retrieval with contrastive learning
+.
+Trans. Mach. Learn. Res.
+2022
+.
+External Links:
+Link
+Cited by:
+§B.2
+,
+§6.1
+.
+E. Kanoulas, P. Eustratiadis, M. Sanderson, J. Callan, Y. Li, J. Qiao, and V. Pal (2025)
+TREC 2025 Million LLMs Track
+.
+Note:
+https://trec-mllm.github.io/
+Cited by:
+Table 1
+.
+X. Li, A. Shakir, R. Huang, J. Lipp, and J. Li (2025)
+ProRank: prompt warmup via reinforcement learning for small language models reranking
+.
+arXiv preprint arXiv:2506.03487
+.
+Cited by:
+§6.1
+.
+X. Lu, H. Huang, R. Meng, Y. Jin, W. Zeng, and X. Shen (2025)
+Tools are under-documented: simple document expansion boosts tool retrieval
+.
+CoRR
+abs/2510.22670
+.
+External Links:
+Link
+,
+Document
+,
+2510.22670
+Cited by:
+§B.2
+,
+§2
+,
+§6.1
+.
+X. Ma, L. Wang, N. Yang, F. Wei, and J. Lin (2024)
+Fine-tuning llama for multi-stage text retrieval
+.
+In
+Proceedings of the 47th International ACM SIGIR Conference on
+Research and Development in Information Retrieval, SIGIR 2024, Washington
+DC, USA, July 14-18, 2024
+,
+G. H. Yang, H. Wang, S. Han, C. Hauff, G. Zuccon, and Y. Zhang (Eds.)
+,
+pp. 2421–2425
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§6.1
+.
+J. Ni, C. Qu, J. Lu, Z. Dai, G. H. Ábrego, J. Ma, V. Y. Zhao, Y. Luan, K. B. Hall, M. Chang, and Y. Yang (2022)
+Large dual encoders are generalizable retrievers
+.
+In
+Proceedings of the 2022 Conference on Empirical Methods in Natural
+Language Processing, EMNLP 2022, Abu Dhabi, United Arab Emirates,
+December 7-11, 2022
+,
+Y. Goldberg, Z. Kozareva, and Y. Zhang (Eds.)
+,
+pp. 9844–9855
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§B.2
+,
+§6.1
+.
+R. Nogueira, Z. Jiang, R. Pradeep, and J. Lin (2020)
+Document ranking with a pretrained sequence-to-sequence model
+.
+In
+Findings of the Association for Computational Linguistics: EMNLP
+2020, Online Event, 16-20 November 2020
+,
+T. Cohn, Y. He, and Y. Liu (Eds.)
+,
+Findings of ACL
+, Vol.
+EMNLP 2020
+,
+pp. 708–718
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§B.2
+,
+§6.1
+.
+Y. Qin, S. Hu, Y. Lin, W. Chen, N. Ding, G. Cui, Z. Zeng, X. Zhou, Y. Huang, C. Xiao, C. Han, Y. R. Fung, Y. Su, H. Wang, C. Qian, R. Tian, K. Zhu, S. Liang, X. Shen, B. Xu, Z. Zhang, Y. Ye, B. Li, Z. Tang, J. Yi, Y. Zhu, Z. Dai, L. Yan, X. Cong, Y. Lu, W. Zhao, Y. Huang, J. Yan, X. Han, X. Sun, D. Li, J. Phang, C. Yang, T. Wu, H. Ji, G. Li, Z. Liu, and M. Sun (2025)
+Tool learning with foundation models
+.
+ACM Comput. Surv.
+57
+(
+4
+),
+pp. 101:1–101:40
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§1
+,
+§2
+.
+Y. Qin, S. Liang, Y. Ye, K. Zhu, L. Yan, Y. Lu, Y. Lin, X. Cong, X. Tang, B. Qian, S. Zhao, L. Hong, R. Tian, R. Xie, J. Zhou, M. Gerstein, D. Li, Z. Liu, and M. Sun (2024)
+ToolLLM: facilitating large language models to master 16000+ real-world apis
+.
+In
+The Twelfth International Conference on Learning Representations,
+ICLR 2024, Vienna, Austria, May 7-11, 2024
+,
+External Links:
+Link
+Cited by:
+Table 1
+,
+§1
+,
+§2
+,
+§3.2
+,
+§4.2
+.
+C. Qu, S. Dai, X. Wei, H. Cai, S. Wang, D. Yin, J. Xu, and J. Wen (2024)
+Towards completeness-oriented tool retrieval for large language models
+.
+In
+Proceedings of the 33rd ACM International Conference on Information
+and Knowledge Management, CIKM 2024, Boise, ID, USA, October 21-25,
+2024
+,
+E. Serra and F. Spezzano (Eds.)
+,
+pp. 1930–1940
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§B.2
+,
+§2
+,
+§6.1
+.
+C. Qu, S. Dai, X. Wei, H. Cai, S. Wang, D. Yin, J. Xu, and J. Wen (2025)
+From exploration to mastery: enabling llms to master tools via self-driven interactions
+.
+In
+The Thirteenth International Conference on Learning Representations,
+ICLR 2025, Singapore, April 24-28, 2025
+,
+External Links:
+Link
+Cited by:
+§1
+,
+§2
+.
+S. E. Robertson and H. Zaragoza (2009)
+The probabilistic relevance framework: BM25 and beyond
+.
+Found. Trends Inf. Retr.
+3
+(
+4
+),
+pp. 333–389
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§A.3
+,
+§B.2
+,
+§2
+,
+§4.2
+,
+§6.1
+.
+K. Santhanam, O. Khattab, J. Saad-Falcon, C. Potts, and M. Zaharia (2022)
+ColBERTv2: effective and efficient retrieval via lightweight late interaction
+.
+In
+Proceedings of the 2022 Conference of the North American Chapter of
+the Association for Computational Linguistics: Human Language Technologies,
+NAACL 2022, Seattle, WA, United States, July 10-15, 2022
+,
+M. Carpuat, M. de Marneffe, and I. V. M. Ruíz (Eds.)
+,
+pp. 3715–3734
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§B.2
+,
+§6.1
+.
+A. Shakir, D. Koenig, J. Lipp, and S. Lee (2024)
+External Links:
+Link
+Cited by:
+§B.2
+.
+Y. Shang, Y. Li, K. Zhao, L. Ma, J. Liu, F. Xu, and Y. Li (2025)
+AgentSquare: automatic LLM agent search in modular design space
+.
+In
+The Thirteenth International Conference on Learning Representations,
+ICLR 2025, Singapore, April 24-28, 2025
+,
+External Links:
+Link
+Cited by:
+Table 1
+,
+§1
+,
+§2
+.
+M. Sharma, C. B. C. Zhang, C. Bandi, A. Aich, H. Nghiem, T. Rabbani, Y. Htet, B. Jang, A. Balwani, S. Basu, D. Peskoff, C. Wang, M. Ayestaran, S. M. Hendryx, B. Kenstler, and B. Liu (2026)
+ResearchRubrics: a benchmark of prompts and rubrics for deep research agents
+.
+In
+The Fourteenth International Conference on Learning Representations
+,
+External Links:
+Link
+Cited by:
+§4.3
+.
+Z. Shi, Y. Wang, L. Yan, P. Ren, S. Wang, D. Yin, and Z. Ren (2025)
+Retrieval models aren’t tool-savvy: benchmarking tool retrieval for large language models
+.
+In
+Findings of the Association for Computational Linguistics, ACL 2025,
+Vienna, Austria, July 27 - August 1, 2025
+,
+W. Che, J. Nabende, E. Shutova, and M. T. Pilehvar (Eds.)
+,
+Findings of ACL
+, Vol.
+ACL 2025
+,
+pp. 24497–24524
+.
+External Links:
+Link
+Cited by:
+§A.3
+,
+§B.2
+,
+Table 1
+,
+§1
+,
+§1
+,
+§2
+,
+§3.2
+,
+§4.2
+,
+§6.1
+.
+W. Sun, L. Yan, X. Ma, S. Wang, P. Ren, Z. Chen, D. Yin, and Z. Ren (2023)
+Is chatgpt good at search? investigating large language models as re-ranking agents
+.
+In
+Proceedings of the 2023 Conference on Empirical Methods in Natural
+Language Processing, EMNLP 2023, Singapore, December 6-10, 2023
+,
+H. Bouamor, J. Pino, and K. Bali (Eds.)
+,
+pp. 14918–14937
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§B.2
+,
+§6.1
+.
+Y. Tang, W. Su, Y. Liu, and Q. Ai (2026)
+Multi-field tool retrieval
+.
+CoRR
+abs/2602.05366
+.
+External Links:
+Link
+,
+Document
+,
+2602.05366
+Cited by:
+§2
+.
+Q. Team (2026)
+Qwen3-tts technical report
+.
+CoRR
+abs/2601.15621
+.
+External Links:
+Link
+,
+Document
+,
+2601.15621
+Cited by:
+§B.2
+.
+L. Wang, N. Yang, X. Huang, L. Yang, R. Majumder, and F. Wei (2024)
+Improving text embeddings with large language models
+.
+In
+Proceedings of the 62nd Annual Meeting of the Association for Computational
+Linguistics (Volume 1: Long Papers), ACL 2024, Bangkok, Thailand,
+August 11-16, 2024
+,
+L. Ku, A. Martins, and V. Srikumar (Eds.)
+,
+pp. 11897–11916
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§B.2
+.
+W. Wang, H. Bao, S. Huang, L. Dong, and F. Wei (2021)
+MiniLMv2: multi-head self-attention relation distillation for compressing pretrained transformers
+.
+In
+Findings of the Association for Computational Linguistics: ACL/IJCNLP
+2021, Online Event, August 1-6, 2021
+,
+C. Zong, F. Xia, W. Li, and R. Navigli (Eds.)
+,
+Findings of ACL
+, Vol.
+ACL-IJCNLP 2021
+,
+pp. 2140–2151
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§B.2
+,
+§B.2
+,
+§6.1
+.
+B. Wu, E. Meij, and E. Yilmaz (2025a)
+A joint optimization framework for enhancing efficiency of tool utilization in llm agents
+.
+In
+Findings of the Association for Computational Linguistics: ACL 2025
+,
+pp. 22361–22373
+.
+Cited by:
+§1
+,
+§2
+,
+§2
+.
+Y. Wu, H. Yuan, L. Zhang, and Z. Ma (2025b)
+Natural language inference as a judge: detecting factuality and causality issues in language model self-reasoning for financial analysis
+.
+In
+Proceedings of The 10th Workshop on Financial Technology and Natural Language Processing
+,
+pp. 210–220
+.
+Cited by:
+§4.2
+.
+S. Xiao, Z. Liu, P. Zhang, N. Muennighoff, D. Lian, and J. Nie (2024)
+C-pack: packed resources for general chinese embeddings
+.
+In
+Proceedings of the 47th International ACM SIGIR Conference on
+Research and Development in Information Retrieval, SIGIR 2024, Washington
+DC, USA, July 14-18, 2024
+,
+G. H. Yang, H. Wang, S. Han, C. Hauff, G. Zuccon, and Y. Zhang (Eds.)
+,
+pp. 641–649
+.
+External Links:
+Link
+,
+Document
+Cited by:
+§A.3
+,
+§B.2
+,
+§4.2
+,
+§6.1
+.
+M. Yuan, K. Pahwa, S. Chang, M. D. Kaba, M. SUNKARA, J. Jiang, X. Ma, and Y. Zhang (2025a)
+Automated composition of agents: a knapsack approach for agentic component selection
+.
+In
+The Thirty-ninth Annual Conference on Neural Information Processing Systems
+,
+External Links:
+Link
+Cited by:
+Table 1
+,
+§1
+,
+§2
+.
+S. Yuan, K. Song, J. Chen, X. Tan, Y. Shen, K. Ren, D. Li, and D. Yang (2025b)
+Easytool: enhancing llm-based agents with concise tool instruction
+.
+In
+Proceedings of the 2025 Conference of the Nations of the Americas Chapter of the Association for Computational Linguistics: Human Language Technologies (Volume 1: Long Papers)
+,
+pp. 951–972
+.
+Cited by:
+§1
+,
+§2
+,
+§2
+.
+Y. Yue, G. Zhang, B. Liu, G. Wan, K. Wang, D. Cheng, and Y. Qi (2025)
+MasRouter: learning to route LLMs for multi-agent systems
+.
+In
+Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)
+,
+W. Che, J. Nabende, E. Shutova, and M. T. Pilehvar (Eds.)
+,
+Vienna, Austria
+,
+pp. 15549–15572
+.
+External Links:
+Link
+,
+Document
+,
+ISBN 979-8-89176-251-0
+Cited by:
+§2
+.
+H. Zhang, T. Feng, and J. You (2025a)
+Router-r1: teaching LLMs multi-round routing and aggregation via reinforcement learning
+.
+In
+The Thirty-ninth Annual Conference on Neural Information Processing Systems
+,
+External Links:
+Link
+Cited by:
+§2
+.
+Y. Zhang, M. Li, D. Long, X. Zhang, H. Lin, B. Yang, P. Xie, A. Yang, D. Liu, J. Lin, F. Huang, and J. Zhou (2025b)
+Qwen3 embedding: advancing text embedding and reranking through foundation models
+.
+arXiv preprint arXiv:2506.05176
+.
+Cited by:
+§B.2
+,
+§6.1
+.
+Y. Zheng, P. Li, W. Liu, Y. Liu, J. Luan, and B. Wang (2024)
+ToolRerank: adaptive and hierarchy-aware reranking for tool retrieval
+.
+In
+Proceedings of the 2024 Joint International Conference on Computational
+Linguistics, Language Resources and Evaluation, LREC/COLING 2024,
+20-25 May, 2024, Torino, Italy
+,
+N. Calzolari, M. Kan, V. Hoste, A. Lenci, S. Sakti, and N. Xue (Eds.)
+,
+pp. 16263–16273
+.
+External Links:
+Link
+Cited by:
+§B.2
+,
+§B.2
+.
+Appendix A
+More Details about AgentSearchBench
+A.1
+Schema Design
+A key challenge in constructing AgentBase lies in the heterogeneous representation of agents across platforms, where capability descriptions, usage instructions, and accessibility conditions are presented in inconsistent formats. To enable systematic indexing and fair comparison in agent search, we introduce a unified schema that standardizes agent information into four semantic groups:
+(1)
+Agent metadata
+provides stable identity and provenance signals, supporting deduplication and version tracking;
+(2)
+Capability description
+captures the functional semantics of agents through textual descriptions, category tags, and modality indicators;
+(3)
+Usage guidance
+characterizes how agents are invoked and interacted with in practice, including quick-start instructions and example interactions;
+(4)
+Availability and constraints
+record practical deployment conditions such as pricing, accessibility, base models, and update timestamps, reflecting real-world feasibility considerations.
+This structured representation enables scalable agent collection, consistent retrieval over heterogeneous sources, and reproducible evaluation of agent search systems.
+We show our schema design in Table
+4
+and one example in Table
+5
+.
+A.2
+Example of Task Query and Task Description
+We show the example of single-and multi-agent task query, and task description in Table
+6
+.
+A.3
+Implementation Details of Benchmark Construction
+We use GPT-5.2 as the backbone for all generation steps with temperature
+τ
+=
+1
+\tau=1
+. For task description generation, we begin with a candidate pool of 100 task queries, which are filtered down to 10 via rubric-based scoring across 5 criteria, each criterion associated with approximately 2 subtasks. For multi-agent task query we pick 2–4 subtasks (mean 2.91), sampled to be semantically related yet non-redundant. Concretely, given an anchor task query, we retrieve the top-
+K
+K
+most similar candidates and skip the highest-ranked
+k
+skip
+k_{\text{skip}}
+to avoid near-duplicate subtasks.
+We retrieve a candidate set of top-
+K
+K
+agents using a hybrid scoring function
+combining BM25
+(Robertson and Zaragoza,
+2009
+)
+, BGE
+(Xiao
+et al.
+,
+2024
+)
+,
+and ToolRet
+(Shi
+et al.
+,
+2025
+)
+as lexical, semantic, and tool-aware
+retrievers respectively:
+s
+​
+(
+a
+,
+𝒯
+q
+)
+=
+α
+​
+s
+lex
++
+β
+​
+s
+sem
++
+γ
+​
+s
+tool
+\displaystyle s(a,\mathcal{T}_{q})=\alpha\,s_{\text{lex}}+\beta\,s_{\text{sem}}+\gamma\,s_{\text{tool}}
+(7)
+where
+α
++
+β
++
+γ
+=
+1
+\alpha+\beta+\gamma=1
+. Each component score is min-max normalised
+before aggregation, and the top-
+K
+K
+agents are selected by the fused score.
+Appendix B
+More Details about Experimental Setup
+B.1
+Completeness Computation
+For a given task
+𝒯
+\mathcal{T}
+associated with
+M
+≥
+1
+M\geq 1
+subtasks
+{
+s
+1
+,
+…
+,
+s
+M
+}
+\{s_{1},\dots,s_{M}\}
+, each with ground-truth relevant set
+ℛ
+s
+m
+\mathcal{R}_{s_{m}}
+,
+Completeness is defined as:
+COMP@
+K
+(
+𝒯
+)
+=
+𝕀
+[
+∀
+m
+∈
+{
+1
+,
+…
+,
+M
+}
+:
+π
+K
+(
+𝒯
+)
+∩
+ℛ
+s
+m
+≠
+∅
+]
+,
+\displaystyle\text{COMP@}K(\mathcal{T})=\mathbb{I}\!\left[\forall\,m\in\{1,\dots,M\}:\pi_{K}(\mathcal{T})\cap\mathcal{R}_{s_{m}}\neq\emptyset\right],
+(8)
+where
+π
+K
+​
+(
+𝒯
+)
+\pi_{K}(\mathcal{T})
+denotes the top-
+K
+K
+retrieved tools.
+A task is
+complete
+at
+K
+K
+if the retrieved set contains at least
+one relevant tool per subtask. For single-agent task query; when
+M
+=
+1
+M=1
+, Completeness reduces to
+standard hit rate.
+Schema Group
+Representative Fields
+Agent Metadata
+Versioned agent ID, name, official URL, platform source
+Capability Description
+Functional description, category tags, supported modalities
+Usage Guidance
+Quick-start instructions, example input–output interactions
+Availability & Constraints
+Pricing/accessibility, base model, update time, auxiliary metadata
+Table 4:
+Unified schema for representing agents collected across platforms.
+Field
+Value
+ID
+agt:openaiagents:2518c1@v1.1
+Source
+openaiagents
+Name
+JAVA Code Guide
+Description
+A JAVA development assistant focusing on coding
+standards and quality.
+Tools
+developer
+,
+browser
+,
+dalle
+,
+python
+Model
+GPT-5.2
+Input mode
+multi-modal
+Quick start
+Explain JAVA exception handling standards.
+How can I improve this MySQL query?
+Review my JAVA code snippet.
+What are the best practices for JAVA unit testing?
+Access
+free
+URL
+https://chatgpt.com/g/g-EYiFThMtQ
+Indexed
+26 Jan 2026
+Misc
+gizmoId:
+g-EYiFThMtQ
+;
+gpt_rating:
+4.0
+JAVA Code Guide is an AI-powered bot that leverages
+advanced GPT technology to assist JAVA developers in writing clean,
+efficient, and high-quality code. With its extensive knowledge of
+JAVA best practices …
+Table 5:
+An example agent from AgentBase.
+Type
+Value
+Task Description
+Monitor, summarize, and compare news and web sources.
+Single-Agent Task Query
+Create a mind map (hierarchical bullet nodes) summarizing
+the Nature article at https://www.nature.com/articles/d41586-023-03988-2,
+capturing its main sections, subsections, and key takeaways.
+Assume I am a graduate student writing a quick briefing and
+need a clear, structured outline.
+Multi-Agent Task Query
+I’m trying to reset my health and routine, so first ask me 5 questions about my schedule, priorities, and constraints, then build a 2-week productivity plan with a daily time-block schedule, a prioritized task list, and a simple tracker template, plus a 7-day Mediterranean meal plan at 1,800 kcal/day with recipes, step-by-step cooking tips, drink pairings, and a consolidated grocery list, and a 7-day English study plan with daily grammar drills, a vocabulary list, short speaking prompts, answer keys, and a simple progress tracker.
+Table 6:
+An example Single-Agent Task Query, Multi-Agent Task Query, and a Task Description
+T
+d
+T_{d}
+from AgentSearchBench.
+B.2
+The Baselines
+We introduce more details of each type of model used in retrieval and reranking benchmark.
+Retrieval
+We evaluate four families of retrieval models:
+(1)
+Sparse
+, based on term-weighting and learned sparse representations
+Robertson and Zaragoza (
+2009
+); Formal
+et al.
+(
+2021
+)
+;
+(2)
+Dense
+, using bi-encoder architectures trained for semantic similarity
+Santhanam
+et al.
+(
+2022
+); Izacard
+et al.
+(
+2022
+); Ni
+et al.
+(
+2022
+); Wang
+et al.
+(
+2021
+); Xiao
+et al.
+(
+2024
+)
+;
+(3)
+Tool-specific
+, retrievers explicitly trained on tool corpora
+Qu
+et al.
+(
+2024
+); Lu
+et al.
+(
+2025
+); Zheng
+et al.
+(
+2024
+); Shi
+et al.
+(
+2025
+)
+;
+(4)
+Decoder-only
+, leveraging autoregressive LMs for retrieval
+Wang
+et al.
+(
+2024
+); Team (
+2026
+)
+.
+Reranking
+We evaluate four families of reranking models:
+(1)
+Cross-encoder
+, scoring query–document pairs jointly
+Wang
+et al.
+(
+2021
+); Shakir
+et al.
+(
+2024
+); Chen
+et al.
+(
+2024
+)
+;
+(2)
+Tool-specific
+, rerankers trained on tool corpora
+Zheng
+et al.
+(
+2024
+)
+;
+(3)
+Decoder-only
+, reranking via autoregressive scoring
+Nogueira
+et al.
+(
+2020
+); Zhang
+et al.
+(
+2025b
+)
+;
+(4)
+LLM-based
+, prompting large language models to produce relevance judgements
+Sun
+et al.
+(
+2023
+)
+.
+B.3
+The Prompts
+Appendix C
+More Results
+C.1
+Performance on Each Realistic Queries
+We show the results on the queries from two realistic benchmark in Table
+10
+, i.e., Humanity’s Last Exam (HLE)
+Center for AI Safety
+et al.
+(
+2026
+)
+, and Finance Agent Benchmark
+Bigeard
+et al.
+(
+2025
+)
+.
+C.2
+More Results on Indexing
+Model
+Type
+NDCG
+Precision
+Recall
+Completeness
+@10
+@20
+@50
+@10
+@20
+@50
+@10
+@20
+@50
+@10
+@20
+@50
+Task Description
+BM25
+Sparse
+0.116
+0.106
+0.088
+0.109
+0.095
+0.068
+0.022
+0.039
+0.065
+0.000
+0.000
+0.014
+SPLADE v2
+Sparse
+0.062
+0.058
+0.054
+0.057
+0.053
+0.044
+0.011
+0.021
+0.041
+0.000
+0.000
+0.010
+ColBERT v2
+Dense
+0.143
+0.139
+0.136
+0.136
+0.131
+0.112
+0.028
+0.053
+0.115
+0.010
+0.019
+0.058
+Contriever MS-Marco
+Dense
+0.170
+0.163
+0.153
+0.167
+0.155
+0.123
+0.034
+0.064
+0.130
+0.005
+0.029
+0.077
+GTR-T5 Base
+Dense
+0.145
+0.133
+0.124
+0.138
+0.121
+0.099
+0.028
+0.050
+0.098
+0.005
+0.014
+0.048
+MiniLM-L6 v2
+Dense
+0.152
+0.151
+0.139
+0.155
+0.148
+0.114
+0.035
+0.067
+0.119
+0.010
+0.029
+0.053
+BGE-Large v1.5
+Dense
+0.186
+0.171
+0.160
+0.182
+0.160
+0.129
+0.039
+0.066
+0.134
+0.000
+0.024
+0.062
+ToolRet
+Tool
+0.139
+0.134
+0.124
+0.142
+0.131
+0.103
+0.029
+0.054
+0.103
+0.000
+0.019
+0.043
+COLT ToolBench
+Tool
+0.138
+0.130
+0.125
+0.137
+0.123
+0.102
+0.029
+0.051
+0.105
+0.010
+0.024
+0.053
+COLT ToolLens
+Tool
+0.088
+0.082
+0.077
+0.088
+0.077
+0.063
+0.018
+0.031
+0.062
+0.000
+0.010
+0.024
+E5-Mistral 7B
+Decoder-only
+0.025
+0.025
+0.026
+0.027
+0.026
+0.023
+0.005
+0.009
+0.023
+0.000
+0.000
+0.005
+Qwen-Embedding 8B
+Decoder-only
+0.174
+0.164
+0.153
+0.164
+0.152
+0.124
+0.032
+0.063
+0.127
+0.005
+0.019
+0.062
+Table 7:
+Retrieval results on Task Description
+T
+d
+T_{d}
+with
+full
+indexing.
+Model
+Type
+NDCG
+Precision
+Recall
+Hit
+@1
+@5
+@20
+@1
+@5
+@20
+@1
+@5
+@20
+@1
+@5
+@20
+Single-Agent Task Query
+BM25
+Sparse
+0.332
+0.297
+0.309
+0.332
+0.269
+0.158
+0.038
+0.157
+0.366
+0.332
+0.669
+0.853
+SPLADE v2
+Sparse
+0.096
+0.081
+0.091
+0.096
+0.072
+0.048
+0.011
+0.044
+0.114
+0.096
+0.256
+0.484
+ColBERT v2
+Dense
+0.317
+0.275
+0.295
+0.317
+0.248
+0.154
+0.036
+0.141
+0.356
+0.317
+0.629
+0.830
+Contriever MS-Marco
+Dense
+0.323
+0.273
+0.293
+0.323
+0.245
+0.154
+0.037
+0.140
+0.351
+0.323
+0.633
+0.835
+GTR-T5 Base
+Dense
+0.296
+0.243
+0.253
+0.296
+0.216
+0.129
+0.034
+0.124
+0.296
+0.296
+0.588
+0.792
+MiniLM-L6 v2
+Dense
+0.327
+0.272
+0.284
+0.327
+0.244
+0.147
+0.035
+0.136
+0.335
+0.327
+0.638
+0.820
+BGE-Large v1.5
+Dense
+0.371
+0.330
+0.362
+0.371
+0.299
+0.192
+0.042
+0.173
+0.438
+0.371
+0.692
+0.878
+ToolRet
+Tool
+0.322
+0.283
+0.312
+0.322
+0.259
+0.167
+0.034
+0.144
+0.382
+0.322
+0.656
+0.863
+COLT ToolBench
+Tool
+0.304
+0.241
+0.251
+0.304
+0.211
+0.128
+0.036
+0.121
+0.293
+0.304
+0.581
+0.788
+COLT ToolLens
+Tool
+0.234
+0.191
+0.200
+0.234
+0.170
+0.105
+0.026
+0.096
+0.233
+0.234
+0.506
+0.712
+E5-Mistral 7B
+Decoder-only
+0.079
+0.063
+0.068
+0.079
+0.057
+0.036
+0.008
+0.031
+0.082
+0.079
+0.215
+0.393
+Qwen-Embedding 8B
+Decoder-only
+0.297
+0.238
+0.259
+0.297
+0.212
+0.136
+0.034
+0.118
+0.312
+0.297
+0.571
+0.788
+Table 8:
+Retrieval results on Single-Agent Task Query
+T
+q
+T_{q}
+with
+full
+indexing.
+Model
+Type
+NDCG
+Precision
+Recall
+Hit
+Completeness
+@1
+@5
+@20
+@1
+@5
+@20
+@1
+@5
+@20
+@1
+@5
+@20
+@1
+@5
+@20
+Multi-Agent Task Query
+BM25
+Sparse
+0.318
+0.257
+0.189
+0.318
+0.238
+0.146
+0.015
+0.054
+0.129
+0.318
+0.654
+0.886
+0.012
+0.074
+0.244
+SPLADE v2
+Sparse
+0.102
+0.080
+0.066
+0.102
+0.074
+0.053
+0.005
+0.017
+0.048
+0.102
+0.298
+0.594
+0.002
+0.012
+0.050
+ColBERT v2
+Dense
+0.326
+0.251
+0.187
+0.326
+0.232
+0.147
+0.015
+0.050
+0.129
+0.326
+0.618
+0.822
+0.004
+0.034
+0.078
+Contriever MS-Marco
+Dense
+0.254
+0.225
+0.185
+0.254
+0.217
+0.156
+0.012
+0.047
+0.137
+0.254
+0.610
+0.860
+0.014
+0.070
+0.194
+GTR-T5 Base
+Dense
+0.282
+0.225
+0.182
+0.282
+0.211
+0.152
+0.012
+0.045
+0.128
+0.282
+0.570
+0.836
+0.010
+0.048
+0.168
+MiniLM-L6 v2
+Dense
+0.304
+0.256
+0.205
+0.304
+0.241
+0.169
+0.014
+0.052
+0.147
+0.304
+0.652
+0.882
+0.008
+0.060
+0.214
+BGE-Large v1.5
+Dense
+0.378
+0.310
+0.250
+0.378
+0.292
+0.207
+0.016
+0.063
+0.180
+0.378
+0.714
+0.926
+0.010
+0.076
+0.232
+ToolRet
+Tool
+0.300
+0.269
+0.224
+0.300
+0.258
+0.190
+0.013
+0.057
+0.164
+0.300
+0.682
+0.914
+0.006
+0.094
+0.270
+COLT ToolBench
+Tool
+0.230
+0.191
+0.157
+0.230
+0.180
+0.130
+0.010
+0.039
+0.116
+0.230
+0.536
+0.818
+0.010
+0.054
+0.154
+COLT ToolLens
+Tool
+0.194
+0.166
+0.140
+0.194
+0.157
+0.118
+0.008
+0.035
+0.102
+0.194
+0.502
+0.772
+0.006
+0.040
+0.144
+E5-Mistral 7B
+Decoder-only
+0.012
+0.018
+0.018
+0.012
+0.020
+0.017
+0.000
+0.004
+0.015
+0.012
+0.092
+0.262
+0.000
+0.000
+0.010
+Qwen-Embedding 8B
+Decoder-only
+0.228
+0.201
+0.175
+0.228
+0.193
+0.149
+0.011
+0.042
+0.133
+0.228
+0.566
+0.842
+0.010
+0.046
+0.178
+Table 9:
+Retrieval results on Multi-Agent Task Query
+T
+q
+T_{q}
+with
+full
+indexing.
+Model
+Type
+NDCG
+Precision
+Recall
+@1
+@5
+@20
+@1
+@5
+@20
+@1
+@5
+@20
+HLE: Humanity’s Last Exam
+BM25
+Sparse
+0.042
+0.022
+0.028
+0.042
+0.017
+0.011
+0.006
+0.013
+0.028
+SPLADE v2
+Sparse
+0.021
+0.013
+0.025
+0.021
+0.008
+0.012
+0.003
+0.014
+0.036
+ColBERT v2
+Dense
+0.104
+0.066
+0.071
+0.104
+0.050
+0.026
+0.022
+0.039
+0.080
+BGE-large v1.5
+Dense
+0.208
+0.191
+0.194
+0.208
+0.150
+0.076
+0.020
+0.163
+0.258
+E5 Mistral 7B
+Decoder-only
+0.042
+0.057
+0.070
+0.042
+0.058
+0.032
+0.007
+0.040
+0.098
+ToolRet
+Tool
+0.250
+0.194
+0.225
+0.250
+0.150
+0.089
+0.033
+0.137
+0.301
+Tool-Embed
+Tool
+0.271
+0.181
+0.174
+0.271
+0.142
+0.060
+0.043
+0.116
+0.181
+Finance Agent Benchmark
+BM25
+Sparse
+0.061
+0.047
+0.049
+0.061
+0.042
+0.020
+0.009
+0.024
+0.053
+SPLADE v2
+Sparse
+0.000
+0.050
+0.067
+0.000
+0.048
+0.024
+0.000
+0.046
+0.120
+ColBERT v2
+Dense
+0.030
+0.043
+0.044
+0.030
+0.036
+0.017
+0.003
+0.033
+0.048
+BGE-large v1.5
+Dense
+0.182
+0.166
+0.233
+0.182
+0.115
+0.065
+0.046
+0.157
+0.365
+E5 Mistral 7B
+Decoder-only
+0.121
+0.125
+0.138
+0.121
+0.085
+0.039
+0.035
+0.106
+0.156
+ToolRet
+Tool
+0.242
+0.147
+0.198
+0.242
+0.103
+0.068
+0.058
+0.087
+0.266
+Tool-Embed
+Tool
+0.212
+0.116
+0.117
+0.212
+0.079
+0.030
+0.048
+0.078
+0.111
+Table 10:
+Retrieval results on 200 Real Task Query
+T
+q
+T_{q}
+.
+Model
+Type
+NDCG
+Completeness
+MRR
+ρ
+\rho
+τ
+\tau
+RBO@0.9
+@1
+@5
+@20
+@1
+@5
+@20
+Task Description
+MiniLM-L12 v2
+Cross-Encoder
+0.580
+0.686
+0.842
+0.000
+0.000
+0.200
+0.218
+0.280
+0.229
+0.397
+BGE Reranker v2
+Cross-Encoder
+0.530
+0.659
+0.831
+0.000
+0.000
+0.200
+0.185
+0.283
+0.223
+0.400
+MXBAI Reranker Large
+Cross-Encoder
+0.480
+0.555
+0.796
+0.000
+0.000
+0.200
+0.215
+0.185
+0.149
+0.415
+Tool-Rank 4B
+Tool
+0.580
+0.652
+0.840
+0.000
+0.000
+0.200
+0.108
+0.268
+0.209
+0.417
+Tool-Rank 8B
+Tool
+0.440
+0.642
+0.810
+0.000
+0.000
+0.200
+0.134
+0.184
+0.138
+0.372
+MonoT5 Base MS-Marco
+Decoder-only
+0.480
+0.639
+0.806
+0.000
+0.000
+0.200
+0.164
+0.115
+0.083
+0.380
+Qwen Reranker 0.6B
+Decoder-only
+0.580
+0.642
+0.828
+0.000
+0.000
+0.200
+0.157
+0.205
+0.158
+0.409
+Qwen Reranker 4B
+(payload trunc.)
+Decoder-only
+0.580
+0.669
+0.835
+0.000
+0.000
+0.200
+0.126
+0.279
+0.216
+0.411
+RankGPT GPT-5.2
+LLM
+0.480
+0.641
+0.833
+0.000
+0.000
+0.200
+0.133
+0.403
+0.322
+0.424
+RankGPT LLaMA-3.3 70B
+LLM
+0.380
+0.604
+0.813
+0.000
+0.000
+0.200
+0.125
+0.264
+0.210
+0.421
+RankGPT Qwen-3 32B
+LLM
+0.580
+0.608
+0.820
+0.000
+0.000
+0.200
+0.142
+0.260
+0.202
+0.393
+Random Shuffle
+Proxy
+0.410
+0.497
+0.771
+0.000
+0.000
+0.200
+0.105
+0.095
+0.073
+0.350
+Table 11:
+Reranking results on Task Description
+T
+d
+T_{d}
+with
+golden labels
+and
+full
+indexing.
+Model
+Type
+NDCG
+Completeness
+MRR
+ρ
+\rho
+τ
+\tau
+RBO@0.9
+@1
+@5
+@20
+@1
+@5
+@20
+Task Query
+MiniLM-L12 v2
+Cross-Encoder
+0.535
+0.530
+0.765
+0.300
+0.545
+0.850
+0.360
+0.040
+0.030
+0.450
+BGE Reranker v2
+Cross-Encoder
+0.650
+0.630
+0.810
+0.305
+0.600
+0.850
+0.340
+0.115
+0.110
+0.470
+MXBAI Reranker Large
+Cross-Encoder
+0.480
+0.515
+0.730
+0.290
+0.585
+0.850
+0.300
+0.110
+0.090
+0.440
+Tool-Rank 4B
+Tool
+0.655
+0.665
+0.830
+0.305
+0.620
+0.850
+0.380
+0.260
+0.215
+0.490
+Tool-Rank 8B
+Tool
+0.700
+0.655
+0.825
+0.325
+0.605
+0.850
+0.330
+0.250
+0.210
+0.480
+MonoT5 Base MS-Marco
+Decoder-only
+0.550
+0.575
+0.785
+0.280
+0.610
+0.850
+0.340
+0.120
+0.100
+0.450
+Qwen Reranker 0.6B
+Decoder-only
+0.650
+0.645
+0.820
+0.310
+0.595
+0.850
+0.360
+0.220
+0.180
+0.475
+Qwen Reranker 4B
+Decoder-only
+0.660
+0.655
+0.825
+0.305
+0.610
+0.850
+0.360
+0.250
+0.210
+0.485
+RankGPT GPT-5.2
+LLM
+0.650
+0.670
+0.825
+0.300
+0.610
+0.850
+0.365
+0.245
+0.205
+0.485
+RankGPT LLaMA-3.3 70B
+LLM
+0.580
+0.610
+0.795
+0.260
+0.515
+0.850
+0.355
+0.165
+0.135
+0.470
+RankGPT Qwen-3 32B
+LLM
+0.605
+0.620
+0.790
+0.295
+0.550
+0.850
+0.360
+0.165
+0.140
+0.460
+Random Shuffle
+Proxy
+0.460
+0.500
+0.740
+0.280
+0.665
+0.850
+0.205
+0.030
+0.025
+0.370
+Table 12:
+Reranking results on Task Query
+T
+q
+T_{q}
+(Single-Agent and Multi-Agent Task Queries) with
+golden labels
+and
+full
+indexing.
+Experimental support, please
+view the build logs
+for errors. Generated by
+L
+A
+T
+E
+xml
+.
+Instructions for reporting errors
+We are continuing to improve HTML versions of papers, and your feedback helps enhance accessibility and mobile
+support. To report errors in the HTML that will help us improve conversion and rendering, choose any of the
+methods listed below:
+Click the "Report Issue"
+(
+)
+button, located in the page header.
+Tip:
+You can select the relevant text first, to include it in your report.
+Our team has already identified
+the following issues
+. We appreciate your time reviewing and reporting rendering errors we
+may not have found yet. Your efforts will help us improve the HTML versions for all readers, because disability
+should not be a barrier to accessing research. Thank you for your continued support in championing open access for
+all.
+Have a free development cycle? Help support accessibility at arXiv! Our collaborators at LaTeXML maintain a
+list of packages that need conversion
+, and welcome
+developer contributions
+.
+We gratefully acknowledge support from
+our
+major funders
+,
+member institutions
+,
+,
+and all contributors.
+About
+·
+Help
+·
+Contact
+·
+Subscribe
+·
+Copyright
+·
+Privacy
+·
+Accessibility
+·
+Operational Status
+(opens in new tab)
+Major funding support from

@@ -1,0 +1,3 @@
+Does supplying existing Brain context before external research improve novelty and factual accuracy, or does it anchor the researcher and reinforce existing beliefs? Evaluate the evidence and propose safeguards for a Brain-first research workflow.
+
+Run constraints: complete the full Agentic workflow and artifacts within 20 minutes. Perform a genuine read-only Brain-first lookup, preserve the context packet, cap external acquisition at 8 strong sources, finish acquisition by minute 12, and classify findings relative to Brain as new/changed/missing/contradictory/confirming. Do not call Perplexity. Do not write to canonical Brain, commit, push, or publish. Write only the required artifacts in this directory.

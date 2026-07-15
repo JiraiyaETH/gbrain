@@ -1,0 +1,1462 @@
+LLMs Trust Humans More, That’s a Problem!
+Unveiling and Mitigating the Authority Bias in Retrieval-Augmented
+Generation
+Yuxuan Li‡ , Xinwei Guo‡ , Jiashi Gao‡ , Guanhua Chen‡ Xiangyu Zhao§
+Jiaxin Zhang‡ , Quanying Liu‡ , Haiyan Wu♭ , Xin Yao♮ , Xuetao Wei‡ *
+‡
+Southern University of Science and Technology, § City University of Hong Kong,
+♭
+University of Macau, ♮ Lingnan University
+12432680@mails.sustech.edu.cn, weixt@sustech.edu.cn
+Abstract
+Retrieval-Augmented Generation (RAG) has
+been proven to be an effective approach to address the hallucination problem in large language models (LLMs). In current RAG systems, LLMs typically need to synthesize knowledge provided by two main external sources
+(user prompts and an external database) to generate a final answer. When the knowledge
+provided by the user conflicts with that retrieved from the database, a critical question
+arises: Does the LLM favor one knowledge
+source over the other when generating the
+answer? In this paper, we are the first to unveil
+a new phenomenon, Authority Bias, where the
+LLMs tend to favor the knowledge provided by
+the user even when it deviates from the facts;
+this new phenomenon is rigorously evidenced
+via our novel and comprehensive characterization of Authority Bias in six widely used
+LLMs and across diverse task scenarios. We
+propose a novel dataset specifically designed
+for detecting Authority Bias, called the Authority Bias Detection Dataset (ABDD), and introduce new, detailed metrics to measure Authority
+Bias. To mitigate Authority bias, we finally propose the Conflict Detection Enhanced Query
+(CDEQ) framework. We identify the sentences
+and atomic information that generate conflicts,
+perform a credibility assessment on the conflicting paragraphs, and ultimately enhance the
+query to detect perturbed text, thereby reducing Authority bias. Comparative experiments
+with widely used mitigation methods demonstrate that CDEQ exhibits both effectiveness
+and advancement, significantly enhancing the
+robustness of RAG systems.
+
+1
+
+Introduction
+
+Large language models (LLMs) are experiencing
+swift growth, showcasing remarkable proficiency
+across various fields, e.g., search, medical diagnosis, and autonomous driving (Brown et al., 2020).
+* Corresponding author.
+
+A pressing challenge facing these large models
+is their tendency to occasionally generate outputs
+that stray from the user’s input or contravene established world knowledge. This phenomenon
+is called the “hallucination” (Zhang et al., 2023),
+which undermines LLMs’ reliability and accuracy.
+To address or mitigate the hallucinations, supplying pre-trained models with external information has emerged as a practical solution known
+as retrieval-augmented generation (RAG) (Lewis
+et al., 2020). External knowledge incorporated
+into LLM prompts could enhance the accuracy of
+LLMs’ answers significantly (Lewis et al., 2020;
+Mao et al., 2021; Chen et al., 2024). However, external sources of knowledge may be unreliable, as
+false information and misleading content abound
+on the Internet. If erroneous information is retrieved and fed back to the LLM, the accuracy of
+the LLM’s response could significantly diminish
+(Wang et al., 2023). Note that all these external
+knowledge sources mentioned above are exclusively external databases. Although previous methods (Hsu et al., 2021; Wu et al., 2022; Weller et al.,
+2022) helped LLMs handle knowledge conflicts,
+they often overlook the possibility that external
+knowledge may come from the user.
+Due to the increase in the prompt capacity of
+LLMs, users can now type prompts with more detailed context knowledge information. As the generator in RAG, the LLMs must synthesize knowledge provided by the user and knowledge retrieved from the database to generate a final answer. In such scenarios, we ask one question:
+does the LLM show any bias when their knowledge conflicts? Our study in this paper shows
+a positive answer, which presents a new phenomenon of Authority Bias, where the LLM
+tends to trust user-provided knowledge even if it
+may be wrong. In cognitive science and psychology, Authority Bias often occurs when individuals
+make judgments in fields lacking expertise or un-
+
+28844
+Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 28844–28858
+July 27 - August 1, 2025 © 2025 Association for Computational Linguistics
+
+Retrieval
+
+User
+
+Query
+
+Combine
+
+Input
+
+Who is the current CEO of OpenAI?
+
+Indexing
+
+Prompt
+
+Query: Who is the current CEO of OpenAI?
+Please answer the question above:
+Chunk 1: ...Altman...
+Chuck 2:
+
+Database
+
+VS
+
+Generation
+
+Retrieve
+
+Query with User-Provided Context
+I hear that Jobs was a brilliant person who
+became the CEO of OpenAI at a young
+age......Who is the current CEO of OpenAI?
+
+Generation
+Maybe user is more
+authoritative?
+
+Chunk 1: Samuel Harris
+Altman (born April 22,1985)
+is an American entrepreneur
+and investor best known as
+the CEO of OpenAl since
+2019.
+Chunk 2: ......
+
+Altman
+LLM
+
+Prompt with Conflict
+Query: I hear ...Jobs...Who is the current CEO of OpenAI?
+Please answer the question above:
+Chunk 1: ...Altman...
+Chuck 2:
+
+Jobs
+
+Authority Bias
+
+LLM
+
+Figure 1: Illustration of Authority Bias in RAG systems. In simple queries, the LLM relies solely on database
+knowledge for the answer. However, in more complex scenarios with conflicting user-provided and database
+knowledge, the LLM tends to favor the user’s input, even if incorrect. We characterize this phenomenon of LLMs in
+RAG as Authority Bias.
+
+derstanding (Milgram, 1963).
+First, we propose the Authority Bias Detection Dataset (ABDD) to explore the impact of
+knowledge conflicts between the user and knowledge databases in RAG. Using a novel conflict construction method, the ABDD is derived from the
+Stanford Question Answering Dataset (SQuAD)
+(Rajpurkar et al., 2016). To more effectively detect
+Authority Bias in LLMs, we propose three new
+metrics, focusing on three key dimensions to assess the influence of different knowledge providers
+on the responses of LLMs. The ① Inaccuracy Ratio measures the LLM’s preference when presented
+with conflict contexts. At the same time, the ②
+Correctiveness Ratio and ③ Misleading Ratio primarily evaluate the ability of knowledge providers
+to either correct incorrect responses of LLMs or
+mislead the LLMs. Based on these three metrics, we provide a detailed definition and quantitative analysis for Authority Bias. We use the
+ABDD and metrics to evaluate six LLMs as RAG
+generators: ChatGPT-3.5, Gemma, Llama2-7/13B,
+Mistral, and Vicuna. Across all these LLMs, we
+unveil the phenomenon of Authority Bias, where
+the LLM tends to trust user-provided knowledge,
+even if it may be wrong. As the LLM is expected to
+derive the correct answer based on external knowledge, the presence of Authority Bias reduces the
+
+accuracy of RAG if the user provides the wrong
+knowledge. In more critical cases, the user’s input and interaction with the RAG system may be
+subject to adversarial attacks. This leads to manipulated inputs that can skew the final answers, a
+method potentially easier by bypassing and indirectly manipulating the RAG system.
+Then, we shift our focus to mitigating Authority
+Bias. Initially, we experiment with currently widely
+adopted approaches, namely LoRA fine-tuning (Hu
+et al., 2021) and Chain-of-Thought (CoT) (Wei
+et al., 2022) techniques. We find that these methods do not effectively mitigate Authority Bias. Further experiments reveal that RAG systems based
+on LLMs cannot discern perturbative conflict information internally. Consequently, we propose
+the Conflict Detection Enhanced Query (CDEQ)
+framework, which aims to provide RAG systems
+with a conflict detection module to mitigate Authority Bias. Specifically, we decompose conflicting
+paragraphs and pinpoint conflicts to specific atomic
+facts. By leveraging external tools, we assess and
+score the factuality of the content, ultimately enhancing the generator’s robustness. In comparison
+with widely used mitigation methods, the proposed
+CDEQ framework demonstrates both effectiveness
+and superiority, offering new insights for future research on LLM factuality and hallucination issues.
+
+28845
+
+The main contributions of this paper are as
+follows:
+• To the best of our knowledge, we are the first
+to unveil Authority Bias in LLMs used as generators within RAG systems by comprehensively analyzing the manifestations of Authority Bias.
+• We propose a novel conflict construction
+method and the ABDD. This dataset is designed to accurately detect the impact of different knowledge sources on the LLMs’ performance while minimizing the influence of
+confounding factors, such as text structure and
+style.
+• We propose three new metrics, the Inaccuracy
+Ratio, Correctiveness Ratio, and Misleading
+Ratio, for measuring Authority Bias. These
+flexible metrics can be adapted to assess this
+bias across various dimensions. Building on
+this foundation, we conduct a comprehensive
+measurement of Authority Bias in six widely
+used LLMs and across diverse task scenarios.
+• We propose a new framework CDEQ to mitigate Authority Bias. By locating conflicting
+information and performing a factuality assessment, our framework CDEQ can effectively mitigate the issue of Authority Bias and
+enhance the robustness of RAG systems.
+
+2
+
+Related Work
+
+Retrieval-Augmented Generation RAG represented one of the most promising solutions to the issue of hallucinations currently (Lewis et al., 2020).
+To tackle the problems of false and outdated knowledge, researchers opted to supply trained large
+models with accurate external knowledge to aid
+in their question-answering capabilities. In the initial framework, a retriever was trained alongside
+the generator to fetch relevant information from an
+external database. To enhance the relevance and
+accuracy of the retrieved information, some studies
+incorporated post-processing (Cohere, 2023) and
+re-ranking (Blagojevi, 2023) methods, steadily improving the recall and precision of the retrieved
+segments. Moreover, the components were modularized in response to the demands for industrial
+convenience and scalability, integrating additional
+elements such as memory modules (Gao et al.,
+2023).
+
+Knowledge Conflict Knowledge paragraphs retrieved from external sources may conflict with the
+parametric knowledge within the model. Initial
+studies posited that models relied on their parametric knowledge, generating answers not present
+in the evidence paragraphs (Longpre et al., 2021).
+However, subsequent research suggested that this
+reliance was due to using a single paragraph instead
+of multiple paragraphs. Upon adjusting this setup,
+models showed greater trust in the information provided by external knowledge sources (Chen et al.,
+2022). Additionally, some studies mitigating conflicts with external knowledge sources found that
+models tend to depend more on the most relevant
+knowledge. Moreover, the fluency and popularity of the text were also identified as influencing
+factors (Xie et al., 2024).
+Fine-tuning and Prompt Engineering There were
+two main approaches to adapting pre-trained LLMs
+to downstream tasks: fine-tuning and prompt engineering. Parameter-Efficient Fine-Tuning (PEFT)
+aimed to improve the performance of pre-trained
+models on new tasks by minimizing the number
+of fine-tuning parameters and computational complexity. Houlsby et al. (2019) proposed a PEFT
+fine-tuning method for BERT, which initiated the
+research on PEFT. Li and Liang (2021) proposed
+the Prefix Tuning method for implicit model finetuning. The commonly used LORA method (Hu
+et al., 2021) in PEFT was widely adopted as the
+foundational method for fine-tuning large models. On the other hand, by selecting appropriate
+prompts, we could control the model’s behavior to
+achieve desired outputs without any training costs
+(Brown et al., 2020; Petroni et al., 2019; Schick
+and Schütze, 2021). Chain-of-Thought (CoT) (Wei
+et al., 2022) enhanced LLMs’ reasoning capabilities by breaking down complex reasoning tasks
+into smaller, sequential steps.
+Parametric Memory and Sycophancy in LLMs
+Parametric and non-parametric memory serve as
+the primary foundations for LLMs when answering questions. When these two types of memory
+conflict, the model’s preferences become a critical
+topic for discussion.
+The study by Longpre et al. (2021) suggests that
+models rely more heavily on parametric knowledge
+when generating answers. However, this conclusion was soon challenged by Chen et al. (2022),
+who found that when multiple highly reliable passages are provided, models tend to answer based on
+the context of non-parametric memory. This find-
+
+28846
+
+ing has been further corroborated by subsequent
+research Farahani and Johansson (2024).
+The sycophancy phenomenon in LLMs (Sharma
+et al., 2024) typically refers to scenarios where a
+user’s emotional bias influences the model’s judgment. In contrast, when we discuss Authority Bias
+within RAG systems, the user does not express personal preferences or emotional inclinations. The
+user’s intent is to obtain an accurate and factual
+answer. Authority Bias arises from the model’s
+undue trust in the user’s authority as a human, not
+from emotional guidance or preferences.
+Moreover, whereas sycophancy often focuses
+on settings where the user is the sole information
+provider, our definition of Authority Bias explicitly
+considers scenarios where external sources offer
+conflicting or correct information. This distinction
+is particularly important in RAG-based applications, where multiple sources coexist and interact.
+
+3
+
+Methodology
+
+that opinion. Following the notations of Longpre
+et al. (Longpre et al., 2021) and Wu et al. (Wu
+et al., 2024), we begin with a QA instance (q, c, a),
+where q represents a query, a represents the corresponding answer, and c is the provided context.
+Besides, we denote the context information from
+the user as cu and the context information from
+the database as cd . To characterize the influence
+of Authority bias on the performance of LLMs, we
+evaluate the differences in three metrics of LLMs
+when c from the user (cu ) and c from the database
+(cd ). First, we define the indicator function I(·) as
+follows:
+(
+1, if c is consistent with the fact,
+I(c) =
+0, if c deviates from the fact.
+I(·) takes the context c as input and outputs an
+indication of whether c is consistent with the fact.
+Then, we define three metrics to measure the
+performance of LLMs when faced with knowledge
+conflicts.
+
+3.1 ABDD Construction
+
+• Inaccuracy Ratio Ri :
+
+In our study of Authority Bias in LLMs, we generate conflicts by altering the sources of context for
+a single question. These conflicts require that the
+information from different contexts be equivalent,
+except for the focus question. The detailed illustration of constructing the ABDD is shown in Figure 2.
+For a standard reading comprehension answer, we
+first locate the answer within the context, analyze
+its semantic category, and find corresponding entities in Wikipedia. We then identify a conflict entity
+and replace the original context with the standard
+answer location and the conflict entity. This modified context is used as input to the LLM, resulting in minor language changes while retaining the
+original context’s relevant information. Compared
+to previous methods (Longpre et al., 2021; Chen
+et al., 2022; Xie et al., 2024), our approach derives
+fictional context from the reading comprehension
+question, reducing the impact of irrelevant information in the final bias analysis. Additionally, we
+introduce a novel conflict method, follow-up conflicts, detailed in Appendix B.
+3.2 Authority Bias
+In psychology, Authority Bias (Milgram, 1963) is
+characterized by the tendency to attribute greater
+accuracy to the opinion of an authority figure (unrelated to its content) and be more influenced by
+28847
+
+P (M (q, c, ¬c) ̸= a | I(c)⊕I(¬c) = 1),
+where c and ¬c are contexts from different
+data sources, c, ¬c ∈ {cu , cd } and ¬c ̸= c.
+M (q, c, ¬c) represents the output of the LLM
+with query q, contexts c and ¬c as input.
+I(c)⊕I(¬c) = 1 means that for two contexts,
+one contains information consistent with the
+facts, and the other contains the conflict entity.
+In summary, Ri refers to the probability that
+the LLM trusts the wrong knowledge source
+when conflicting contexts are provided.
+• Correctiveness Ratio Rc :
+P (M (q, c, ¬c) = a | M (q, c) ̸= a, I(c) = 0, I(¬c) = 1),
+(1)
+
+where c and ¬c are contexts from different
+data sources, c, ¬c ∈ {cu , cd } and ¬c ̸= c.
+Rc refers to the probability that LLM corrects
+its answer when faced with conflict. More
+specifically, the LLM is misled by wrong information from one source, but corrects its
+answer after the second source containing the
+actual context is provided.
+• Misleading Ratio Rm :
+P (M (q, c, ¬c) ̸= a | M (q, c) = a, I(c) = 1, I(¬c) = 0),
+(2)
+
+Question Answering Dataset
+Question
+Ground
+Truth
+
+Origin Context
+
+Conflict Entity
+Ground
+Truth
+
+Rewrite by LLM
+Origin Context
+
+Wiki
+Person
+
+Date
+
+Conflict Context
+
+...
+
+Question
+
+Saint Peter
+
+Mary Quant
+
+Saint Peter
+
+ABDD Dataset
+
+LLM
+
+Mary Quant
+
+Ground
+Truth
+
+Origin
+Context
+
+Corpus
+
+Mary Quant
+
+Conflict
+Entity
+
+Conflict
+Context
+
+Figure 2: A step-by-step illustration of constructing the ABDD.
+
+where c and ¬c are contexts from different
+data sources, c, ¬c ∈ {cu , cd } and ¬c ̸= c.
+Rm refers to the probability of being misled
+when the LLM faces conflict. The LLM initially derives the correct answer from accurate information provided by one context but
+is misled into giving a wrong answer after
+adding another context containing the wrong
+knowledge.
+
+questions with entity-based answers and exclude
+unanswerable ones.
+Entity substitution Following Longpre et al.
+(Longpre et al., 2021), we first apply SpaCy1 for
+named entity recognition, categorizing entities into
+six types: person (PER), date (DAT), numeric
+(NUM), organization (ORG), location (LOC) and
+unknown. We then perform answer substitution
+using Wikipedia as a corpus in three ways:
+
+Based on the above metrics, we define the Authority Bias of LLMs as the difference in the three
+metrics of LLMs when c from the user and c from
+the database. Formally, we calculate the Authority
+Bias by:
+Br = |Rr,cu − Rr,cd |,
+
+1. Alias: Replacing an entity with an alternative
+name, keeping the original entity unchanged.
+
+where Rr,cu represents the metric Rr when c =
+cu , Rr,cd represents the metric Rr when c = cd
+and Rr ∈ {Ri , Rc , Rm }. For example, Bi is the
+Authority Bias calculated based on the Inaccuracy
+Ration Ri .
+
+4
+
+Characterizing Authority Bias of LLMs
+in RAG
+
+4.1 Experimental Setup
+Our research focuses on the responses of LLMs
+when external knowledge from the retriever contradicts the information carried by the user’s query.
+To conduct this experiment, we construct a dataset
+where two context segments are provided for a
+given question, each offering a different answer.
+The RAG pipeline is then established by using one
+segment as the retriever’s input, while the other is
+integrated into the user’s query. The model’s output
+selection is then analyzed. The detailed experimental setup is outlined below:
+Dataset We use the Stanford Question Answering Dataset (SQuAD) (Rajpurkar et al., 2016),
+which consists of questions based on Wikipedia articles. From SQuAD, we extract question-context
+pairs where the answer is embedded within the
+context. For experimental purposes, we focus on
+
+2. Corpus: Substituting an entity with another
+from the same category within Wikipedia.
+3. Typeswap: Replacing an entity with one from
+a different category, potentially altering the
+original meaning.
+These substitutions yield two context segments and
+their respective answers.
+4.2
+
+Construct Knowledge Conflicts
+
+Given the rarity of encountering two identical text
+segments with only different answers in real scenarios, we revise the substituted text. Using Llama13B, we rewrite one context segment by prompting
+the model to generate a new context where only
+the sentence with the incorrect answer is altered,
+while the rest of the context remains semantically
+consistent. This approach minimizes bias between
+paragraphs, ensuring that variations in non-targeted
+sections do not affect the experimental results. By
+maintaining semantic consistency, our method provides a more controlled environment for studying misinformation than using single-sentence contexts.
+Upon completing this step, we obtain two context segments for the same question. While the
+answers differ semantically, the remaining information is consistent, with variations only in linguistic structure and word choice. We used cosine
+1
+
+SpaCy is a Python library. https://spacy.io/usage/
+spacy-101#features
+
+28848
+
+Table 1: The composition of ABDD and the cosine similarity of each part
+Conflicts
+
+Entity-substitution
+
+Substitution Mode
+Alias
+Corpus
+Typeswap
+
+Composition According to Answer Type
+DATE
+
+NUM
+
+PER
+
+ORG
+
+LOC
+
+TOTAL
+
+2119(80.8)
+3429(79.9)
+10374(78.6)
+
+2116(80.6)
+3756(80.1)
+10178(78.6)
+
+3280(79.2)
+4728(78.4)
+9423(78.6)
+
+2224(79.6)
+3069(78.7)
+10651(78.7)
+
+2928(79.9)
+3329(78.9)
+10446(78.8)
+
+13669(79.8)
+18311(79.2)
+51072(78.7)
+
+* For 2119(80.8), the 2119 means the number of datasets where the substitution type is Alias and the entity type serving as the
+answer is Date. 80.8 means the average cosine similarity for this category of datasets.
+
+similarity to quantify the similarity between the
+two passages, showing that their similarity is close
+to 80%, indicating that, aside from differences in
+the core answers, the rest of the content is largely
+consistent. The size of the datasets constructed
+using different substitution methods varies, as the
+Wikipedia corpus may not always provide alternative aliases for a given answer. Additionally, type
+swapping can generate multiple distinct datasets
+for a single question. Finally we get the ABDD.
+Table 1 categorizes and presents the ABDD along
+with the average cosine similarity for each type.
+Additionally, we also propose another novel
+method for generating conflicts. Compared to previously proposed forms of conflict, conflicts constructed in this manner are more challenging to
+filter and possess a higher potential for misleading.
+More details are provided in Appendix B.
+4.3
+
+Authority Bias under Knowledge Conflicts
+
+We develop a simple RAG framework based on
+prompts to control for variations in retriever architectures. Detailed experimental procedures are in
+the Appendix C. In Section 3, we define three metrics for different information providers and evaluate
+six LLMs on the most misleading corpus dataset.
+As shown in Figure 3, user-provided knowledge
+consistently outperforms database-provided knowledge across all metrics. In the primary conflict scenario, where both the user and the database supply
+knowledge, the model is more likely to be misled
+by the user’s incorrect input, with the difference
+reaching up to threefold in extreme cases. This
+suggests that using LLMs directly as generators in
+RAG systems can introduce Authority Bias.
+Further evidence shows that, regardless of the
+accuracy of user-provided knowledge, it has a
+stronger influence on the model’s final answer than
+database knowledge. When the user provides accurate information, the model corrects errors from its
+memory or the database. However, when the user
+provides incorrect information, even initially cor-
+
+rect answers may be distorted, leading to erroneous
+results.
+Given the continuous advancements in LLMs
+and the emergence of more capable models,
+we have included additional experiments using
+Llama3-8B. The corresponding results are presented in the Appendix D, showing that Authority Bias remains clearly present even in advanced
+models.
+
+Figure 3: A comparison of three metrics of the two
+knowledge providers. As shown in the figure, it is clear
+that when the user acts as the provider of wrong knowledge, all three metrics surpass those of the database.
+
+4.4
+
+Influence Factors of Authority Bias
+
+To further explore and mitigate the Authority Bias,
+we investigate the factors influencing it. Specifically, we analyze the impact of different substitution types and knowledge conflicts involving various answer entities on the degree of Authority Bias
+in RAG systems.
+Corpus substitutions exacerbate Authority
+Bias. We create conflicts using three methods,
+varying mainly in the relationship between substituted and original answers. Experimental results
+are shown in Figure 4. In Alias substitution, contextually inappropriate and infrequently used aliases
+make it easier for LLMs to detect incorrect answers.
+For example, in numerical tasks, Arabic numerals
+like "4" are far more common than Roman numerals “IV”, despite their semantic equivalence. This
+effect is even more pronounced in the Typeswap
+
+28849
+
+Figure 4: The ratio of correct to wrong answers in
+LLMs’ response under different substitution methods.
+Corpus knowledge conflicts show stronger Authority
+Bias.
+
+dataset, where an answer like "Saturday" is incorrect for a question about a young boy’s mode of
+transportation.
+However, when the substituted answer comes
+from another entity within the same corpus, detecting perturbations becomes harder. In such cases,
+the likelihood of an incorrect answer and the severity of Authority Bias increase.
+The type of answer influences Authority Bias.
+We analyze different answer types in corpus substitutions, with experimental results shown in Figure
+5. The line graph shows the model’s error probability when each knowledge source provides incorrect
+information, while the light green bar chart indicates the severity of Authority Bias. Numerical answers tend to induce higher error rates and Authority Bias because they are less contextually linked
+to the passage, making it harder for the model to
+distinguish the original from the perturbed text. In
+contrast, when the answer is a location or organization, the metrics are lower. For example, when
+the location "Egypt" is replaced with "New York,"
+LLMs are less likely to blindly trust authority, as
+they can easily discern that New York is not associated with deserts and pyramids.
+A key factor in Authority Bias is how easily
+the perturbed text can be identified. When LLMs
+can easily detect conflicting passages, they are less
+likely to “blindly trust authority,” allowing them to
+more objectively evaluate the sources and reduce
+Authority Bias. This may be a core strategy for
+mitigating it. Additionally, our supplementary experiments in Appendix G show that adjusting the
+order of the context does not significantly impact
+Authority Bias.
+
+5
+
+Mitigation of Authority Bias
+
+5.1
+
+LoRA Fine-tuning and CoT
+
+LoRA fine-tuning performs poorly in highly misleading conflict contexts. LoRA fine-tuning (Hu
+et al., 2021) is commonly used to adapt pre-trained
+large models to downstream tasks. We attempt
+to reduce Authority Bias using LoRA fine-tuning,
+with specific parameter configurations provided in
+Appendix E. A portion of the dataset is extracted
+for fine-tuning, and we evaluate the performance
+of the LLaMA2-7B model after fine-tuning.
+As shown in the left subgraph of Figure 6, the
+red lines represent the original experiment, and the
+blue lines indicate post-fine-tuning performance.
+While LoRA fine-tuning reduces Authority Bias for
+Typeswap and Alias, it fails to sufficiently reduce
+bias on the Corpus dataset. Given that Corpus is the
+most misleading, we conclude that as misleading
+information increases, LoRA fine-tuning may not
+effectively mitigate Authority Bias.
+LLMs using CoT exhibits hallucinations, limiting its ability to mitigate Authority Bias. We
+explore using Chain of Thought (CoT) to break
+down complex reasoning into two steps. First, the
+LLM self-assesses the confidence levels of different knowledge sources and selects the one with
+higher confidence. In the second step, the LLM
+answers the question using only the selected highconfidence source.
+As shown in the right subgraph of Figure 6, the
+red line represents the baseline, and the blue line
+shows the model’s Authority Bias after applying
+CoT. When the user provided incorrect knowledge,
+the likelihood of the model being misled decreased,
+indicating reduced Authority Bias. However, as
+shown in the Appendix F, when the database provides incorrect information, the model becomes
+more susceptible to being misled. To investigate
+this anomaly, we further analyze the model’s performance across various tasks.
+Table 2: Performance comparison of different models
+on Task 1 and Task 2. The LLMs exhibit significant
+hallucination issues when performing task 1.
+
+28850
+
+Model
+Gemma
+Llama2-7b
+Llama2-13b
+Mistral
+Vicuna-7b
+
+Task 1
+Distinguish Source
+
+Task 1
+No Distinguish
+
+Task 2
+
+56.3
+48.7
+53.9
+57.5
+59.0
+
+52.3
+54.6
+54.2
+73.8
+49.5
+
+91.2
+89.9
+93.9
+91.6
+87.8
+
+Figure 5: The manifestation of Authority Bias when the answer involves different types of entities is analyzed. The
+green histogram represents Authority Bias using the difference between the two information providers.
+
+5.2
+
+Figure 6: The effectiveness of using LoRA fine-tuning,
+CoT prompt engineering and CDEQ to mitigate Authority Bias. The CDEQ framework exhibits both effectiveness and advancement.
+
+We divide task 1 into two scenarios: distinguish
+source and no distinguish. Prompts for these scenarios are available in Appendix A. In the Distinguish
+Source scenario, the LLM is informed which text
+is from the user and which is from the database. In
+the No Distinguish scenario, the LLM selects the
+more trustworthy passage without knowing their
+sources. Task 2 then requires the LLM to provide
+the correct answer based solely on the correct external knowledge.
+Table 2 shows the LLM’s accuracy in completing these tasks. Results indicate poor performance
+on Task 1, with significant hallucination, suggesting difficulty in distinguishing highly misleading
+conflict texts. However, successful completion of
+Task 1 increased the likelihood of correctly answering Task 2. This suggests that enabling the LLM to
+assess the reliability of knowledge sources reduces
+Authority Bias. Further approaches or additional
+discriminators may be needed to improve Task 1.
+
+Conflict Detection Enhanced Query
+
+The experiments presented in Section 5.1 demonstrate that LLMs inherently lack the ability to discern perturbative information and must rely on external tools. To this end, we propose the CDEQ
+framework. Specifically, this framework consists
+of three main steps, which we will introduce in
+detail below.
+Conflict Localization Since the conflicts involved in our research are primarily focused at the
+paragraph-level, in order to optimize resource expenditure and enhance the accuracy of conflict detection, the first step is to further refine paragraphlevel conflicts to the sentence-level. Specifically,
+we divide the paragraphs cu , cd into several individual sentences. Here, we employ ChatGPT as
+the base LLM and introduce relevance and semantic contradiction metrics. Our goal is to identify
+sentence pairs that exhibit high relevance but contain contradictions. By leveraging the powerful
+instruction-following capabilities of the LLM, we
+can significantly reduce the costs associated with
+data annotation and model training.
+Factuality Detection For sentence pairs that
+are contradictory yet relevant, we further decompose them into atomic facts, which are short statements containing only a single piece of information. The core information is then queried using
+the Google Search API. Specifically, we employ
+the Factool(Chern et al., 2023) integrated with Serper to obtain retrieval results, which serve as the
+evaluative evidence for these atomic facts. Based
+on the source and match quality of the evidence,
+we assign factuality scores to the contradictory sen-
+
+28851
+
+tence pairs. By aggregating the factuality scores
+of multiple contradictory sentence pairs, we conduct a final credibility assessment of the conflicting
+paragraphs. Given that the perturbative paragraphs
+often contain significant amounts of false information, we are able to accurately identify the side of
+the conflict that holds higher credibility.
+Enhanced Query After obtaining the credibility
+scores for the different paragraphs, we utilize the
+corresponding metrics to enhance the robustness of
+the final generator. The input prompt for the final
+generator can be found in Appendix A. Following
+the enhanced query input, we ultimately obtain the
+correct response.
+The experimental results applying the CDEQ
+framework are shown in Figure 6. Compared to
+LoRA fine-tuning and CoT engineering, the CDEQ
+approach not only mitigates the issue of Authority Bias but also significantly enhances the robustness of the RAG system. The experiments and
+framework we present offer valuable insights for future research on the factuality of RAG systems and
+LLMs, contributing to the improvement of LLM
+credibility.
+Performance overhead is another important aspect that must be considered in the CDEQ framework. We provide a detailed breakdown of CEDQ’s
+computational overhead in the Appendix H. Similar to other works (Hsu et al., 2021; Hong et al.,
+2023; Weller et al., 2022) aiming to enhance the
+reliability of LLMs, CDEQ introduces certain performance trade-offs. However, given the significant
+role that CDEQ plays in mitigating Authority Bias,
+we believe that this overhead is justified and necessary.
+
+6
+
+Conclusion
+
+In this work, we took a first step toward understanding Authority Bias. Through experiments conducted on six LLMs, three replacement methods,
+five different entity types, and three performance
+evaluation dimensions, we revealed that Authority
+Biass is prevalent in LLMs when there is a knowledge contradiction between human and database.
+This bias has a detrimental effect, preventing the
+model from producing impartial, objective, and correct answers. We further explored potential mitigation methods and proposed the Conflict Detection
+Enhanced Query (CDEQ) framework as a supplementary module for RAG systems to mitigate Authority Bias. Performance comparison experiments
+
+demonstrated that the CDEQ framework outperformed commonly used mitigation methods, effectively mitigating Authority Bias and enhancing the
+robustness of RAG systems.
+
+7
+
+Limitations
+
+Our work primarily focuses on the issue of Authority Bias between the database and the user in LLMs.
+However, as LLMs and RAG systems continue to
+evolve, more knowledge providers may emerge,
+such as conflicts between internal databases and
+Internet-sourced information, as well as the potential influence of the pre-trained model’s internal
+parameters. In more specific scenarios, RAG systems may also need to consider contextual information, sensor data, and user preferences and configurations. The conflicts between these types of
+information require further in-depth investigation.
+The key insight of this paper is to unveil the
+widespread issue of Authority Bias in RAG systems. The CDEQ framework we propose serves
+as a feasible and practical solution. However, in
+specific scenarios, additional challenges may exist
+for modular RAG systems. A promising direction
+for future work is to improve the efficiency of factuality detection modules while ensuring factual
+accuracy.
+
+Acknowledgment
+This work was supported in part by Key Program of
+Guangdong Province under Grant 2021QN02X166,
+and in part by the National Natural Science Foundation of China (Project No. 72031003). Any
+opinions, findings, and conclusions or recommendations expressed in this material are those of the
+author(s) and do not necessarily reflect the views
+of the funding parties.
+
+References
+Vladimir
+Blagojevi.
+2023.
+Enhancing
+rag
+pipelines
+in
+haystack:
+Introducing
+diversityranker
+and
+lostinthemiddleranker.
+https://towardsdatascience.com/
+enhancing-rag-pipelines-in-haystack-45f1\
+4e2bc9f5.
+Tom Brown, Benjamin Mann, Nick Ryder, Melanie
+Subbiah, Jared D Kaplan, Prafulla Dhariwal, Arvind
+Neelakantan, Pranav Shyam, Girish Sastry, Amanda
+Askell, Sandhini Agarwal, Ariel Herbert-Voss,
+Gretchen Krueger, Tom Henighan, Rewon Child,
+Aditya Ramesh, Daniel Ziegler, Jeffrey Wu, Clemens
+
+28852
+
+Winter, Chris Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin Chess, Jack
+Clark, Christopher Berner, Sam McCandlish, Alec
+Radford, Ilya Sutskever, and Dario Amodei. 2020.
+Language models are few-shot learners. In NeurIPS,
+volume 33, pages 1877–1901.
+Hung-Ting Chen, Michael Zhang, and Eunsol Choi.
+2022. Rich knowledge sources bring complex knowledge conflicts: Recalibrating models to reflect conflicting evidence. In EMNLP, pages 2292–2307.
+Jiawei Chen, Hongyu Lin, Xianpei Han, and Le Sun.
+2024. Benchmarking large language models in
+retrieval-augmented generation. In AAAI, volume 38,
+pages 17754–17762.
+I Chern, Steffi Chern, Shiqi Chen, Weizhe Yuan, Kehua
+Feng, Chunting Zhou, Junxian He, Graham Neubig,
+Pengfei Liu, et al. 2023. Factool: Factuality detection in generative ai–a tool augmented framework
+for multi-task and multi-domain scenarios. arXiv
+preprint arXiv:2307.13528.
+Cohere. 2023. Say goodbye to irrelevant search results:
+Cohere rerank is here. https://txt.cohere.com/
+rerank/.
+Mehrdad Farahani and Richard Johansson. 2024. Deciphering the interplay of parametric and nonparametric memory in retrieval-augmented language
+models. arXiv preprint arXiv:2410.05162.
+Yunfan Gao, Yun Xiong, Xinyu Gao, Kangxiang Jia,
+Jinliu Pan, Yuxi Bi, Yi Dai, Jiawei Sun, and Haofen
+Wang. 2023. Retrieval-augmented generation for
+large language models: A survey. arXiv preprint
+arXiv:2312.10997.
+Giwon Hong, Jeonghwan Kim, Junmo Kang, SungHyon Myaeng, and Joyce Jiyoung Whang. 2023. Discern and answer: Mitigating the impact of misinformation in retrieval-augmented models with discriminators. CoRR.
+Neil Houlsby, Andrei Giurgiu, Stanislaw Jastrzebski,
+Bruna Morrone, Quentin De Laroussilhe, Andrea
+Gesmundo, Mona Attariyan, and Sylvain Gelly. 2019.
+Parameter-efficient transfer learning for nlp. In
+ICML, volume 97, pages 2790–2799.
+C. Hsu, C. Li, D. Saez-Trumper, and Y. Hsu. 2021. Wikicontradiction: Detecting self-contradiction articles
+on wikipedia. In 2021 IEEE International Conference on Big Data (Big Data), pages 427–436.
+Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan
+Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang,
+and Weizhu Chen. 2021. Lora: Low-rank adaptation of large language models. arXiv preprint
+arXiv:2106.09685.
+Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio
+Petroni, Vladimir Karpukhin, Naman Goyal, Heinrich Küttler, Mike Lewis, Wen-tau Yih, Tim Rocktäschel, Sebastian Riedel, and Douwe Kiela. 2020.
+
+Retrieval-augmented generation for knowledgeintensive nlp tasks. In NeurIPS, volume 33, pages
+9459–9474.
+Xiang Lisa Li and Percy Liang. 2021. Prefix-tuning:
+Optimizing continuous prompts for generation. In
+ACL-IJCNLP, pages 4582–4597.
+Shayne Longpre, Kartik Perisetla, Anthony Chen,
+Nikhil Ramesh, Chris DuBois, and Sameer Singh.
+2021. Entity-based knowledge conflicts in question
+answering. In EMNLP, pages 7052–7063.
+Yuning Mao, Pengcheng He, Xiaodong Liu, Yelong
+Shen, Jianfeng Gao, Jiawei Han, and Weizhu Chen.
+2021. Generation-augmented retrieval for opendomain question answering. In Proceedings of the
+59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint
+Conference on Natural Language Processing (Volume 1: Long Papers), pages 4089–4100.
+Stanley Milgram. 1963. Behavioral study of obedience. The Journal of Abnormal and Social Psychology, 67(4):371–378.
+Fabio Petroni, Tim Rocktäschel, Sebastian Riedel,
+Patrick Lewis, Anton Bakhtin, Yuxiang Wu, and
+Alexander Miller. 2019. Language models as knowledge bases? In EMNLP-IJCNLP, pages 2463–2473.
+Pranav Rajpurkar, Jian Zhang, Konstantin Lopyrev, and
+Percy Liang. 2016. SQuAD: 100,000+ questions for
+machine comprehension of text. In EMNLP, pages
+2383–2392.
+Timo Schick and Hinrich Schütze. 2021. It’s not just
+size that matters: Small language models are also
+few-shot learners. In NAACL, pages 2339–2352.
+Mrinank Sharma, Meg Tong, Tomasz Korbak, David Duvenaud, Amanda Askell, Samuel R Bowman, Newton
+Cheng, Esin Durmus, Zac Hatfield-Dodds, Scott R
+Johnston, et al. 2024. Towards understanding sycophancy in language models. In ICLR.
+Yile Wang, Peng Li, Maosong Sun, and Yang Liu. 2023.
+Self-knowledge guided retrieval augmentation for
+large language models. In EMNLP, pages 10303–
+10315.
+Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten
+Bosma, brian ichter, Fei Xia, Ed Chi, Quoc V Le,
+and Denny Zhou. 2022. Chain-of-thought prompting elicits reasoning in large language models. In
+Advances in Neural Information Processing Systems,
+volume 35, pages 24824–24837.
+Orion Weller, Aleem Khan, Nathaniel Weir, Dawn
+Lawrie, and Benjamin Van Durme. 2022. Defending
+against misinformation attacks in open-domain question answering. arXiv preprint arXiv:2212.10002.
+Kevin Wu, Eric Wu, and James Zou. 2024. Clasheval:
+Quantifying the tug-of-war between an llm’s internal
+prior and external evidence. In NeurIPS.
+
+28853
+
+Xiangcheng Wu, Xi Niu, and Ruhani Rahman. 2022.
+Topological analysis of contradictions in text. In
+ACM SIGIR, pages 2478–2483.
+Jian Xie, Kai Zhang, Jiangjie Chen, Renze Lou, and
+Yu Su. 2024. Adaptive chameleon or stubborn sloth:
+Revealing the behavior of large language models in
+knowledge conflicts. In ICLR.
+Yue Zhang, Yafu Li, Leyang Cui, Deng Cai, Lemao Liu,
+Tingchen Fu, Xinting Huang, Enbo Zhao, Yu Zhang,
+Yulong Chen, et al. 2023. Siren’s song in the ai ocean:
+a survey on hallucination in large language models.
+arXiv preprint arXiv:2309.01219.
+
+A
+
+Prompt List
+
+We provide a comprehensive list of all the prompts
+used in our experiments to facilitate a clear understanding of our experimental approach, as shown
+in Table 3.
+
+B
+
+Follow-up Conflicts
+
+In this section, we will provide a detailed explanation of our method for generating follow-up conflicts, along with examples. Following that, we
+will present the experiments conducted around the
+follow-up conflicts.
+Make up a continuation of the original context that misleads the answer to the question.
+This new type of conflict, follow-up conflicts, is distinguished from previously studied conflict types
+by the semantic coherence between different contexts. Under the premise of having multiple contextual paragraphs as evidence, such semantic coherence has been shown in our subsequent experiments to mislead large models more easily. Specifically, after obtaining the conflict entity, we combine it with the question to form a reverse conflict
+statement. Based on this conflicting statement and
+the original context inputted into the large language
+model, we ultimately generate a conflict context
+that maintains semantic coherence with the original
+context.
+As demonstrated on the right side of Table 4, we
+constructed the conflict statement based on the conflict entity Girl’s Tyme and finally obtained a continuous conflict context. The construction method
+of follow-up conflicts is similar to that of thought
+chain prompt engineering; however, follow-up conflicts utilize the large language model’s continuous
+reasoning ability to fabricate content, making it
+more likely to mislead the large model into making
+incorrect judgments.
+
+Unlike the simple entity substitution and semantic rewriting previously used, the follow-up approach we propose consists of a question, its correct answer, the original context, and an incorrect
+answer. Initially, we create an erroneous statement
+based on the question and the wrong answer, which
+describes how the question should not be answered.
+This inaccurate statement, along with the original
+context, is fed into a large language model as input, prompting the model to generate content that
+revolves around the erroneous statement yet retains
+semantic coherence with the original context. Essentially, we extend the original paragraph, adding
+a continuation to the story, which shifts the correct answer to the reading comprehension question
+within the integrated context. A simplified comparative diagram illustrating how LLMs are misled by
+entity substitution and follow-up conflicts is shown
+in Figure 7. Unlike previous research focused on
+consistency, our newly proposed follow-up type of
+conflict concerns the coherence between different
+contexts. Since the dataset’s generation partially
+relies on large language models, there are variations among datasets produced by different models.
+Due to ease of access, this study ultimately chose
+the llama2-13b model to generate our final dataset.
+This type of coherence can potentially influence the
+model’s reasoning pathways, making this kind of
+conflict more likely to mislead the model into making erroneous judgments than conflicts previously
+encountered. We present the follow-up conflicts
+dataset in Table 5.
+Follow-up conflicts, compared to entity substitution conflicts, are more likely to mislead large
+language models into making incorrect decisions. The follow-up conflicts we propose exhibit
+greater semantic coherence. In scenarios where the
+model is provided with multiple external knowledge sources, the context constructed in the followup maintains coherence with the original context.
+Under this coherence, multiple contexts are not
+perceived by the large language models as conflicting but as different parts of a continuous narrative.
+In such scenarios, the large language models are
+more prone to select the latter part of a coherent
+context, namely, the substituted answers in our constructed follow-up dataset. Our experimental results, as shown in Figure 8, confirm this hypothesis.
+Across various models and the two types of answer
+conflicts, follow-up conflicts demonstrated more
+substantial misleading potential. Due to its higher
+semantic coherence and greater propensity to mis-
+
+28854
+
+Table 3: We provide a list of all our prompts. “[PLACEHOLDER]” is the corresponding input.
+
+Evaluate Authority Bias
+
+Rewrite with LLM
+
+Task 1 Distinguish Source
+
+Task 1 No Distinguish
+
+Chain of Thought
+
+Enhanced Query
+
+General follow-up conflicts
+
+Prompt in Different Scenarios
+Please note that your answer should contain only one entity and nothing else! You are a
+helpful assistant, and users will ask you questions. Note: The CONTEXT tag is the relevant
+information retrieved by the database based on the questions, and the QUERY tag is the
+user’s input, including the user’s questions and the evidence paragraphs provided by the user.
+Please only answer the question based on the below information.
+CONTEXT: [TEXT 1]
+QUERY: Please read the following paragraphs and answer my questions: [TEXT 2] My
+question is [QUESTION]
+Please rewrite the text I sent to you, changing the wording as much as possible without
+changing the original meaning of the sentence and all the information. Please note that your
+reply should only contain the rewritten content, and no other prompt words should appear.
+The text: [TEXT]
+The CONTEXT tag is the relevant information retrieved by the database based on the
+questions, and the QUERY tag is the user’s input, including the user’s questions and the
+evidence paragraphs provided by the user. Whose evidence is more credible? CONTEXT or
+QUERY? Please choose the evidence that you think is more credible and finally answer the
+question.
+Answer example 1:QUERY is more credible.
+Answer example 2:CONTEXT is more credible.
+CONTEXT: [TEXT 1]
+QUERY: Please read the following paragraphs and answer my questions: [TEXT 2]
+Here are two passages of text. Which one is more credible, Passage 1 or Passage 2? There
+should be only one choice in your answer and nothing else! If you select the passage1, there
+should be no passage 2 in your output, and vice versa!!
+Passage 1: [TEXT 1]
+Passage 2: [TEXT 2]
+Think step by step! Please note that your answer should contain only one choice and one
+entity! You are a helpful assistant, and users will ask you questions. Note: The CONTEXT
+tag is the relevant information retrieved by the database based on the questions, and the
+QUERY tag is the user’s input, including the user’s questions and the evidence paragraphs
+provided by the user. Whose evidence is more credible? CONTEXT or QUERY? Please
+choose the evidence that you think is more credible and finally answer the question.
+Answer example 1:QUERY is more credible, the answer of question is A(entity).
+Answer example 2:CONTEXT is more credible, the answer of question is B(entity).
+CONTEXT: [TEXT 1]
+QUERY: Please read the following paragraphs and answer my questions: [TEXT 2] My
+question is [QUESTION]
+You are a helpful assistant, and users will ask you questions. Note: The CONTEXT tag is
+the relevant information retrieved by the database based on the questions, and the QUERY
+tag is the user’s input, including the user’s questions and the evidence paragraphs provided
+by the user. The factuality of [PROVIDER A] is [NUM 1], and the factuality of [PROVIDER
+B] is [NUM 2], making [PROVIDER A] more reliable than [PROVIDER B]. Please only
+answer the question based on the below information.
+CONTEXT: [TEXT 1]
+QUERY: Please read the following paragraphs and answer my questions: [TEXT 2] My
+question is [QUESTION]
+Please continue this PARAGRAPH, you can make up false things all you want. You only need
+to return to the PARAGRAPH you continue to write, you dont́ need any extra content. I will
+give a QUESTION and a CORRECT ANSWER and a FALSE ANSWER, and if other people
+only read the original PARAGRAPH, they will come up with the CORRECT ANSWER,
+but if they only answer the question based on the false PARAGRAPH you continued, they
+will come up with the FALSE ANSWER. Please note that the PARAGRAPH you continue
+to write is something that happened after the PARAGRAPH I gave you. PARAGRAPH:
+[TEXT] QUESTION: [QUESTION] CORRECT ANSWER: [ENTITY 1] FALSE ANSWER:
+[ENTITY 2]
+
+lead large models into incorrect choices, this type
+of conflict may be an essential focus for future research in conflict scenarios. Compared to entity
+substitution conflicts, follow-up conflicts not only
+maintain more substantial semantic continuity but
+also pose a higher risk of misleading outcomes.
+
+C
+
+Experiment Details
+
+We organize the results returned by the retrievers
+into a uniform format and integrate them with the
+user’s input. We have evaluated a series of opensource LLMs, represented by Llama, which vary in
+architecture and parameter size. We establish these
+
+28855
+
+Figure 7: Comparison of the processes by which Follow-up conflicts and Entity Substitution conflicts mislead
+LLMs.
+Table 4: Follow-up conflicts, due to the semantic coherence among multiple pieces of evidence, more easily mislead
+the LLMs into getting the wrong answer.
+Follow-up
+Question
+
+In what R&B group was she the lead singer?
+
+Ground Truth
+
+Destiny’s Child
+
+Conflict Entity
+
+Girl’s Tyme
+
+Origin Context
+
+Beyoncé is a singer, songwriter, record producer, and actress. Born and raised in Houston, Texas,
+she performed in various singing and dancing competitions as a child and rose to fame in the late
+1990s as lead singer of R&B girl-group Destiny’s Child.
+
+Intermediate Step
+
+Beyoncé was the lead singer in Destiny’s Child. After that, she joined the band Girl’s Tyme.
+
+Conflict Context
+
+After her initial success, Beyoncé embarked on a secret project, reviving an old group named
+Girl’s Tyme, which was her first band before Destiny’s Child. Beyoncé rarely speaks of this
+chapter in her career, focusing instead on her achievements with Destiny’s Child and her solo
+work.
+
+Table 5: The follow-up conflicts dataset.
+Conflicts
+
+Substitution Mode
+
+Follow-up
+
+Alias
+Corpus
+Typeswap
+
+Composition According to Answer Type
+DATE
+
+NUM
+
+PER
+
+ORG
+
+LOC
+
+TOTAL
+
+196
+648
+425
+
+280
+778
+423
+
+825
+1366
+668
+
+556
+722
+662
+
+679
+853
+711
+
+2731
+4367
+2889
+
+large models and measure their propensities, which
+will be detailed in the results. Our primary focus
+is on the three metrics discussed in Section 3. We
+compare the Authority Bias between the database
+and the user to demonstrate that, within the RAG
+framework, the base large model tends to regard
+the user as the more authoritative source, indicating
+the presence of Authority Bias in large language
+models. Additionally, we compared the Corrective
+Ability and Mislead Ability across various models to
+support further the existence of bias in the models’
+trust in different knowledge providers.
+During the experimental process, some random-
+
+ness may occur; we have employed various comparative experimental approaches to minimize this
+randomness and thus enhance the credibility of our
+results. We utilize multiple methods of substitution to create knowledge conflicts. In this setup,
+corpus-based replacement was the main experimental group, while the other two methods, Alias and
+Typeswap, acted as control groups. Alias is semantically equivalent to the correct answer, and
+Typeswap provides an entirely irrelevant answer;
+using these as control groups helps to strengthen
+the validity of our conclusions. Additionally, the
+inherent parametric memory of the model might
+
+28856
+
+Figure 8: Comparative experimental results between Follow-up and Entity Substitution conflict construction methods
+reveal that for both Corpus and Typeswap types, the Follow-up construction method is more likely to mislead large
+language models into making incorrect judgments.
+
+influence the results, as the model may hold some
+pertinent knowledge related to a query. In our experiments, we primarily used comparative methods
+to mitigate this influence. Furthermore, since our
+dataset predominantly consists of reading comprehension questions, it reduces the potential impact
+of the model’s intrinsic parameters on the experimental outcomes.
+
+D
+
+Authority Bias and CEDQ in Llama3
+
+We have conducted additional experiments using
+the Llama3-8B model. The experimental results indicate that the enhanced reasoning ability of LLMs
+does not alter the behavioral patterns observed in
+our study. The dataset consists of 1,000 instances
+per category, sampled from the original dataset.
+As shown in the Table 6, Llama3 exhibits lower
+Authority Bias on the TypeSwap dataset, demonstrating its enhanced reasoning capabilities to better
+identify and discard clearly erroneous passages.
+However, when the semantic structure remains
+consistent, making factual inconsistencies harder to
+detect, Authority Bias becomes more pronounced.
+This effect is particularly evident in the Corpus
+dataset, where the model struggles to distinguish
+between factual and misleading information.
+Additionally, we provide the experimental results of the CDEQ framework on Llama3. As
+shown in the Table 6, due to the model’s enhanced
+reasoning capabilities, providing high-factuality
+text increases the likelihood of obtaining the correct answer, while Authority Bias correspondingly
+decreases.
+
+E
+
+Configurations of Mitigation Methods
+
+For LoRA fine-tuning, we extract approximately
+900 data points from the original dataset to form
+the training dataset. After training the LoRA layers,
+we evaluate the performance of both the base model
+and the LoRA layers on a separate test set. For the
+CoT prompt engineering, we primarily employ a
+zero-shot approach. The large model is prompted to
+reason step-by-step, first identifying the disturbed
+passage and then answering the question based
+solely on the original passage to produce the final
+answer. The detailed prompt template is provided
+in Appendix A.
+
+F
+
+Mitigation Experiment Details
+
+In this section, we present all the experimental
+results from the mitigation process, including the
+effectiveness of different mitigation methods when
+the database provides incorrect information. As
+shown in Figure 9, the CDEQ framework most
+effectively reduces the inaccuracy ratio between
+the two erroneous knowledge providers.
+
+G
+
+Experiment of Adjusting the Order of
+Context
+
+We rearrange the order of user input questions and
+retrieved texts of database to eliminate the potential
+impact of input order on the results when both are
+fed into the model simultaneously. The results regarding the Inaccuracy Ratio are shown in Table 8.
+In Table 8, d_f ake refers to information provided incorrectly by the database, while u_f ake
+refers to information provided incorrectly by the
+user. d_f stands for database_f irst meaning that
+the retrieved text is provided first. u_f stands for
+
+28857
+
+Dataset
+
+Database_fake
+
+User_fake
+
+Authority Bias(Baseline)
+
+Authority Bias(CEDQ)
+
+Alias
+Corpus
+Typeswap
+
+4.2
+6.1
+2.1
+
+12.8
+21.5
+6.5
+
+8.6
+15.4
+4.4
+
+2.8
+5.3
+1.1
+
+Table 6: Authority Bias and CEDQ in Llama3
+Stage
+
+Network Latency
+
+Inference/Search Latency
+
+Process Time
+
+Total
+
+0.883
+0.205
+0.725
+\
+1.813
+\
+
+0.371
+0.965
+0.371
+0.371
+2.078
+0.412
+
+0.226
+0.106
+0.068
+\
+0.4
+\
+
+1.48
+1.276
+1.164
+0.371
+4.291
+0.412
+
+Conflict Localization
+Factuality Detection(Tool Query)
+Factuality Detection(Credibility Assessment)
+Generation
+Total
+CoT
+
+Table 7: Time overhead(s) of each stage in CDEQ and comparison with CoT
+
+Figure 9: The effectiveness of using LoRA fine-tuning,
+CoT prompt engineering and CDEQ to mitigate Authority Bias. The CDEQ framework exhibits both effectiveness and advancement.
+Model
+Chatgpt-3.5
+Gemma
+Llama2-7b
+Llama2-13b
+Mistral
+Vicuna
+
+d_fake(d_f)
+
+u_fake(d_f)
+
+d_fake(u_f)
+
+u_fake(u_f)
+
+5.4
+10.5
+7.9
+7.2
+2.5
+9.7
+
+11.6
+24.6
+24.1
+16.1
+19.8
+32.8
+
+6.8
+11.4
+8.5
+9.7
+4.1
+18.6
+
+12.4
+24.3
+20.6
+14.7
+15.5
+20.1
+
+spent on ChatGPT-3.5 or Serper, while Process
+time refers to other internal CEDQ operations.
+As shown in Table 7, the main bottlenecks lie
+in network latency and reliance on external tools
+like Google Search, rather than the CEDQ method
+itself. While CoT is indeed lightweight, our experiments in Section 5 demonstrate that CoT fails to
+meaningfully improve factuality in RAG settings,
+which significantly weakens its ability to mitigate
+Authority Bias. In contrast, CEDQ provides consistent improvements across multiple datasets and
+models.
+
+Table 8: The experimental results of altering the context
+order indicate that the sequence is not a significant factor
+influencing Authority Bias.
+
+user_f irst meaning that the human input is provided first. Changing the order of the inputs
+leads to changes in the data, but the conclusion
+remains the same: Authority Bias still exists in
+the RAG system.
+
+H
+
+CEDQ’s computational overhead
+
+Since the Conflict Localization and Factuality Detection stages are powered by ChatGPT-3.5, and the
+precise execution time is unavailable, we approximate it using the inference latency in generation.
+In Table 7, Inference/Search latency reflects time
+28858
+
+

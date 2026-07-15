@@ -1,0 +1,19 @@
+{
+  "status": 200,
+  "latency_seconds": 31.375,
+  "bytes": 21421,
+  "model": "sonar-pro",
+  "usage": {
+    "completion_tokens": 3496,
+    "cost": {
+      "input_tokens_cost": 0.0003,
+      "output_tokens_cost": 0.05244,
+      "request_cost": 0.006,
+      "total_cost": 0.05874
+    },
+    "prompt_tokens": 99,
+    "search_context_size": "low",
+    "total_tokens": 3595
+  },
+  "citations_count": 11
+}

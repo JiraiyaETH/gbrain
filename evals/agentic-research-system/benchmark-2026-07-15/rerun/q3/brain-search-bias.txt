@@ -1,0 +1,21 @@
+[0.4809] docs/architecture/key_files -- Cold-brain skip when <5 resolved. Writes to `calibration_profiles` with audit columns (`voice_gate_p
+[0.3714] test-think-with-calibration-test-ts -- [TypeScript] test/think-with-calibration.test.ts:1-111 module
+
+/**
+ * v0.36.1.0 (T8 / E1, D22) — thi
+[0.3676] src-core-brainstorm-orchestrator-ts -- [TypeScript] src/core/brainstorm/orchestrator.ts:330-357 export statement loadCalibrationContext
+
+ex
+[0.3559] src-core-brainstorm-judges-ts -- [TypeScript] src/core/brainstorm/judges.ts:509-572 function runJudgeChunk
+
+async function runJudgeCh
+[0.3462] src-core-operations-ts -- [TypeScript] src/core/operations.ts:3297-3333 lexical declaration
+
+const get_recent_salience: Operat
+[0.3425] test-regressions-v0-36-1-0-iron-rule-test-ts -- [TypeScript] test/regressions/v0.36.1.0-iron-rule.test.ts:1-96 module
+
+/**
+ * v0.36.1.0 IRON RULE re
+[0.3425] src-core-calibration-nudge-ts -- [TypeScript] src/core/calibration/nudge.ts:69-86 export statement evaluateNudgeRule
+
+export function

@@ -1,0 +1,9 @@
+[0.0000] test-regressions-v0-36-1-0-iron-rule-test-ts -- [TypeScript] test/regressions/v0.36.1.0-iron-rule.test.ts:1-96 module
+
+/**
+ * v0.36.1.0 IRON RULE re
+[0.0000] src-cli-ts -- [TypeScript] src/cli.ts:1569-2033 function handleCliOnly
+
+try {
+    switch (command) {
+      case 'i

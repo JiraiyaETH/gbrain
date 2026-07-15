@@ -1,0 +1,1 @@
+What is the best architecture for multiple concurrent AI agents sharing a Supabase/Postgres-backed knowledge graph while preserving provenance, preventing conflicting writes, and staying within a strict database connection budget? Compare viable patterns and recommend one for GBrain.

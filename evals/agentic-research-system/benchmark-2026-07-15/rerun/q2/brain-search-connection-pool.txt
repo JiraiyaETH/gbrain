@@ -1,0 +1,22 @@
+[1.1458] docs/architecture/key_files -- `validateSourceId(id)` throws on anything outside `^[a-z0-9_-]+$`, used by the per-source disk-layou
+[0.9149] src-core-connection-manager-ts -- [TypeScript] src/core/connection-manager.ts:318-359 method definition initDirectPool (in ConnectionM
+[0.9036] test-postgres-engine-getter-selfheal-test-ts -- [TypeScript] test/postgres-engine-getter-selfheal.test.ts:1-67 module
+
+/**
+ * issue #1678 — the `Pos
+[0.8078] test-autopilot-reconnect-classifier-test-ts -- [TypeScript] test/autopilot-reconnect-classifier.test.ts:1-101 module
+
+/**
+ * v0.37.7.0 #1162 — auto
+[0.6204] skills/cron-scheduler/skill -- no duplicate timeline entries)
+- Use checkpoint state files to track progress and resume interrupted
+[0.5543] src-core-minions-worker-ts -- [TypeScript] src/core/minions/worker.ts:272-600 method definition start (in MinionWorker)
+
+async sta
+[0.4681] src-core-brain-registry-ts -- [TypeScript] src/core/brain-registry.ts:416-434 method definition initMountBrain (in BrainRegistry)
+
+[0.4440] docs/engines -- ## PGLiteEngine (v0.7, ships)
+
+**Dependencies:** `@electric-sql/pglite` (v0.4.4+)
+
+**What it is:** E
