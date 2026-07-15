@@ -283,6 +283,11 @@
       "name": "design-heist",
       "path": "design-heist/SKILL.md",
       "description": "Point at a website (or app/deck), extract its design language and signature components, re-create them until they pass a taste gate, and encode the result as a reusable brand book in ~/Projects/design-library. Output is a transferable playbook (tokens, motion physics, component recipes), never a clone."
+    },
+    {
+      "name": "retrieval-miss-log",
+      "path": "retrieval-miss-log/SKILL.md",
+      "description": "Turn retrieval misses into eval-goldset candidates automatically. Fires when the page an agent used was not in its first search results, when the operator corrects to a specific page, or when a page is concluded absent. Browse-first classification into retrieval-gap (page exists, missed → eval candidate) vs coverage-gap (absent → capture queue). Appends one JSON line to qrels candidates.jsonl; periodic verified promotion into the gating goldset."
     }
   ],
   "dependencies": {
