@@ -53,8 +53,8 @@ describe('patterns phase wiring', () => {
     expect(patternsSrc).toContain('insufficient_evidence');
   });
 
-  test('reverse-writes pages to disk via serializeMarkdown', () => {
-    expect(patternsSrc).toContain('serializeMarkdown');
+  test('reverse-writes pages to disk via serializePageToMarkdown', () => {
+    expect(patternsSrc).toContain('serializePageToMarkdown');
     expect(patternsSrc).toContain('writeFileSync');
   });
 
