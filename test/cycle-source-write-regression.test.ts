@@ -31,9 +31,11 @@ function fakeCollectEngine(): BrainEngine {
 }
 
 function fakeReverseWriteEngine(): BrainEngine {
-  return {
+  const frontmatter = new Map<string, Record<string, unknown>>();
+  const engine = {
     getPage: async (slug: string, opts?: { sourceId?: string }) => {
       if (opts?.sourceId !== 'robotics' && opts?.sourceId !== 'default') return null;
+      const key = `${opts.sourceId}\0${slug}`;
       return {
         id: 1,
         slug,
@@ -42,13 +44,24 @@ function fakeReverseWriteEngine(): BrainEngine {
         title: opts.sourceId === 'robotics' ? 'Robotics Reflection' : 'Default Reflection',
         compiled_truth: `${opts.sourceId} body`,
         timeline: '',
-        frontmatter: {},
+        frontmatter: frontmatter.get(key) ?? {},
         created_at: new Date(),
         updated_at: new Date(),
       };
     },
     getTags: async () => ['dream-cycle'],
-  } as unknown as BrainEngine;
+    mergePageFrontmatter: async (
+      slug: string,
+      sourceId: string,
+      patch: Record<string, unknown>,
+    ) => {
+      const key = `${sourceId}\0${slug}`;
+      frontmatter.set(key, { ...(frontmatter.get(key) ?? {}), ...patch });
+      return true;
+    },
+    transaction: async <T,>(fn: (tx: BrainEngine) => Promise<T>) => fn(engine as unknown as BrainEngine),
+  };
+  return engine as unknown as BrainEngine;
 }
 
 function fakeGatherEngine(calls: Array<{ sql: string; params: unknown[] }>): BrainEngine {
@@ -61,12 +74,12 @@ function fakeGatherEngine(calls: Array<{ sql: string; params: unknown[] }>): Bra
 }
 
 describe('cycle source-aware dream writes', () => {
-  test('synthesize cooldown and idempotency keys differ per source', () => {
-    expect(synthesizeCompletionKey('default')).not.toBe(synthesizeCompletionKey('robotics'));
-    expect(synthesizeIdempotencyKey('default', '/corpus/a.txt', 'abc123'))
-      .not.toBe(synthesizeIdempotencyKey('robotics', '/corpus/a.txt', 'abc123'));
-    expect(synthesizeIdempotencyKey('robotics', '/corpus/a.txt', 'abc123', { index: 1, total: 3 }))
-      .toBe('dream:synth:robotics:/corpus/a.txt:abc123:c1of3');
+  test('synthesize cooldown and idempotency lineage is corpus-global', () => {
+    expect(synthesizeCompletionKey()).toBe('dream.synthesize.last_completion_ts');
+    expect(synthesizeIdempotencyKey('/corpus/a.txt', 'abc123'))
+      .toBe('dream:synth:/corpus/a.txt:abc123');
+    expect(synthesizeIdempotencyKey('/corpus/a.txt', 'abc123', { index: 1, total: 3 }))
+      .toBe('dream:synth:/corpus/a.txt:abc123:c1of3');
   });
 
   test('dream phases thread source_id unconditionally into child job payloads', () => {
@@ -143,7 +156,7 @@ describe('cycle source-aware dream writes', () => {
     try {
       const count = await synthTesting.reverseWriteRefs(fakeReverseWriteEngine(), dir, [
         { slug: 'wiki/personal/reflections/source-test', source_id: 'robotics' },
-      ]);
+      ], '2026-07-15');
 
       const scopedPath = join(dir, '.sources', 'robotics', 'wiki/personal/reflections/source-test.md');
       const defaultPath = join(dir, 'wiki/personal/reflections/source-test.md');
@@ -161,7 +174,7 @@ describe('cycle source-aware dream writes', () => {
     try {
       const count = await patternsTesting.reverseWriteRefs(fakeReverseWriteEngine(), dir, [
         { slug: 'wiki/personal/patterns/source-test', source_id: 'default' },
-      ]);
+      ], '2026-07-15');
 
       const defaultPath = join(dir, 'wiki/personal/patterns/source-test.md');
       expect(count).toBe(1);
@@ -175,9 +188,27 @@ describe('cycle source-aware dream writes', () => {
   test('summary putPage and filesystem write use the explicit non-default source', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cycle-source-summary-'));
     const puts: Array<{ slug: string; opts: unknown }> = [];
+    const tagCalls: Array<{ operation: string; opts: unknown }> = [];
+    const tags: string[] = [];
+    let storedCompiledTruth = '';
     const engine = {
-      putPage: async (slug: string, _input: unknown, opts: unknown) => {
+      putPage: async (slug: string, input: unknown, opts: unknown) => {
         puts.push({ slug, opts });
+        storedCompiledTruth = (input as { compiled_truth: string }).compiled_truth;
+      },
+      getPage: async () => ({ compiled_truth: storedCompiledTruth, type: 'report' }),
+      getTags: async (_slug: string, opts: unknown) => {
+        tagCalls.push({ operation: 'get', opts });
+        return [...tags];
+      },
+      addTag: async (_slug: string, tag: string, opts: unknown) => {
+        tagCalls.push({ operation: 'add', opts });
+        if (!tags.includes(tag)) tags.push(tag);
+      },
+      removeTag: async (_slug: string, tag: string, opts: unknown) => {
+        tagCalls.push({ operation: 'remove', opts });
+        const index = tags.indexOf(tag);
+        if (index >= 0) tags.splice(index, 1);
       },
     } as unknown as BrainEngine;
     try {
@@ -194,6 +225,11 @@ describe('cycle source-aware dream writes', () => {
         slug: 'dream-cycle-summaries/2026-07-15',
         opts: { sourceId: 'robotics' },
       }]);
+      expect(tagCalls).toEqual([
+        { operation: 'get', opts: { sourceId: 'robotics' } },
+        { operation: 'add', opts: { sourceId: 'robotics' } },
+        { operation: 'get', opts: { sourceId: 'robotics' } },
+      ]);
       expect(existsSync(join(
         dir,
         '.sources/robotics/dream-cycle-summaries/2026-07-15.md',
@@ -207,8 +243,28 @@ describe('cycle source-aware dream writes', () => {
   test('summary explicit default source preserves root layout', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cycle-default-summary-'));
     const puts: unknown[] = [];
+    const tagCalls: Array<{ operation: string; opts: unknown }> = [];
+    const tags: string[] = [];
+    let storedCompiledTruth = '';
     const engine = {
-      putPage: async (_slug: string, _input: unknown, opts: unknown) => { puts.push(opts); },
+      putPage: async (_slug: string, input: unknown, opts: unknown) => {
+        puts.push(opts);
+        storedCompiledTruth = (input as { compiled_truth: string }).compiled_truth;
+      },
+      getPage: async () => ({ compiled_truth: storedCompiledTruth, type: 'report' }),
+      getTags: async (_slug: string, opts: unknown) => {
+        tagCalls.push({ operation: 'get', opts });
+        return [...tags];
+      },
+      addTag: async (_slug: string, tag: string, opts: unknown) => {
+        tagCalls.push({ operation: 'add', opts });
+        if (!tags.includes(tag)) tags.push(tag);
+      },
+      removeTag: async (_slug: string, tag: string, opts: unknown) => {
+        tagCalls.push({ operation: 'remove', opts });
+        const index = tags.indexOf(tag);
+        if (index >= 0) tags.splice(index, 1);
+      },
     } as unknown as BrainEngine;
     try {
       await synthTesting.writeSummaryPage(
@@ -221,6 +277,11 @@ describe('cycle source-aware dream writes', () => {
         'default',
       );
       expect(puts).toEqual([{ sourceId: 'default' }]);
+      expect(tagCalls).toEqual([
+        { operation: 'get', opts: { sourceId: 'default' } },
+        { operation: 'add', opts: { sourceId: 'default' } },
+        { operation: 'get', opts: { sourceId: 'default' } },
+      ]);
       expect(existsSync(join(dir, 'dream-cycle-summaries/2026-07-15.md'))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -746,4 +746,62 @@ unchanged body
     const r2 = await importFromContent(engine2, 'people/alice-example', content2, { noEmbed: true });
     expect(r2.status).toBe('skipped');
   });
+
+  test('Dream provenance stamps are hash-ephemeral while body edits remain semantic', async () => {
+    const unmarked = `---
+type: original
+title: Dream output
+---
+
+same durable body
+`;
+    const marked = `---
+type: original
+title: Dream output
+dream_generated: true
+dream_cycle_date: '2026-07-15'
+---
+
+same durable body
+`;
+    let firstHash: string | undefined;
+    const engine1 = mockEngine({
+      getPage: () => Promise.resolve(null),
+      putPage: (_slug: string, page: any) => {
+        firstHash = page.content_hash;
+        return Promise.resolve(null);
+      },
+    });
+    await importFromContent(engine1, 'originals/dream-output', unmarked, { noEmbed: true });
+
+    const engine2 = mockEngine({
+      getPage: () => Promise.resolve({ content_hash: firstHash } as any),
+      putPage: () => Promise.resolve(null),
+    });
+    const stamped = await importFromContent(
+      engine2,
+      'originals/dream-output',
+      marked,
+      { noEmbed: true },
+    );
+    expect(stamped.status).toBe('skipped');
+
+    const edited = marked.replace('same durable body', 'meaningfully edited body');
+    let editedHash: string | undefined;
+    const engine3 = mockEngine({
+      getPage: () => Promise.resolve({ content_hash: firstHash } as any),
+      putPage: (_slug: string, page: any) => {
+        editedHash = page.content_hash;
+        return Promise.resolve(null);
+      },
+    });
+    const changed = await importFromContent(
+      engine3,
+      'originals/dream-output',
+      edited,
+      { noEmbed: true },
+    );
+    expect(changed.status).toBe('imported');
+    expect(editedHash).not.toBe(firstHash);
+  });
 });

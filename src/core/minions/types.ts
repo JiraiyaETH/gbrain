@@ -450,6 +450,16 @@ export interface SubagentHandlerData {
    */
   allowed_slug_prefixes?: string[];
   /**
+   * Trusted Dream-orchestrator output stamp. When present, every put_page
+   * issued by this protected child is persisted with dream_generated=true
+   * and this exact YYYY-MM-DD cycle date before any extraction backstop runs.
+   *
+   * The put_page operation accepts this only together with viaSubagent=true
+   * and a non-empty trusted-workspace allow-list. Ordinary/MCP subagents
+   * cannot use it to forge gate-owned provenance.
+   */
+  dream_output_cycle_date?: string;
+  /**
    * Source id for subagent brain-tool writes/reads. Dream cycle children set
    * this so put_page targets the cycle's source; omitted jobs keep the legacy
    * default-source behavior.

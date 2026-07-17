@@ -214,7 +214,7 @@ describe('self-consumption guard (v0.23.2 marker-based)', () => {
       title: 'Test reflection',
       compiled_truth: 'I learned something about [Alice](people/alice). No own-slug citation in body.',
       timeline: '',
-      frontmatter: {},
+      frontmatter: { dream_generated: true, dream_cycle_date: '2026-04-30' },
     };
     const md = renderPageToMarkdown(page as any, ['dream-cycle']);
     const path = makeTranscript('2026-04-30-output.txt', md + '\n' + 'x'.repeat(3000));

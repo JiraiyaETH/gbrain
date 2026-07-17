@@ -10,7 +10,7 @@ import { clampSearchLimit } from './engine.ts';
 import type { GBrainConfig } from './config.ts';
 import type { PageType } from './types.ts';
 import { importFromContent } from './import-file.ts';
-import { parseMarkdown } from './markdown.ts';
+import { parseMarkdown, serializeMarkdown } from './markdown.ts';
 import { writePageThrough } from './write-through.ts';
 import { hybridSearch, hybridSearchCached, stampContentFlags } from './search/hybrid.ts';
 import { expandQuery } from './search/expansion.ts';
@@ -330,6 +330,12 @@ export interface OperationContext {
    * v0.15 behavior; pure addition, no regression).
    */
   allowedSlugPrefixes?: string[];
+  /**
+   * Trusted Dream child output stamp. This is deliberately narrower than an
+   * arbitrary frontmatter patch: put_page may only turn it into the two
+   * anti-loop fields, and only for allow-listed protected subagent jobs.
+   */
+  dreamOutputCycleDate?: string;
   /**
    * Resolved global CLI options (--quiet / --progress-json / --progress-interval).
    * CLI callers populate this from `getCliOptions()`. MCP / library callers
@@ -960,6 +966,49 @@ const put_page: Operation = {
           `markdown text, not a JSON.stringify'd string.`,
       );
     }
+
+    // Dream child provenance is a trusted SERVER context, never an LLM
+    // frontmatter assertion. Stamp the parsed content before hashing/import so
+    // the DB row, canonical content_hash, write-through file, facts backstop,
+    // and chronicle backstop all observe the same anti-loop identity.
+    //
+    // Fail closed unless this is the protected trusted-workspace subagent path
+    // (the same structural gate that admits writes outside wiki/agents/<id>).
+    // The context carries only a date, not an arbitrary patch, so even trusted
+    // callers cannot use this seam to overwrite unrelated metadata.
+    let importContent = content;
+    if (ctx.dreamOutputCycleDate !== undefined) {
+      const trustedWorkspace = ctx.viaSubagent === true
+        && Array.isArray(ctx.allowedSlugPrefixes)
+        && ctx.allowedSlugPrefixes.length > 0;
+      if (!trustedWorkspace) {
+        throw new OperationError(
+          'permission_denied',
+          'dream output stamping requires a trusted-workspace subagent allow-list',
+        );
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(ctx.dreamOutputCycleDate)) {
+        throw new OperationError(
+          'invalid_params',
+          `dream output cycle date must be YYYY-MM-DD; got ${JSON.stringify(ctx.dreamOutputCycleDate)}`,
+        );
+      }
+      incomingParsed.frontmatter = {
+        ...incomingParsed.frontmatter,
+        dream_generated: true,
+        dream_cycle_date: ctx.dreamOutputCycleDate,
+      };
+      importContent = serializeMarkdown(
+        incomingParsed.frontmatter,
+        incomingParsed.compiled_truth,
+        incomingParsed.timeline,
+        {
+          type: incomingParsed.type,
+          title: incomingParsed.title,
+          tags: incomingParsed.tags,
+        },
+      );
+    }
     const incomingBodyEmpty =
       incomingParsed.compiled_truth.trim().length === 0 &&
       incomingParsed.timeline.trim().length === 0;
@@ -973,12 +1022,19 @@ const put_page: Operation = {
       }
     }
 
-    const result = await importFromContent(ctx.engine, slug, content, {
+    const result = await importFromContent(ctx.engine, slug, importContent, {
       noEmbed,
       // v0.42 (#1699): untrusted callers can't smuggle gate-owned frontmatter
       // markers (quarantine/content_flag/embed_skip). Fail-closed — anything
       // not strictly local is remote (matches CV6 / v0.26.9 F7b posture).
       remote: ctx.remote !== false,
+      // Only the protected trusted-workspace context can set this field (gate
+      // above). importFromContent strips caller-authored Dream markers first,
+      // then re-derives them from this out-of-band server value and can repair
+      // a same-hash pre-existing row before its idempotent skip returns.
+      ...(ctx.dreamOutputCycleDate !== undefined
+        ? { trustedDreamCycleDate: ctx.dreamOutputCycleDate }
+        : {}),
       ...(ctx.sourceId ? { sourceId: ctx.sourceId } : {}),
       // v0.39.0.0 T1.5: pack-aware type inference (loaded above; legacy
       // inferType behavior when undefined).

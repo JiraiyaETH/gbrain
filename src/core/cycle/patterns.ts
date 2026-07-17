@@ -19,13 +19,13 @@
  */
 
 import { join, dirname } from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult, PhaseError } from '../cycle.ts';
 import { MinionQueue } from '../minions/queue.ts';
 import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.ts';
 import type { MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
-import { serializeMarkdown } from '../markdown.ts';
+import { parseMarkdown, serializePageToMarkdown } from '../markdown.ts';
 import type { Page } from '../types.ts';
 import {
   DEFAULT_DREAM_SYNTHESIZE_ROUTES,
@@ -59,6 +59,7 @@ export async function runPhasePatterns(
     if (unavailable) return unavailable;
 
     const config = await loadPatternsConfig(engine);
+    const cycleDate = today();
 
     const synthPaths = await loadDreamSynthesizePaths();
     const reflectionLikePrefix = deriveDreamRouteLikePrefix(
@@ -112,6 +113,7 @@ export async function runPhasePatterns(
       max_turns: 30,
       allowed_slug_prefixes: allowedSlugPrefixes,
       source_id: opts.sourceId,
+      dream_output_cycle_date: cycleDate,
     };
     const submitOpts: Partial<MinionJobInput> = {
       max_stalled: 3,
@@ -137,13 +139,26 @@ export async function runPhasePatterns(
       try { await opts.yieldDuringPhase(); } catch { /* best-effort */ }
     }
 
+    if (outcome !== 'completed') {
+      return failed(makeError(
+        'InternalError',
+        'PATTERNS_CHILD_NON_SUCCESS',
+        `patterns child ${job.id} ended with ${outcome}; refusing success receipt`,
+      ));
+    }
+
     // Collect refs the subagent wrote (codex finding #2 — query tool exec rows).
     // v0.32.8: refs carry source_id so reverseWriteRefs targets the right
     // (source, slug) row instead of the first DB match.
     const writtenRefs = await collectChildPutPageSlugs(engine, [job.id], opts.sourceId);
 
     // Reverse-write to fs.
-    const reverseWriteCount = await reverseWriteRefs(engine, opts.brainDir, writtenRefs);
+    const reverseWriteCount = await reverseWriteRefs(
+      engine,
+      opts.brainDir,
+      writtenRefs,
+      cycleDate,
+    );
 
     return ok(`${writtenRefs.length} pattern page(s) written/updated (${outcome})`, {
       reflections_considered: reflections.length,
@@ -352,14 +367,44 @@ async function reverseWriteRefs(
   engine: BrainEngine,
   brainDir: string,
   refs: Array<{ slug: string; source_id: string }>,
+  cycleDate: string,
 ): Promise<number> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cycleDate)) {
+    throw new Error(`patterns reverse-write cycle date must be YYYY-MM-DD; got ${JSON.stringify(cycleDate)}`);
+  }
+  const stampedPages = await engine.transaction(async tx => {
+    const pages = new Map<string, Page>();
+    for (const { slug, source_id } of refs) {
+      validateSourceId(source_id);
+      const before = await tx.getPage(slug, { sourceId: source_id });
+      if (!before) throw new Error(`patterns receipt references missing page ${slug}@${source_id}`);
+      const updated = await tx.mergePageFrontmatter(slug, source_id, {
+        dream_generated: true,
+        dream_cycle_date: cycleDate,
+      });
+      if (!updated) throw new Error(`patterns could not stamp live page ${slug}@${source_id}`);
+      const after = await tx.getPage(slug, { sourceId: source_id });
+      if (!after || after.frontmatter?.dream_generated !== true ||
+          after.frontmatter?.dream_cycle_date !== cycleDate) {
+        throw new Error(`patterns DB marker verification failed for ${slug}@${source_id}`);
+      }
+      if (after.type !== before.type || after.title !== before.title ||
+          after.compiled_truth !== before.compiled_truth || after.timeline !== before.timeline ||
+          after.content_hash !== before.content_hash) {
+        throw new Error(`patterns metadata stamp mutated page content ${slug}@${source_id}`);
+      }
+      pages.set(`${source_id}\0${slug}`, after);
+    }
+    return pages;
+  });
+
   let count = 0;
   for (const { slug, source_id } of refs) {
     // v0.32.8 F6: guard against malformed source_id (would let join() break
     // out of brainDir). validateSourceId throws on `..`, `/`, etc.
     validateSourceId(source_id);
-    const page = await engine.getPage(slug, { sourceId: source_id });
-    if (!page) continue;
+    const page = stampedPages.get(`${source_id}\0${slug}`);
+    if (!page) throw new Error(`patterns transaction lost stamped page ${slug}@${source_id}`);
     const tags = await engine.getTags(slug, { sourceId: source_id });
     try {
       const md = renderPageToMarkdown(page, tags);
@@ -372,27 +417,34 @@ async function reverseWriteRefs(
         : join(brainDir, '.sources', source_id, `${slug}.md`);
       mkdirSync(dirname(filePath), { recursive: true });
       writeFileSync(filePath, md, 'utf8');
+      const written = readFileSync(filePath, 'utf8');
+      if (written !== md) throw new Error(`read-after-write mismatch at ${filePath}`);
+      const parsed = parseMarkdown(written, filePath);
+      if (parsed.frontmatter.dream_generated !== true ||
+          parsed.frontmatter.dream_cycle_date !== cycleDate ||
+          parsed.type !== page.type || parsed.title !== page.title ||
+          parsed.compiled_truth !== page.compiled_truth || parsed.timeline !== page.timeline) {
+        throw new Error(`DB/file Dream marker parity verification failed at ${filePath}`);
+      }
       count++;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      process.stderr.write(`[dream] reverse-write ${slug}@${source_id} failed: ${msg}\n`);
+      throw new Error(`patterns reverse-write ${slug}@${source_id} failed: ${msg}`);
     }
   }
   return count;
 }
 
 function renderPageToMarkdown(page: Page, tags: string[]): string {
-  const frontmatter = (page.frontmatter ?? {}) as Record<string, unknown>;
-  return serializeMarkdown(
-    frontmatter,
-    page.compiled_truth ?? '',
-    page.timeline ?? '',
-    {
-      type: (page.type as string) ?? 'note',
-      title: page.title ?? '',
-      tags,
-    },
-  );
+  if (page.frontmatter?.dream_generated !== true ||
+      typeof page.frontmatter?.dream_cycle_date !== 'string') {
+    throw new Error(`refusing to render unstamped Dream pattern page ${page.slug}`);
+  }
+  return serializePageToMarkdown(page, tags);
+}
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 // ── Status helpers ───────────────────────────────────────────────────

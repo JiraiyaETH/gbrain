@@ -35,6 +35,19 @@ export interface TrustedSubmitOpts {
   allowProtectedSubmit?: boolean;
 }
 
+/**
+ * Terminal-idempotency policy. Kept separate from MinionJobInput so callers
+ * cannot smuggle queue lifecycle policy through an untrusted job payload.
+ */
+export interface IdempotencySubmitOpts {
+  /**
+   * Default true preserves the historical recurring-job behavior. Set false
+   * for settled-once work: a completed row is returned unchanged, while
+   * failed/dead/cancelled rows remain retryable by re-arming the same row.
+   */
+  rearmCompleted?: boolean;
+}
+
 const MIGRATION_VERSION = 7;
 
 const DEFAULT_MAX_SPAWN_DEPTH = 5;
@@ -83,6 +96,7 @@ export class MinionQueue {
     data?: Record<string, unknown>,
     opts?: Partial<MinionJobInput>,
     trusted?: TrustedSubmitOpts,
+    idempotency?: IdempotencySubmitOpts,
   ): Promise<MinionJob> {
     // Normalize first so the protected-name check and the insert use the same
     // canonical form. Without the trim-before-check, `queue.add(' shell ', ...)`
@@ -136,8 +150,11 @@ export class MinionQueue {
     return this.engine.transaction(async (tx) => {
       // 1. Idempotency fast path. Live rows still dedup exactly as before. A
       //    terminal row is only a re-arm candidate: after parent/cap checks, we
-      //    atomically flip that same row back to a fresh claimable state.
+      //    atomically flip that same row back to a fresh claimable state. The
+      //    settled-once policy preserves completed rows while still allowing
+      //    non-success terminal rows to retry.
       let rearmCandidate: MinionJob | null = null;
+      const rearmCompleted = idempotency?.rearmCompleted !== false;
       if (opts?.idempotency_key) {
         const existing = await tx.executeRaw<Record<string, unknown>>(
           `SELECT * FROM minion_jobs WHERE idempotency_key = $1`,
@@ -146,6 +163,7 @@ export class MinionQueue {
         if (existing.length > 0) {
           const existingJob = rowToMinionJob(existing[0]);
           if (!isTerminalStatus(existingJob.status)) return existingJob;
+          if (existingJob.status === 'completed' && !rearmCompleted) return existingJob;
           rearmCandidate = existingJob;
         }
       }
@@ -276,6 +294,9 @@ export class MinionQueue {
         const maxStalledSet = hasMaxStalled
           ? 'max_stalled = $21,'
           : 'max_stalled = DEFAULT,';
+        const rearmableStatuses = rearmCompleted
+          ? "'completed', 'failed', 'dead', 'cancelled'"
+          : "'failed', 'dead', 'cancelled'";
         const rearmSql = `UPDATE minion_jobs SET
             name = $1,
             queue = $2,
@@ -315,7 +336,7 @@ export class MinionQueue {
             finished_at = NULL,
             updated_at = now()
           WHERE id = $${hasMaxStalled ? 22 : 21}
-            AND status IN ('completed', 'failed', 'dead', 'cancelled')
+            AND status IN (${rearmableStatuses})
           RETURNING *`;
         const rearmParams: unknown[] = [
           jobName,

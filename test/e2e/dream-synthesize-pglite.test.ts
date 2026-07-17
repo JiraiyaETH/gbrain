@@ -245,7 +245,7 @@ describe('E2E synthesize — cooldown', () => {
     try {
       await rig.engine.setConfig('dream.synthesize.enabled', 'true');
       await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
-      await rig.engine.setConfig('dream.synthesize.last_completion_ts.default', new Date().toISOString());
+      await rig.engine.setConfig('dream.synthesize.last_completion_ts', new Date().toISOString());
       await rig.engine.setConfig('dream.synthesize.cooldown_hours', '12');
       const result = await runPhaseSynthesize(rig.engine, {
         brainDir: rig.brainDir,
@@ -265,7 +265,7 @@ describe('E2E synthesize — cooldown', () => {
     try {
       await rig.engine.setConfig('dream.synthesize.enabled', 'true');
       await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
-      await rig.engine.setConfig('dream.synthesize.last_completion_ts.default', new Date().toISOString());
+      await rig.engine.setConfig('dream.synthesize.last_completion_ts', new Date().toISOString());
       const adHoc = join(tmpdir(), `gbrain-synth-ad-hoc-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
       writeFileSync(adHoc, 'hello world '.repeat(300));
       try {
@@ -287,7 +287,7 @@ describe('E2E synthesize — cooldown', () => {
     }
   }, 30_000);
 
-  test('cooldown is per-source and does not suppress a neighboring source', async () => {
+  test('cooldown is corpus-global and suppresses every neighboring source', async () => {
     const rig = await setupRig();
     try {
       await rig.engine.executeRaw(
@@ -297,15 +297,15 @@ describe('E2E synthesize — cooldown', () => {
       await rig.engine.setConfig('dream.synthesize.enabled', 'true');
       await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
       await rig.engine.setConfig('dream.synthesize.cooldown_hours', '12');
-      await rig.engine.setConfig('dream.synthesize.last_completion_ts.robotics', new Date().toISOString());
+      await rig.engine.setConfig('dream.synthesize.last_completion_ts', new Date().toISOString());
 
       const defaultResult = await runPhaseSynthesize(rig.engine, {
         brainDir: rig.brainDir,
         dryRun: false,
         sourceId: 'default',
       });
-      expect(defaultResult.status).toBe('ok');
-      expect(defaultResult.details.reason).toBeUndefined();
+      expect(defaultResult.status).toBe('skipped');
+      expect(defaultResult.details.reason).toBe('cooldown_active');
 
       const roboticsResult = await runPhaseSynthesize(rig.engine, {
         brainDir: rig.brainDir,
@@ -367,11 +367,11 @@ describe('E2E synthesize — round-trip self-consumption guard (v0.23.2)', () =>
         title: 'Test reflection (E2E round-trip)',
         compiled_truth: 'I noticed something. Cross-references to [Alice](people/alice).',
         timeline: '',
-        frontmatter: {},
+        frontmatter: { dream_generated: true, dream_cycle_date: '2026-04-30' },
       });
 
-      // 2. Reverse-render via the real synthesize-phase helper. This is the
-      //    code path that stamps `dream_generated: true` into frontmatter.
+      // 2. Reverse-render via the real synthesize-phase helper. Dream
+      //    provenance is already present in the DB; rendering must preserve it.
       const page = await rig.engine.getPage(slug);
       expect(page).not.toBeNull();
       const md = renderPageToMarkdown(page!, ['dream-cycle']);
@@ -433,7 +433,7 @@ describe('E2E synthesize — round-trip self-consumption guard (v0.23.2)', () =>
         title: 'Bypass test',
         compiled_truth: 'Some content. ' + 'x '.repeat(500),
         timeline: '',
-        frontmatter: {},
+        frontmatter: { dream_generated: true, dream_cycle_date: '2026-04-30' },
       });
       const page = await rig.engine.getPage(slug);
       const md = renderPageToMarkdown(page!, ['dream-cycle']);
@@ -487,7 +487,7 @@ describe('E2E synthesize — round-trip self-consumption guard (v0.23.2)', () =>
         title: 'Leaked',
         compiled_truth: 'leaked body. ' + 'x '.repeat(500),
         timeline: '',
-        frontmatter: {},
+        frontmatter: { dream_generated: true, dream_cycle_date: '2026-04-30' },
       });
       const md = renderPageToMarkdown((await rig.engine.getPage(slug))!, ['dream-cycle']);
       writeFileSync(join(rig.corpusDir, '2026-04-30-leaked.txt'), md + '\n' + 'x '.repeat(500));

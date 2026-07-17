@@ -15,12 +15,12 @@
  *   - Allow-list is sourced from `skills/_brain-filing-rules.json` (single
  *     source of truth) and threaded as handler data; PROTECTED_JOB_NAMES
  *     prevents MCP from submitting `subagent` jobs, so the field is trusted.
- *   - Cooldown via a source-keyed `dream.synthesize.last_completion_ts.*`
- *     config key —
+ *   - Corpus-global cooldown via `dream.synthesize.last_completion_ts` —
  *     written ONLY on success (codex finding #5 deferral: no auto git commit
  *     in v1).
- *   - Idempotency via `dream:synth:<source_id>:<file_path>:<content_hash>`.
- *   - Edited transcripts produce slugs with content-hash suffix → no overwrite.
+ *   - Settled exporter transcripts use a stable namespaced logical identity;
+ *     content hash remains verdict/evidence metadata, never the once-only key.
+ *   - Legacy path/hash completions remain recognized during migration.
  *
  * NOT in v1:
  *   - git auto-commit / push (deferred to v1.1, codex finding #5).
@@ -38,9 +38,13 @@ import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult, PhaseError } from '../cycle.ts';
 import { MinionQueue } from '../minions/queue.ts';
 import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.ts';
-import type { MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
-import { discoverTranscripts, type DiscoveredTranscript } from './transcript-discovery.ts';
-import { serializeMarkdown, serializePageToMarkdown } from '../markdown.ts';
+import type { MinionJob, MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
+import {
+  discoverTranscripts,
+  type DiscoveredTranscript,
+  type TranscriptLogicalIdentity,
+} from './transcript-discovery.ts';
+import { parseMarkdown, serializeMarkdown, serializePageToMarkdown } from '../markdown.ts';
 import type { Page, PageType } from '../types.ts';
 import { validateSourceId } from '../utils.ts';
 import { safeSplitIndex } from '../text-safe.ts';
@@ -48,6 +52,60 @@ import { safeSplitIndex } from '../text-safe.ts';
 // Slug regex from validatePageSlug — kept in sync.
 // Used for the orchestrator-written summary index slug.
 const SUMMARY_SLUG_RE = /^[a-z0-9][a-z0-9\-]*(\/[a-z0-9][a-z0-9\-]*)*$/;
+
+export type SynthesizeChildOutcomeStatus =
+  | 'completed'
+  | 'failed'
+  | 'dead'
+  | 'timed_out'
+  | 'cancelled'
+  | 'unknown';
+
+export interface SynthesizeChildOutcome {
+  jobId: number;
+  status: SynthesizeChildOutcomeStatus;
+  error?: string;
+}
+
+export type SynthesizeChildStatusCounts = Record<SynthesizeChildOutcomeStatus, number> & {
+  total: number;
+};
+
+const SYNTH_CHILD_STATUSES: readonly SynthesizeChildOutcomeStatus[] = [
+  'completed', 'failed', 'dead', 'timed_out', 'cancelled', 'unknown',
+] as const;
+
+/** Classify queue terminal state without allowing timeout-shaped dead rows to hide. */
+export function classifySynthesizeChildOutcome(
+  job: Pick<MinionJob, 'id' | 'status' | 'error_text'>,
+): SynthesizeChildOutcome {
+  const error = job.error_text ?? undefined;
+  if (job.status === 'completed') return { jobId: job.id, status: 'completed' };
+  if ((job.status === 'dead' || job.status === 'failed') && error && /(?:time[ -]?out|deadline exceeded)/i.test(error)) {
+    return { jobId: job.id, status: 'timed_out', error };
+  }
+  if (job.status === 'failed' || job.status === 'dead' || job.status === 'cancelled') {
+    return { jobId: job.id, status: job.status, ...(error ? { error } : {}) };
+  }
+  return {
+    jobId: job.id,
+    status: 'unknown',
+    error: error ?? `unexpected terminal state: ${job.status}`,
+  };
+}
+
+export function countSynthesizeChildOutcomes(
+  outcomes: readonly SynthesizeChildOutcome[],
+): SynthesizeChildStatusCounts {
+  const counts = Object.fromEntries(SYNTH_CHILD_STATUSES.map(status => [status, 0])) as
+    Record<SynthesizeChildOutcomeStatus, number>;
+  for (const outcome of outcomes) counts[outcome.status] += 1;
+  return { ...counts, total: outcomes.length };
+}
+
+export function allSynthesizeChildrenCompleted(outcomes: readonly SynthesizeChildOutcome[]): boolean {
+  return outcomes.length > 0 && outcomes.every(outcome => outcome.status === 'completed');
+}
 
 // ── Model context budget (D1, D5, D7, D9) ─────────────────────────────
 
@@ -244,6 +302,8 @@ export interface SynthesizePhaseOpts {
    * the synthesize loop. Caller must opt in explicitly.
    */
   bypassDreamGuard?: boolean;
+  /** Hermetic test seam; production always uses waitForCompletion. */
+  waitForChildForTestOnly?: (queue: MinionQueue, jobId: number) => Promise<MinionJob>;
 }
 
 /**
@@ -297,11 +357,15 @@ export async function runPhaseSynthesize(
     if (unavailable) return unavailable;
 
     const config = await loadSynthConfig(engine);
+    // Pin one cycle date for every child DB write, reverse-write repair, and
+    // summary receipt. Scheduled bounded scans use --to so cross-midnight
+    // sessions are stamped with the intended settlement night.
+    const summaryDate = opts.date ?? opts.to ?? today();
 
     // Cooldown check (skipped for explicit --input / --date / --from / --to runs).
     const explicitTarget = opts.inputFile || opts.date || opts.from || opts.to;
     if (!explicitTarget) {
-      const cooldown = await checkCooldown(engine, config.cooldownHours, opts.sourceId);
+      const cooldown = await checkCooldown(engine, config.cooldownHours);
       if (cooldown.active) {
         return skipped('cooldown_active',
           `synthesize cooled down until ${cooldown.expires_at} (${config.cooldownHours}h cooldown)`);
@@ -326,7 +390,13 @@ export async function runPhaseSynthesize(
     // discovery lane, not a brain table. Every DB read and every page write
     // below is nevertheless bound to opts.sourceId.
     const transcripts = opts.inputFile
-      ? loadAdHocTranscript(opts.inputFile, config.minChars, config.excludePatterns, opts.bypassDreamGuard)
+      ? loadAdHocTranscript(
+          opts.inputFile,
+          config.minChars,
+          config.excludePatterns,
+          opts.bypassDreamGuard,
+          config.corpusDir,
+        )
       : discoverTranscripts({
           corpusDir: config.corpusDir!,
           meetingTranscriptsDir: config.meetingTranscriptsDir ?? undefined,
@@ -342,8 +412,55 @@ export async function runPhaseSynthesize(
       return ok('no transcripts to process', { transcripts_processed: 0, pages_written: 0 });
     }
 
+    // Settled-once suppression MUST precede the paid significance verdict.
+    // A logical marker is the durable ORCHESTRATOR receipt: child completion
+    // alone is not enough because collection, reverse-write, and summary may
+    // still need to run after a crash. Stable completed lineages without that
+    // marker therefore enter the resume lane below and never call the judge.
+    //
+    // Legacy path/hash lineages predate the orchestrator receipt. Preserve
+    // their historical once-only suppression narrowly, but do not fabricate a
+    // new logical marker from child state alone.
+    const lineageSkips: Array<{ filePath: string; reason: string }> = [];
+    const pendingTranscripts: DiscoveredTranscript[] = [];
+    const resumableTranscripts = new Map<string, SynthesizeLineageRow[]>();
+    for (const transcript of transcripts) {
+      const completion = await transcriptCompletionState(engine, transcript);
+      if (completion.via === 'marker') {
+        lineageSkips.push({
+          filePath: transcript.filePath,
+          reason: 'already_synthesized_marker',
+        });
+        continue;
+      }
+      if (completion.via === 'stable_job') {
+        resumableTranscripts.set(transcript.filePath, completion.rows);
+        continue;
+      }
+      if (completion.via === 'legacy_job') {
+        lineageSkips.push({
+          filePath: transcript.filePath,
+          reason: 'already_synthesized_legacy_job',
+        });
+        continue;
+      }
+      pendingTranscripts.push(transcript);
+    }
+
+    if (pendingTranscripts.length === 0 && resumableTranscripts.size === 0) {
+      return ok('all settled logical transcripts already synthesized', {
+        transcripts_discovered: transcripts.length,
+        transcripts_processed: 0,
+        pages_written: 0,
+        children_submitted: 0,
+        skips: lineageSkips,
+      });
+    }
+
     // Significance verdicts (cached in dream_verdicts; Haiku on miss).
-    const worthProcessing: DiscoveredTranscript[] = [];
+    const worthProcessing: DiscoveredTranscript[] = transcripts.filter(
+      transcript => resumableTranscripts.has(transcript.filePath),
+    );
     const verdicts: Array<{ filePath: string; worth: boolean; reasons: string[]; cached: boolean }> = [];
     // Provider-aware judge client routes through gateway.chat, so any
     // configured provider works (Anthropic, DeepSeek, OpenRouter, Voyage,
@@ -351,7 +468,7 @@ export async function runPhaseSynthesize(
     // model has no reachable provider (legacy "no API key" branch preserved
     // as the cheap pre-flight check).
     const judge = makeJudgeClient(config.verdictModel);
-    for (const t of transcripts) {
+    for (const t of pendingTranscripts) {
       const cached = await engine.getDreamVerdict(t.filePath, t.contentHash);
       if (cached) {
         verdicts.push({ filePath: t.filePath, worth: cached.worth_processing, reasons: cached.reasons, cached: true });
@@ -396,13 +513,19 @@ export async function runPhaseSynthesize(
     // but no Sonnet synthesis. Codex finding #8: --dry-run does NOT mean
     // "zero LLM calls"; it means "skip Sonnet."
     if (opts.dryRun) {
-      return ok(`dry-run: ${worthProcessing.length} of ${transcripts.length} transcripts would synthesize`, {
+      return ok(
+        `dry-run: ${worthProcessing.length - resumableTranscripts.size} of ${pendingTranscripts.length} pending transcripts would synthesize; ` +
+        `${resumableTranscripts.size} completed lineage(s) would resume orchestration`,
+        {
         transcripts_discovered: transcripts.length,
         transcripts_processed: 0,
         pages_written: 0,
         verdicts,
+        skips: lineageSkips,
+        transcripts_to_resume: resumableTranscripts.size,
         dryRun: true,
-      });
+        },
+      );
     }
 
     if (worthProcessing.length === 0) {
@@ -414,6 +537,7 @@ export async function runPhaseSynthesize(
         transcripts_processed: 0,
         pages_written: 0,
         verdicts,
+        skips: lineageSkips,
       });
     }
 
@@ -427,28 +551,42 @@ export async function runPhaseSynthesize(
     }
 
     const queue = new MinionQueue(engine);
-    const childIds: number[] = [];
+    const childIdSet = new Set<number>();
+    const submittedChildIdSet = new Set<number>();
+    const resumedChildIdSet = new Set<number>();
     /** Map child job_id → chunk metadata for D6 orchestrator-side slug rewrite. */
     const chunkInfo = new Map<number, { idx: number; hash6: string }>();
     /** Skip reasons for the cycle report (D5 cap hits, D8 legacy-key skips). */
-    const skipReports: Array<{ filePath: string; reason: string }> = [];
+    const skipReports: Array<{ filePath: string; reason: string }> = [...lineageSkips];
+
+    interface TranscriptPlan {
+      transcript: DiscoveredTranscript;
+      requiredJobIds: Set<number>;
+      reusedCompletedChildren: number;
+    }
+    const transcriptPlans: TranscriptPlan[] = [];
 
     const maxCharsPerChunk = computeChunkCharBudget(config.model, config.maxPromptTokens);
 
     for (const t of worthProcessing) {
-      const hash16 = t.contentHash.slice(0, 16);
       const hash6 = t.contentHash.slice(0, 6);
 
-      // D8: single→multi-chunk migration safety. If a completed legacy
-      // single-chunk job exists for this content_hash, treat as already-
-      // synthesized and skip. Prevents duplicate writes when a transcript
-      // that was previously single-chunk now multi-chunks (because budget
-      // shrank or model changed).
-      if (await hasSingleChunkCompletion(engine, t.filePath, hash16, opts.sourceId)) {
-        skipReports.push({
-          filePath: t.filePath,
-          reason: 'already_synthesized_legacy_single_chunk',
-        });
+      const recoveryRows = resumableTranscripts.get(t.filePath);
+      if (recoveryRows) {
+        const plan: TranscriptPlan = {
+          transcript: t,
+          requiredJobIds: new Set<number>(),
+          reusedCompletedChildren: recoveryRows.length,
+        };
+        for (const row of recoveryRows) {
+          assertPersistedCompletedJobReceipt(row);
+          childIdSet.add(row.id);
+          resumedChildIdSet.add(row.id);
+          plan.requiredJobIds.add(row.id);
+          const recoveredChunk = recoveredChunkInfo(row, t);
+          if (recoveredChunk) chunkInfo.set(row.id, recoveredChunk);
+        }
+        transcriptPlans.push(plan);
         continue;
       }
 
@@ -471,6 +609,11 @@ export async function runPhaseSynthesize(
       }
 
       const isChunked = chunks.length > 1;
+      const plan: TranscriptPlan = {
+        transcript: t,
+        requiredJobIds: new Set<number>(),
+        reusedCompletedChildren: 0,
+      };
       const childJobName = config.useSubscriptionBilling ? 'shell-subagent' : 'subagent';
       // queue.add subagent validator (classifyCapabilities → resolveRecipe)
       // requires `provider:model`. resolveModel can return a bare id when
@@ -483,22 +626,42 @@ export async function runPhaseSynthesize(
           ? `anthropic:${config.model}`
           : config.model;
       for (let i = 0; i < chunks.length; i++) {
+        const chunkIdentity = isChunked ? { index: i, total: chunks.length } : undefined;
+        // Recognize both stable and legacy completed chunks. Partial legacy
+        // runs retry only their missing chunks; a complete legacy set was
+        // already suppressed before the paid verdict.
+        const completedChunk = await findRequiredChunkCompletion(engine, t, chunkIdentity);
+        if (completedChunk) {
+          assertPersistedCompletedJobReceipt(completedChunk);
+          plan.reusedCompletedChildren += 1;
+          childIdSet.add(completedChunk.id);
+          resumedChildIdSet.add(completedChunk.id);
+          plan.requiredJobIds.add(completedChunk.id);
+          if (isChunked) {
+            const recoveredChunk = recoveredChunkInfo(completedChunk, t);
+            if (!recoveredChunk) {
+              throw new Error(
+                `completed synthesis child ${completedChunk.id} is chunked but its persisted identity is missing`,
+              );
+            }
+            chunkInfo.set(completedChunk.id, recoveredChunk);
+          }
+          continue;
+        }
         const childData: SubagentHandlerData = {
           prompt: buildSynthesisPrompt(t, chunks[i], i, chunks.length, priorContradictionsBlock, synthPaths.routes),
           model: subagentModel,
           max_turns: 30,
           allowed_slug_prefixes: allowedSlugPrefixes,
           source_id: opts.sourceId,
+          dream_output_cycle_date: summaryDate,
         };
-        // The source is part of every key so per-source autopilot fanout cannot
-        // cross-suppress identical corpus files. Multi-chunk jobs append the
-        // deterministic chunk identity.
-        const idempotency_key = synthesizeIdempotencyKey(
-          opts.sourceId,
-          t.filePath,
-          hash16,
-          isChunked ? { index: i, total: chunks.length } : undefined,
-        );
+        // Exporter identity is stable across byte drift and namespaced across
+        // Claude/Hermes profiles and parts. Ad-hoc legacy input retains the
+        // historical path/hash key. source_id remains write routing only.
+        const idempotency_key = t.logicalIdentity
+          ? synthesizeLogicalIdempotencyKey(t.logicalIdentity, chunkIdentity)
+          : synthesizeIdempotencyKey(t.filePath, t.contentHash.slice(0, 16), chunkIdentity);
         const submitOpts: Partial<MinionJobInput> = {
           max_stalled: 3,
           on_child_fail: 'continue',
@@ -510,29 +673,69 @@ export async function runPhaseSynthesize(
           childData as unknown as Record<string, unknown>,
           submitOpts,
           { allowProtectedSubmit: true },
+          { rearmCompleted: false },
         );
-        childIds.push(child.id);
+        childIdSet.add(child.id);
+        if (child.status === 'completed') {
+          const completedRow = lineageRowFromJob(child);
+          assertPersistedCompletedJobReceipt(completedRow);
+          resumedChildIdSet.add(child.id);
+          if (isChunked) {
+            const recoveredChunk = recoveredChunkInfo(completedRow, t);
+            if (recoveredChunk) chunkInfo.set(child.id, recoveredChunk);
+          }
+        } else {
+          submittedChildIdSet.add(child.id);
+        }
+        plan.requiredJobIds.add(child.id);
         if (isChunked) {
           chunkInfo.set(child.id, { idx: i, hash6 });
         }
       }
+      if (plan.requiredJobIds.size === 0) {
+        skipReports.push({
+          filePath: t.filePath,
+          reason: 'no_required_synthesis_children',
+        });
+      } else {
+        transcriptPlans.push(plan);
+      }
+    }
+
+    const childIds = Array.from(childIdSet);
+    if (childIds.length === 0) {
+      return ok('no new synthesis children required', {
+        transcripts_discovered: transcripts.length,
+        transcripts_processed: 0,
+        pages_written: 0,
+        children_submitted: 0,
+        children_resumed: 0,
+        skips: skipReports,
+        verdicts,
+      });
     }
 
     // Wait for every child to reach a terminal state. Tick yieldDuringPhase
     // every 5 min so the cycle lock TTL refreshes.
-    const childOutcomes: Array<{ jobId: number; status: string }> = [];
+    const childOutcomes: SynthesizeChildOutcome[] = [];
     for (const jobId of childIds) {
       try {
-        const job = await waitForCompletion(queue, jobId, {
-          timeoutMs: 35 * 60 * 1000,
-          pollMs: 5 * 1000,
-        });
-        childOutcomes.push({ jobId, status: job.status });
+        const job = opts.waitForChildForTestOnly
+          ? await opts.waitForChildForTestOnly(queue, jobId)
+          : await waitForCompletion(queue, jobId, {
+              timeoutMs: 35 * 60 * 1000,
+              pollMs: 5 * 1000,
+            });
+        childOutcomes.push(classifySynthesizeChildOutcome(job));
       } catch (e) {
         if (e instanceof TimeoutError) {
-          childOutcomes.push({ jobId, status: 'timeout' });
+          childOutcomes.push({ jobId, status: 'timed_out', error: e.message });
         } else {
-          throw e;
+          childOutcomes.push({
+            jobId,
+            status: 'unknown',
+            error: e instanceof Error ? e.message : String(e),
+          });
         }
       }
       // After each child terminal, give the cycle lock + worker job lock a chance.
@@ -551,49 +754,104 @@ export async function runPhaseSynthesize(
     const writtenRefs = await collectChildPutPageSlugs(engine, childIds, chunkInfo, opts.sourceId);
 
     // Dual-write: reverse-render each DB row → markdown file.
-    const reverseWriteCount = await reverseWriteRefs(engine, opts.brainDir, writtenRefs);
+    const reverseWriteCount = await reverseWriteRefs(
+      engine,
+      opts.brainDir,
+      writtenRefs,
+      summaryDate,
+    );
 
     // Summary index page (deterministic; orchestrator-written via direct
     // engine.putPage so no allow-list path needed).
-    const summaryDate = opts.date ?? today();
+    // A scheduled bounded scan uses --to <settlement-night> so a Claude
+    // session that began before midnight but settled on that night is still
+    // eligible. Anchor the shared receipt/summary to that explicit upper
+    // bound; per-transcript stable identities retain their own export dates.
     const summarySlug = `dream-cycle-summaries/${summaryDate}`;
     // Back-compat: writeSummaryPage takes string[] for display; map refs back to slugs.
     const writtenSlugs = writtenRefs.map(r => r.slug);
-    if (SUMMARY_SLUG_RE.test(summarySlug)) {
-      await writeSummaryPage(
-        engine,
-        opts.brainDir,
-        summarySlug,
-        summaryDate,
-        writtenSlugs,
-        childOutcomes,
-        opts.sourceId,
+    const outcomeByJobId = new Map(childOutcomes.map(outcome => [outcome.jobId, outcome]));
+    let completedTranscripts = 0;
+    let incompleteTranscripts = 0;
+    const transcriptsReadyForDurableCompletion: DiscoveredTranscript[] = [];
+    for (const plan of transcriptPlans) {
+      const complete = Array.from(plan.requiredJobIds).every(
+        jobId => outcomeByJobId.get(jobId)?.status === 'completed',
       );
+      if (complete) {
+        completedTranscripts += 1;
+        transcriptsReadyForDurableCompletion.push(plan.transcript);
+      } else {
+        incompleteTranscripts += 1;
+      }
     }
 
-    // Write completion timestamp ON SUCCESS only.
-    await engine.setConfig(synthesizeCompletionKey(opts.sourceId), new Date().toISOString());
-
-    const ms = Date.now() - start;
-    const submittedTranscripts = worthProcessing.length - skipReports.length;
-    return ok(`${submittedTranscripts} transcript(s) synthesized in ${(ms / 1000).toFixed(1)}s`, {
+    const childStatusCounts = countSynthesizeChildOutcomes(childOutcomes);
+    const allChildrenSucceeded = allSynthesizeChildrenCompleted(childOutcomes);
+    const reusedCompletedChildren = transcriptPlans.reduce(
+      (total, plan) => total + plan.reusedCompletedChildren,
+      0,
+    );
+    const commonDetails = {
       transcripts_discovered: transcripts.length,
-      transcripts_processed: submittedTranscripts,
+      transcripts_processed: completedTranscripts,
+      transcripts_incomplete: incompleteTranscripts,
       pages_written: writtenSlugs.length,
-      // v0.29: emit the slug list so the recompute_emotional_weight phase can
-      // union with sync's pagesAffected and recompute weights for every page
-      // synthesize wrote in this cycle.
       written_slugs: writtenSlugs,
       reverse_write_count: reverseWriteCount,
       child_outcomes: childOutcomes,
-      // Children submitted (one per chunk for chunked transcripts; one per
-      // transcript for single-chunk). Differs from transcripts_processed
-      // when chunking is in play.
-      children_submitted: childIds.length,
-      // D5 cap hits + D8 legacy-key skips. Empty when nothing skipped.
+      child_status_counts: childStatusCounts,
+      children_submitted: submittedChildIdSet.size,
+      children_resumed: resumedChildIdSet.size,
+      reused_completed_children: reusedCompletedChildren,
       skips: skipReports,
-      summary_slug: summarySlug,
       verdicts,
+    };
+
+    if (!allChildrenSucceeded) {
+      const nonSuccess = childStatusCounts.total - childStatusCounts.completed;
+      return failedWithDetails(
+        makeError(
+          'ChildJobFailure',
+          'SYNTH_CHILD_INCOMPLETE',
+          `${nonSuccess}/${childStatusCounts.total} synthesis child jobs did not complete successfully`,
+        ),
+        { ...commonDetails, summary_slug: null, cooldown_written: false },
+        `synthesize incomplete: ${nonSuccess}/${childStatusCounts.total} child jobs non-success`,
+      );
+    }
+
+    if (!SUMMARY_SLUG_RE.test(summarySlug)) {
+      throw new Error(`invalid synthesize summary slug: ${summarySlug}`);
+    }
+    await writeSummaryPage(
+      engine,
+      opts.brainDir,
+      summarySlug,
+      summaryDate,
+      writtenSlugs,
+      childOutcomes,
+      opts.sourceId,
+    );
+
+    // Logical markers and the success cooldown are one durability receipt.
+    // If any marker write fails, the transaction rolls all of them back so a
+    // retry rediscovers the complete settled set and reconstructs the shared
+    // date summary instead of overwriting it with only an unmarked suffix.
+    // The summary/page/file postconditions above intentionally complete first.
+    const completionTimestamp = new Date().toISOString();
+    await engine.transaction(async tx => {
+      for (const transcript of transcriptsReadyForDurableCompletion) {
+        await markLogicalTranscriptComplete(tx, transcript, completionTimestamp);
+      }
+      await tx.setConfig(synthesizeCompletionKey(), completionTimestamp);
+    });
+
+    const ms = Date.now() - start;
+    return ok(`${completedTranscripts} transcript(s) synthesized in ${(ms / 1000).toFixed(1)}s`, {
+      ...commonDetails,
+      summary_slug: summarySlug,
+      cooldown_written: true,
     });
   } catch (e) {
     return failed(makeError('InternalError', 'SYNTH_PHASE_FAIL',
@@ -698,10 +956,9 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
 async function checkCooldown(
   engine: BrainEngine,
   hours: number,
-  sourceId: string,
 ): Promise<{ active: boolean; expires_at?: string }> {
   if (hours <= 0) return { active: false };
-  const last = await engine.getConfig(synthesizeCompletionKey(sourceId));
+  const last = await engine.getConfig(synthesizeCompletionKey());
   if (!last) return { active: false };
   const lastMs = Date.parse(last);
   if (Number.isNaN(lastMs)) return { active: false };
@@ -710,18 +967,32 @@ async function checkCooldown(
   return { active: true, expires_at: new Date(expiresMs).toISOString() };
 }
 
-export function synthesizeCompletionKey(sourceId: string): string {
-  return `dream.synthesize.last_completion_ts.${sourceId}`;
+export function synthesizeCompletionKey(): string {
+  return 'dream.synthesize.last_completion_ts';
 }
 
 export function synthesizeIdempotencyKey(
-  sourceId: string,
   filePath: string,
   hash16: string,
   chunk?: { index: number; total: number },
 ): string {
-  const base = `dream:synth:${sourceId}:${filePath}:${hash16}`;
+  const base = `dream:synth:${filePath}:${hash16}`;
   return chunk ? `${base}:c${chunk.index}of${chunk.total}` : base;
+}
+
+/** Stable settled-transcript key. Content changes never alter this lineage. */
+export function synthesizeLogicalIdempotencyKey(
+  identity: Pick<TranscriptLogicalIdentity, 'logicalTranscriptId'>,
+  chunk?: { index: number; total: number },
+): string {
+  const base = `dream:synth:logical:v1:${identity.logicalTranscriptId}`;
+  return chunk ? `${base}:c${chunk.index}of${chunk.total}` : base;
+}
+
+export function synthesizeLogicalCompletionKey(
+  identity: Pick<TranscriptLogicalIdentity, 'logicalTranscriptId'>,
+): string {
+  return `dream.synthesize.logical_completion.v1.${identity.logicalTranscriptId}`;
 }
 
 // ── Allow-list source of truth ───────────────────────────────────────
@@ -1175,31 +1446,310 @@ async function collectChildPutPageSlugs(
   return Array.from(rewritten).sort().map(slug => ({ slug, source_id: sourceId }));
 }
 
+interface SynthesizeLineageRow {
+  id: number;
+  name: string;
+  idempotency_key: string;
+  status: string;
+  data: unknown;
+  result: unknown;
+}
+
+interface TranscriptCompletionState {
+  via: 'marker' | 'stable_job' | 'legacy_job' | null;
+  rows: SynthesizeLineageRow[];
+}
+
+function lineageRemainder(key: string, base: string, allowSuffixMatch: boolean): string | null {
+  if (key === base) return '';
+  if (key.startsWith(`${base}:`)) return key.slice(base.length);
+  if (!allowSuffixMatch) return null;
+  const idx = key.lastIndexOf(base.slice('dream:synth'.length));
+  if (idx < 0) return null;
+  const end = idx + base.slice('dream:synth'.length).length;
+  if (end !== key.length && key[end] !== ':') return null;
+  return key.slice(end);
+}
+
+/** Return the exact completed receipt set: one row, or a full 0..N-1 chunk set. */
+function completedLineageRows(
+  rows: readonly SynthesizeLineageRow[],
+  base: string,
+  allowSuffixMatch: boolean,
+): SynthesizeLineageRow[] | null {
+  const exact = rows
+    .filter(row => row.status === 'completed' && lineageRemainder(row.idempotency_key, base, allowSuffixMatch) === '')
+    .sort((a, b) => a.id - b.id)[0];
+  if (exact) return [exact];
+
+  const completedChunks = new Map<number, Map<number, SynthesizeLineageRow>>();
+  for (const row of rows) {
+    const remainder = lineageRemainder(row.idempotency_key, base, allowSuffixMatch);
+    if (remainder === null) continue;
+    if (remainder === '') continue;
+    const match = /^:c(\d+)of(\d+)$/.exec(remainder);
+    if (!match || row.status !== 'completed') continue;
+    const index = Number(match[1]);
+    const total = Number(match[2]);
+    if (!Number.isSafeInteger(index) || !Number.isSafeInteger(total) || total <= 0 || index < 0 || index >= total) continue;
+    const indexes = completedChunks.get(total) ?? new Map<number, SynthesizeLineageRow>();
+    const current = indexes.get(index);
+    if (!current || row.id < current.id) indexes.set(index, row);
+    completedChunks.set(total, indexes);
+  }
+  for (const total of Array.from(completedChunks.keys()).sort((a, b) => a - b)) {
+    const indexes = completedChunks.get(total)!;
+    if (indexes.size === total && Array.from({ length: total }, (_, index) => indexes.has(index)).every(Boolean)) {
+      return Array.from({ length: total }, (_, index) => indexes.get(index)!);
+    }
+  }
+  return null;
+}
+
+/** A lineage is complete only for an exact single row or a full 0..N-1 chunk set. */
+function completedLineage(
+  rows: readonly SynthesizeLineageRow[],
+  base: string,
+  allowSuffixMatch: boolean,
+): boolean {
+  return completedLineageRows(rows, base, allowSuffixMatch) !== null;
+}
+
+function legacyPathBases(filePath: string): string[] {
+  return Array.from(new Set([filePath, resolve(filePath)]))
+    .map(path => `dream:synth:${path}`);
+}
+
+function legacyPathLineageMatch(
+  idempotencyKey: string,
+  pathBase: string,
+): { base: string; remainder: string } | null {
+  const direct = lineageRemainder(idempotencyKey, pathBase, false);
+  if (direct !== null) return { base: pathBase, remainder: direct };
+
+  const prefix = 'dream:synth:';
+  const path = pathBase.slice(prefix.length);
+  if (!path || !idempotencyKey.startsWith(prefix)) return null;
+  const namespaced = idempotencyKey.slice(prefix.length);
+  const separator = namespaced.indexOf(':');
+  if (separator <= 0) return null;
+  const sourceId = namespaced.slice(0, separator);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sourceId)) return null;
+  const namespacedBase = `${prefix}${sourceId}:${path}`;
+  const remainder = lineageRemainder(idempotencyKey, namespacedBase, false);
+  return remainder === null ? null : { base: namespacedBase, remainder };
+}
+
 /**
- * D8: query for any completed source-scoped single-chunk job at the canonical
- * idempotency key shape `dream:synth:<sourceId>:<filePath>:<hash16>`. Used at
- * fan-out time to avoid re-submitting a transcript that was already completed
- * under the single-chunk path for this same source.
- *
- * Reuses the existing `minion_jobs.idempotency_key` index — no schema
- * additions. One indexed lookup per worth-processing transcript.
+ * Legacy completion is path-scoped, not current-content-scoped. Exporters now
+ * add identity/provenance frontmatter, so the same settled logical transcript
+ * can have different bytes from the version whose path/hash job completed.
+ * Keep each historical hash lineage isolated: chunks from different hashes
+ * must never be combined into a synthetic "complete" set.
  */
-async function hasSingleChunkCompletion(
-  engine: BrainEngine,
+function completedLegacyLineageByPath(
+  rows: readonly SynthesizeLineageRow[],
   filePath: string,
-  hash16: string,
-  sourceId: string,
-): Promise<boolean> {
-  const legacyKey = synthesizeIdempotencyKey(sourceId, filePath, hash16);
-  const rows = await engine.executeRaw<{ status: string }>(
-    `SELECT status
-       FROM minion_jobs
-      WHERE idempotency_key = $1
-        AND status = 'completed'
-      LIMIT 1`,
-    [legacyKey],
+): boolean {
+  for (const pathBase of legacyPathBases(filePath)) {
+    const byHashBase = new Map<string, SynthesizeLineageRow[]>();
+    for (const row of rows) {
+      const lineage = legacyPathLineageMatch(row.idempotency_key, pathBase);
+      if (!lineage) continue;
+      const match = /^:([^:]+)(?::c\d+of\d+)?$/.exec(lineage.remainder);
+      if (!match) continue;
+      const hashBase = `${lineage.base}:${match[1]}`;
+      const group = byHashBase.get(hashBase) ?? [];
+      group.push(row);
+      byHashBase.set(hashBase, group);
+    }
+    for (const [hashBase, group] of byHashBase) {
+      if (completedLineage(group, hashBase, false)) return true;
+    }
+  }
+  return false;
+}
+
+async function loadTranscriptLineageRows(
+  engine: BrainEngine,
+  transcript: DiscoveredTranscript,
+): Promise<SynthesizeLineageRow[]> {
+  const stableBase = transcript.logicalIdentity
+    ? synthesizeLogicalIdempotencyKey(transcript.logicalIdentity)
+    : '__no_stable_identity__';
+  const pathBases = legacyPathBases(transcript.filePath);
+  const legacyPathBase = pathBases[0];
+  const resolvedLegacyPathBase = pathBases[1] ?? '__same_legacy_path__';
+  const legacyPath = legacyPathBase.slice('dream:synth:'.length);
+  const resolvedLegacyPath = resolvedLegacyPathBase.slice('dream:synth:'.length);
+  return engine.executeRaw<SynthesizeLineageRow>(
+    `SELECT mj.id, mj.name, mj.idempotency_key, mj.status, mj.data, mj.result
+       FROM minion_jobs mj
+      WHERE idempotency_key IS NOT NULL
+        AND (
+          mj.idempotency_key = $1
+          OR LEFT(mj.idempotency_key, char_length($2) + 1) = $2 || ':'
+          OR LEFT(mj.idempotency_key, char_length($3) + 1) = $3 || ':'
+          OR LEFT(mj.idempotency_key, char_length($4) + 1) = $4 || ':'
+          OR EXISTS (
+            SELECT 1
+              FROM sources s
+             WHERE LEFT(
+                     mj.idempotency_key,
+                     char_length('dream:synth:' || s.id || ':' || $5) + 1
+                   ) = 'dream:synth:' || s.id || ':' || $5 || ':'
+                OR LEFT(
+                     mj.idempotency_key,
+                     char_length('dream:synth:' || s.id || ':' || $6) + 1
+                   ) = 'dream:synth:' || s.id || ':' || $6 || ':'
+          )
+        )`,
+    [stableBase, stableBase, legacyPathBase, resolvedLegacyPathBase, legacyPath, resolvedLegacyPath],
   );
-  return rows.length > 0;
+}
+
+async function transcriptCompletionState(
+  engine: BrainEngine,
+  transcript: DiscoveredTranscript,
+): Promise<TranscriptCompletionState> {
+  if (transcript.logicalIdentity) {
+    const marker = await engine.getConfig(synthesizeLogicalCompletionKey(transcript.logicalIdentity));
+    if (marker) return { via: 'marker', rows: [] };
+  }
+
+  const rows = await loadTranscriptLineageRows(engine, transcript);
+  if (transcript.logicalIdentity) {
+    const stableBase = synthesizeLogicalIdempotencyKey(transcript.logicalIdentity);
+    const completedRows = completedLineageRows(rows, stableBase, false);
+    if (completedRows) {
+      return { via: 'stable_job', rows: completedRows };
+    }
+  }
+  if (completedLegacyLineageByPath(rows, transcript.filePath)) {
+    return { via: 'legacy_job', rows };
+  }
+  return { via: null, rows };
+}
+
+async function findRequiredChunkCompletion(
+  engine: BrainEngine,
+  transcript: DiscoveredTranscript,
+  chunk?: { index: number; total: number },
+): Promise<SynthesizeLineageRow | null> {
+  const rows = await loadTranscriptLineageRows(engine, transcript);
+  const stableBase = transcript.logicalIdentity
+    ? synthesizeLogicalIdempotencyKey(transcript.logicalIdentity)
+    : null;
+  const legacyHash = transcript.contentHash.slice(0, 16);
+  const expectedRemainder = chunk ? `:c${chunk.index}of${chunk.total}` : '';
+  return rows.find(row => {
+    if (row.status !== 'completed') return false;
+    if (stableBase && lineageRemainder(row.idempotency_key, stableBase, false) === expectedRemainder) return true;
+    return legacyPathBases(transcript.filePath).some(pathBase => {
+      const lineage = legacyPathLineageMatch(row.idempotency_key, pathBase);
+      return lineage?.remainder === `:${legacyHash}${expectedRemainder}`;
+    });
+  }) ?? null;
+}
+
+function lineageRowFromJob(job: MinionJob): SynthesizeLineageRow {
+  if (!job.idempotency_key) {
+    throw new Error(`completed synthesis child ${job.id} is missing its idempotency key`);
+  }
+  return {
+    id: job.id,
+    name: job.name,
+    idempotency_key: job.idempotency_key,
+    status: job.status,
+    data: job.data,
+    result: job.result,
+  };
+}
+
+function assertPersistedCompletedJobReceipt(row: SynthesizeLineageRow): void {
+  if (row.status !== 'completed') {
+    throw new Error(`synthesis child ${row.id} cannot resume from non-completed status ${row.status}`);
+  }
+  if (row.result === null || row.result === undefined) {
+    throw new Error(`completed synthesis child ${row.id} has no persisted result receipt`);
+  }
+}
+
+function parseRecord(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Rebuild chunk rewrite metadata only from durable job identity/prompt data. */
+function recoveredChunkInfo(
+  row: SynthesizeLineageRow,
+  transcript: DiscoveredTranscript,
+): { idx: number; hash6: string } | null {
+  let index: number | null = null;
+  let total: number | null = null;
+  let hash6: string | null = null;
+
+  if (transcript.logicalIdentity) {
+    const stableBase = synthesizeLogicalIdempotencyKey(transcript.logicalIdentity);
+    const remainder = lineageRemainder(row.idempotency_key, stableBase, false);
+    const stableChunk = remainder === null ? null : /^:c(\d+)of(\d+)$/.exec(remainder);
+    if (stableChunk) {
+      index = Number(stableChunk[1]);
+      total = Number(stableChunk[2]);
+    }
+  }
+
+  if (index === null || total === null) {
+    for (const pathBase of legacyPathBases(transcript.filePath)) {
+      const lineage = legacyPathLineageMatch(row.idempotency_key, pathBase);
+      if (!lineage) continue;
+      const legacyChunk = /^:([^:]+):c(\d+)of(\d+)$/.exec(lineage.remainder);
+      if (!legacyChunk) continue;
+      index = Number(legacyChunk[2]);
+      total = Number(legacyChunk[3]);
+      hash6 = legacyChunk[1].slice(0, 6);
+      break;
+    }
+  }
+
+  if (index === null || total === null) return null;
+  if (!Number.isSafeInteger(index) || !Number.isSafeInteger(total) || total <= 0 || index < 0 || index >= total) {
+    throw new Error(`completed synthesis child ${row.id} has malformed chunk identity`);
+  }
+
+  if (!hash6) {
+    const prompt = parseRecord(row.data)?.prompt;
+    const match = typeof prompt === 'string'
+      ? /Transcript hash suffix \(USE THIS in slugs\): ([a-f0-9]{6})(?:-c\d+)?/i.exec(prompt)
+      : null;
+    hash6 = match?.[1]?.toLowerCase() ?? null;
+  }
+  if (!hash6) {
+    throw new Error(`completed synthesis child ${row.id} is missing persisted chunk hash metadata`);
+  }
+  return { idx: index, hash6 };
+}
+
+async function markLogicalTranscriptComplete(
+  engine: BrainEngine,
+  transcript: DiscoveredTranscript,
+  completedAt = new Date().toISOString(),
+): Promise<void> {
+  if (!transcript.logicalIdentity) return;
+  await engine.setConfig(
+    synthesizeLogicalCompletionKey(transcript.logicalIdentity),
+    completedAt,
+  );
 }
 
 // ── Reverse-write DB rows → markdown files ───────────────────────────
@@ -1208,14 +1758,59 @@ async function reverseWriteRefs(
   engine: BrainEngine,
   brainDir: string,
   refs: Array<{ slug: string; source_id: string }>,
+  cycleDate: string,
 ): Promise<number> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cycleDate)) {
+    throw new Error(`reverse-write cycle date must be YYYY-MM-DD; got ${JSON.stringify(cycleDate)}`);
+  }
+
+  // Crash-resume / legacy defense-in-depth. New Dream children are stamped
+  // inside put_page before facts/chronicle backstops run; historical completed
+  // jobs may predate that context. Stamp every referenced DB row transactionally
+  // before exposing any rendered file or allowing later cycle phases to scan it.
+  const stampedPages = await engine.transaction(async tx => {
+    const pages = new Map<string, { page: Page; tags: string[] }>();
+    for (const { slug, source_id } of refs) {
+      validateSourceId(source_id);
+      const before = await tx.getPage(slug, { sourceId: source_id });
+      if (!before) {
+        throw new Error(`reverse-write receipt references missing page ${slug}@${source_id}`);
+      }
+      const tags = await tx.getTags(slug, { sourceId: source_id });
+      const updated = await tx.mergePageFrontmatter(slug, source_id, {
+        dream_generated: true,
+        dream_cycle_date: cycleDate,
+      });
+      if (!updated) {
+        throw new Error(`reverse-write could not stamp live page ${slug}@${source_id}`);
+      }
+      const after = await tx.getPage(slug, { sourceId: source_id });
+      if (!after) {
+        throw new Error(`reverse-write stamped page disappeared ${slug}@${source_id}`);
+      }
+      if (after.frontmatter?.dream_generated !== true ||
+          after.frontmatter?.dream_cycle_date !== cycleDate ||
+          after.content_hash !== before.content_hash) {
+        throw new Error(`reverse-write DB marker verification failed for ${slug}@${source_id}`);
+      }
+      if (after.type !== before.type || after.title !== before.title ||
+          after.compiled_truth !== before.compiled_truth || after.timeline !== before.timeline) {
+        throw new Error(`reverse-write metadata stamp mutated page content ${slug}@${source_id}`);
+      }
+      pages.set(`${source_id}\0${slug}`, { page: after, tags });
+    }
+    return pages;
+  });
+
   let count = 0;
   for (const { slug, source_id } of refs) {
     // v0.32.8 F6: validate source_id is filesystem-safe before any join().
     validateSourceId(source_id);
-    const page = await engine.getPage(slug, { sourceId: source_id });
-    if (!page) continue;
-    const tags = await engine.getTags(slug, { sourceId: source_id });
+    const stamped = stampedPages.get(`${source_id}\0${slug}`);
+    if (!stamped) {
+      throw new Error(`reverse-write transaction lost stamped page ${slug}@${source_id}`);
+    }
+    const { page, tags } = stamped;
     try {
       const md = renderPageToMarkdown(page, tags);
       // v0.32.8 F6: non-default sources land at brainDir/.sources/<id>/<slug>.md
@@ -1226,37 +1821,38 @@ async function reverseWriteRefs(
         : join(brainDir, '.sources', source_id, `${slug}.md`);
       mkdirSync(dirname(filePath), { recursive: true });
       writeFileSync(filePath, md, 'utf8');
+      const written = readFileSync(filePath, 'utf8');
+      if (written !== md) {
+        throw new Error(`read-after-write mismatch at ${filePath}`);
+      }
+      const parsed = parseMarkdown(written, filePath);
+      if (parsed.frontmatter.dream_generated !== true ||
+          parsed.frontmatter.dream_cycle_date !== cycleDate ||
+          parsed.type !== page.type || parsed.title !== page.title ||
+          parsed.compiled_truth !== page.compiled_truth || parsed.timeline !== page.timeline) {
+        throw new Error(`DB/file Dream marker parity verification failed at ${filePath}`);
+      }
       count++;
     } catch (e) {
-      // Per-slug failures are non-fatal — phase continues.
       const msg = e instanceof Error ? e.message : String(e);
-      process.stderr.write(`[dream] reverse-write ${slug}@${source_id} failed: ${msg}\n`);
+      throw new Error(`reverse-write ${slug}@${source_id} failed: ${msg}`);
     }
   }
   return count;
 }
 
 /**
- * Render a Page to markdown, stamping the dream-output identity marker into
- * frontmatter. This stamp is the explicit identity surface checked by
- * `isDreamOutput` in transcript-discovery.ts. Stamping at render time covers
- * every reverse-write path (subagent reflections + originals + summary) with
- * one funnel; the prior content-pattern guard could miss real output because
- * `serializeMarkdown` does not embed the page slug in the body.
+ * Render an already-stamped Dream Page to markdown. The trusted child put_page
+ * context and reverse-write repair transaction own DB provenance; rendering
+ * must not invent fields that are absent from the row or DB/file parity can
+ * silently diverge.
  */
 export function renderPageToMarkdown(page: Page, tags: string[]): string {
-  // v0.38 DRY: the dream-output identity stamp (dream_generated +
-  // dream_cycle_date) is the ONLY thing that differs from the v0.38
-  // put_page write-through renderer. Both call the shared
-  // serializePageToMarkdown helper in markdown.ts; this wrapper passes
-  // the dream-specific overrides. Future markdown-shape changes happen
-  // in one place.
-  return serializePageToMarkdown(page, tags, {
-    frontmatterOverrides: {
-      dream_generated: true,
-      dream_cycle_date: today(),
-    },
-  });
+  if (page.frontmatter?.dream_generated !== true ||
+      typeof page.frontmatter?.dream_cycle_date !== 'string') {
+    throw new Error(`refusing to render unstamped Dream page ${page.slug}`);
+  }
+  return serializePageToMarkdown(page, tags);
 }
 
 // ── Summary index page ───────────────────────────────────────────────
@@ -1296,7 +1892,7 @@ async function writeSummaryPage(
     { dream_generated: true, dream_cycle_date: summaryDate } as Record<string, unknown>,
     body,
     '',
-    { type: 'note' as string, title: `Dream cycle ${summaryDate}`, tags: ['dream-cycle'] },
+    { type: 'report' as string, title: `Dream cycle ${summaryDate}`, tags: ['dream-cycle'] },
   );
 
   // Direct engine.putPage — orchestrator write, no subagent context, no
@@ -1314,6 +1910,35 @@ async function writeSummaryPage(
     frontmatter: parsed.frontmatter,
   }, { sourceId });
 
+  // parseMarkdown projects tags outside PageInput. Reconcile the generated
+  // summary's relational tags explicitly so the DB and dual-written markdown
+  // cannot diverge after a successful run or crash-resume retry.
+  const desiredSummaryTags = ['dream-cycle'];
+  const existingSummaryTags = await engine.getTags(summarySlug, { sourceId });
+  for (const tag of existingSummaryTags) {
+    if (!desiredSummaryTags.includes(tag)) {
+      await engine.removeTag(summarySlug, tag, { sourceId });
+    }
+  }
+  for (const tag of desiredSummaryTags) {
+    await engine.addTag(summarySlug, tag, { sourceId });
+  }
+
+  const storedSummary = await engine.getPage(summarySlug, { sourceId });
+  if (!storedSummary) {
+    throw new Error(`summary DB postcondition missing ${summarySlug}@${sourceId}`);
+  }
+  if (storedSummary.compiled_truth !== parsed.compiled_truth) {
+    throw new Error(`summary DB postcondition body mismatch ${summarySlug}@${sourceId}`);
+  }
+  if (storedSummary.type !== 'report') {
+    throw new Error(`summary DB postcondition type mismatch ${summarySlug}@${sourceId}`);
+  }
+  const storedSummaryTags = (await engine.getTags(summarySlug, { sourceId })).sort();
+  if (storedSummaryTags.length !== 1 || storedSummaryTags[0] !== 'dream-cycle') {
+    throw new Error(`summary DB postcondition tags mismatch ${summarySlug}@${sourceId}`);
+  }
+
   // Also write to disk (orchestrator dual-write).
   try {
     validateSourceId(sourceId);
@@ -1322,9 +1947,13 @@ async function writeSummaryPage(
       : join(brainDir, '.sources', sourceId, `${summarySlug}.md`);
     mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, fullMarkdown, 'utf8');
+    const written = readFileSync(filePath, 'utf8');
+    if (written !== fullMarkdown) {
+      throw new Error(`read-after-write mismatch at ${filePath}`);
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    process.stderr.write(`[dream] summary file-write failed: ${msg}\n`);
+    throw new Error(`summary file-write failed: ${msg}`);
   }
 }
 
@@ -1335,9 +1964,15 @@ function loadAdHocTranscript(
   minChars: number,
   excludePatterns: string[],
   bypassGuard?: boolean,
+  provenanceRoot?: string | null,
 ): DiscoveredTranscript[] {
   const { readSingleTranscript } = require('./transcript-discovery.ts') as typeof import('./transcript-discovery.ts');
-  const t = readSingleTranscript(filePath, { minChars, excludePatterns, bypassGuard });
+  const t = readSingleTranscript(filePath, {
+    minChars,
+    excludePatterns,
+    bypassGuard,
+    provenanceRoot,
+  });
   return t ? [t] : [];
 }
 
@@ -1366,6 +2001,21 @@ function failed(error: PhaseError): PhaseResult {
     duration_ms: 0,
     summary: 'synthesize phase failed',
     details: {},
+    error,
+  };
+}
+
+function failedWithDetails(
+  error: PhaseError,
+  details: Record<string, unknown>,
+  summary = 'synthesize phase failed',
+): PhaseResult {
+  return {
+    phase: 'synthesize',
+    status: 'fail',
+    duration_ms: 0,
+    summary,
+    details,
     error,
   };
 }

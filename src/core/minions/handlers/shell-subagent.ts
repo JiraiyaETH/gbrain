@@ -102,6 +102,9 @@ export function makeShellSubagentHandler(deps: ShellSubagentDeps) {
       allowedSlugPrefixes: data.allowed_slug_prefixes,
       brainId: data.brain_id,
       sourceId: typeof data.source_id === 'string' && data.source_id.length > 0 ? data.source_id : undefined,
+      dreamOutputCycleDate: typeof data.dream_output_cycle_date === 'string'
+        ? data.dream_output_cycle_date
+        : undefined,
     });
 
     for (const block of parsed.blocks) {
@@ -139,6 +142,7 @@ function buildPutPageContext(opts: {
   allowedSlugPrefixes?: string[];
   brainId?: string;
   sourceId?: string;
+  dreamOutputCycleDate?: string;
 }): OperationContext {
   return {
     engine: opts.engine,
@@ -156,6 +160,7 @@ function buildPutPageContext(opts: {
     viaSubagent: true,
     brainId: opts.brainId,
     allowedSlugPrefixes: opts.allowedSlugPrefixes ? [...opts.allowedSlugPrefixes] : undefined,
+    dreamOutputCycleDate: opts.dreamOutputCycleDate,
   };
 }
 

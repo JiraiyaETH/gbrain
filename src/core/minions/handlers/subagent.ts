@@ -247,6 +247,9 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       brainId: data.brain_id,
       allowedSlugPrefixes: data.allowed_slug_prefixes,
       sourceId: typeof data.source_id === 'string' && data.source_id.length > 0 ? data.source_id : undefined,
+      dreamOutputCycleDate: typeof data.dream_output_cycle_date === 'string'
+        ? data.dream_output_cycle_date
+        : undefined,
     });
     const toolDefs = data.allowed_tools && data.allowed_tools.length > 0
       ? filterAllowedTools(registry, data.allowed_tools)
