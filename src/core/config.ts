@@ -961,7 +961,8 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'emotional_weight.user_holder',
   // Cycle phase config
   'cycle.grade_takes.write_gstack_learnings',
-  // Takes bootstrap config
+  // Takes bootstrap (v0.41.18.0, A12). These keys cover the documented
+  // two-gate consent path plus the configurable page-type scanner.
   'takes.bootstrap_enabled',
   'takes.autopilot_allowed',
   'takes.page_types',
@@ -1016,10 +1017,6 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // pages overflowed the old hardcoded 1500 and were misrecorded as
   // no_events; the cap is now configurable and truncation is surfaced.
   'chronicle.judge_max_tokens',
-  // Takes bootstrap (v0.41.18.0, A12). The onboard remediation's two-gate
-  // consent reads this key, and enabling it is the documented path to
-  // `gbrain takes extract --from-pages` — same unregistered-key class.
-  'takes.bootstrap_enabled',
   'sync.cost_gate_min_usd',
   'sync.federated_v2',
   'embed.backfill_cooldown_min',
