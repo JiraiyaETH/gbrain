@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,8 +22,26 @@ import {
 import { MinionQueue } from '../src/core/minions/queue.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { shouldDreamExitNonZero } from '../src/commands/dream.ts';
+import { LATEST_VERSION } from '../src/core/migrate.ts';
+import { resetPgliteState } from './helpers/reset-pglite.ts';
 
 const tempDirs: string[] = [];
+let engine: PGLiteEngine;
+
+beforeAll(async () => {
+  engine = new PGLiteEngine();
+  await engine.connect({ engine: 'pglite' } as never);
+  await engine.initSchema();
+}, 30_000);
+
+beforeEach(async () => {
+  await resetPgliteState(engine);
+  await engine.setConfig('version', String(LATEST_VERSION));
+});
+
+afterAll(async () => {
+  await engine.disconnect();
+});
 
 function tempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -102,7 +120,7 @@ describe('corrective Dream transcript identity + provenance gate', () => {
       .toBe(`dream:synth:logical:v1:${expectedTranscript}`);
   });
 
-  test('actual exporter numeric manifest parts agree with i/N frontmatter for Claude and Hermes', () => {
+  test('actual exporter numeric manifest parts agree with i/N frontmatter for Claude and Agent fork', () => {
     const dir = tempDir('gbrain-dream-exporter-split-parts-');
     const fixtures = [
       {
@@ -110,8 +128,8 @@ describe('corrective Dream transcript identity + provenance gate', () => {
         sessionId: 'claude-split-session', file: '2026-07-15__claude-code__claude-split-session__part2.md',
       },
       {
-        source: 'hermes', profile: 'alex', owner: 'gbrain:hermes-session-export',
-        sessionId: 'hermes-split-session', file: '2026-07-15__alex__hermes-split-session__part2.md',
+        source: 'agent-fork', profile: 'alice-example', owner: 'gbrain:agent-fork-session-export',
+        sessionId: 'agent-fork-split-session', file: '2026-07-15__alice-example__agent-fork-split-session__part2.md',
       },
     ];
     const manifests: Array<Record<string, unknown>> = [];
@@ -170,15 +188,15 @@ describe('corrective Dream transcript identity + provenance gate', () => {
   test('parts share a logical session but remain distinct; source namespaces remain distinct', () => {
     const part1 = deriveTranscriptLogicalIdentity(exporterMeta({ part_index: 1, part_total: 2, part: '1/2' }));
     const part2 = deriveTranscriptLogicalIdentity(exporterMeta({ part_index: 2, part_total: 2, part: '2/2' }));
-    const hermes = deriveTranscriptLogicalIdentity(exporterMeta({
-      source_namespace: 'hermes',
-      source: 'hermes',
+    const agentFork = deriveTranscriptLogicalIdentity(exporterMeta({
+      source_namespace: 'agent-fork',
+      source: 'agent-fork',
       profile: 'claude-code',
     }));
     expect(part1?.logicalSessionId).toBe(part2?.logicalSessionId);
     expect(part1?.logicalTranscriptId).not.toBe(part2?.logicalTranscriptId);
-    expect(part1?.logicalSessionId).not.toBe(hermes?.logicalSessionId);
-    expect(part1?.logicalTranscriptId).not.toBe(hermes?.logicalTranscriptId);
+    expect(part1?.logicalSessionId).not.toBe(agentFork?.logicalSessionId);
+    expect(part1?.logicalTranscriptId).not.toBe(agentFork?.logicalTranscriptId);
   });
 
   test('asserted logical ID mismatch fails closed', () => {
@@ -291,7 +309,7 @@ describe('corrective Dream transcript identity + provenance gate', () => {
     expect(discoverTranscripts({ corpusDir: dir, minChars: 100 })).toEqual([]);
 
     writeFileSync(join(dir, '.manifest.jsonl'), `${JSON.stringify({
-      ...exporterMeta({ source_namespace: 'hermes', source: 'hermes' }),
+      ...exporterMeta({ source_namespace: 'agent-fork', source: 'agent-fork' }),
       output_path: path,
     })}\n`);
     expect(discoverTranscripts({ corpusDir: dir, minChars: 100 })).toEqual([]);
@@ -526,12 +544,8 @@ describe('corrective Dream terminal outcome + scheduled exit policy', () => {
 
 describe('corrective Dream stable/legacy completion migration', () => {
   test('changed bytes under stable or legacy-only completion skip before verdict; unchanged legacy also skips', async () => {
-    const engine = new PGLiteEngine();
-    await engine.connect({ engine: 'pglite' } as never);
-    await engine.initSchema();
     const corpusDir = tempDir('gbrain-dream-completion-corpus-');
     const brainDir = tempDir('gbrain-dream-completion-brain-');
-    try {
       await engine.setConfig('dream.synthesize.enabled', 'true');
       await engine.setConfig('dream.synthesize.session_corpus_dir', corpusDir);
 
@@ -629,18 +643,11 @@ describe('corrective Dream stable/legacy completion migration', () => {
       expect(reasons).toContain('already_synthesized_legacy_job');
       const verdictCount = await engine.executeRaw<{ count: string }>('SELECT count(*)::text AS count FROM dream_verdicts');
       expect(Number(verdictCount[0].count)).toBe(0);
-    } finally {
-      await engine.disconnect();
-    }
   }, 30_000);
 });
 
 describe('corrective MinionQueue settled-once retries', () => {
   test('concurrent completed submissions preserve completion while concurrent failed retries rearm once', async () => {
-    const engine = new PGLiteEngine();
-    await engine.connect({ engine: 'pglite' } as never);
-    await engine.initSchema();
-    try {
       const queue = new MinionQueue(engine);
       const completed = await queue.add('sync', { generation: 1 }, { idempotency_key: 'settled-once-completed' });
       const claimed = await queue.claim('settled-token', 30_000, 'default', ['sync']);
@@ -677,8 +684,5 @@ describe('corrective MinionQueue settled-once retries', () => {
         `SELECT count(*)::text AS count FROM minion_jobs WHERE idempotency_key = 'settled-once-retry'`,
       );
       expect(Number(rows[0].count)).toBe(1);
-    } finally {
-      await engine.disconnect();
-    }
   }, 30_000);
 });

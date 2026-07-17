@@ -71,7 +71,7 @@ beforeEach(async () => {
 describe('autopilot health scope', () => {
   test('uses the same eligible source universe as fanout dispatch', async () => {
     await markDefaultAsLocalProseSource();
-    await addSource('hermes-agent-code', { federated: true, strategy: 'code' });
+    await addSource('agent-fork-code', { federated: true, strategy: 'code' });
 
     await addHealthyDefaultPage('people/healthy-a', 'Healthy A', 1);
     await addHealthyDefaultPage('people/healthy-b', 'Healthy B', 2);
@@ -85,7 +85,7 @@ describe('autopilot health scope', () => {
         compiled_truth: 'unserviced code source page',
         timeline: '',
         frontmatter: {},
-      }, { sourceId: 'hermes-agent-code' });
+      }, { sourceId: 'agent-fork-code' });
     }
 
     const unscoped = await engine.getHealth();
@@ -96,7 +96,7 @@ describe('autopilot health scope', () => {
 
     const universe = await loadAutopilotSourceUniverse(engine);
     expect(universe.eligibleSources.map((s) => s.id)).toEqual(['default']);
-    expect(universe.skippedCodeSource.map((s) => s.id)).toEqual(['hermes-agent-code']);
+    expect(universe.skippedCodeSource.map((s) => s.id)).toEqual(['agent-fork-code']);
     expect(healthOptsForAutopilotUniverse(universe)).toEqual({ sourceIds: ['default'] });
 
     const autopilotHealth = await engine.getHealth(healthOptsForAutopilotUniverse(universe));
@@ -122,7 +122,7 @@ describe('autopilot health scope', () => {
     });
 
     expect(result.dispatched).toEqual(['default']);
-    expect(result.skipped_code_source).toEqual(['hermes-agent-code']);
+    expect(result.skipped_code_source).toEqual(['agent-fork-code']);
     expect(added.map((j) => j.data.source_id)).toEqual(['default']);
   });
 

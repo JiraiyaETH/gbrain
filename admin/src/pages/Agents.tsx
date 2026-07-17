@@ -562,7 +562,7 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
           api_key agents — those MCP clients only speak OAuth 2.0
           client_credentials, not raw bearer tokens.
 
-          Pre-fix (Wintermute commit 16): the entire Config Export
+          Pre-fix (downstream commit 16): the entire Config Export
           section was hidden for api_key agents, dropping the working
           Claude Code + Cursor snippets along with the broken ones.
           (D5=C in the eng review.)

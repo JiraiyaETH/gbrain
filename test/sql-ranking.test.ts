@@ -14,6 +14,7 @@ import {
   resolveBoostMap,
   resolveHardExcludes,
 } from '../src/core/search/source-boost.ts';
+import { withEnv } from './helpers/with-env.ts';
 
 const { escapeLikePattern, escapeSqlLiteral, buildLikePrefixLiteral } = __test__;
 
@@ -211,13 +212,9 @@ describe('resolveBoostMap', () => {
   test('returns defaults when env is unset', () => {
     // Isolate from an ambient GBRAIN_SOURCE_BOOST in the dev's shell (#2409):
     // resolveBoostMap(undefined) falls through to process.env via its default param.
-    const saved = process.env.GBRAIN_SOURCE_BOOST;
-    delete process.env.GBRAIN_SOURCE_BOOST;
-    try {
+    return withEnv({ GBRAIN_SOURCE_BOOST: undefined }, () => {
       expect(resolveBoostMap(undefined)).toEqual(DEFAULT_SOURCE_BOOSTS);
-    } finally {
-      if (saved !== undefined) process.env.GBRAIN_SOURCE_BOOST = saved;
-    }
+    });
   });
 
   test('env override takes precedence over defaults', () => {

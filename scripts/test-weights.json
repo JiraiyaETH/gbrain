@@ -236,7 +236,7 @@
   "test/eval-contradictions/no-valid-until-write.test.ts": 33,
   "test/eval-cross-modal-batch.test.ts": 141,
   "test/eval-export.test.ts": 2399,
-  "test/eval-gate.test.ts": 3884,
+  "test/eval-gate.serial.test.ts": 3884,
   "test/eval-longmemeval-e2e.slow.test.ts": 196000,
   "test/eval-longmemeval.slow.test.ts": 42000,
   "test/eval-prune.test.ts": 18396,

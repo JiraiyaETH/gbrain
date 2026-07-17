@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { operations, OperationError, type OperationContext } from '../src/core/operations.ts';
-
-delete process.env.GBRAIN_PGLITE_SNAPSHOT;
+import { withEnv } from './helpers/with-env.ts';
 
 const getPage = operations.find((op) => op.name === 'get_page')!;
 let engine: PGLiteEngine;
@@ -49,13 +48,15 @@ async function alias(sourceId: string, from: string, to: string): Promise<void> 
 }
 
 beforeAll(async () => {
-  engine = new PGLiteEngine();
-  await engine.connect({});
-  await engine.initSchema();
-  await engine.executeRaw(
-    `INSERT INTO sources (id, name, local_path)
-     VALUES ('other', 'other', '/tmp/other') ON CONFLICT (id) DO NOTHING`,
-  );
+  await withEnv({ GBRAIN_PGLITE_SNAPSHOT: undefined }, async () => {
+    engine = new PGLiteEngine();
+    await engine.connect({});
+    await engine.initSchema();
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, local_path)
+       VALUES ('other', 'other', '/tmp/other') ON CONFLICT (id) DO NOTHING`,
+    );
+  });
 }, 30_000);
 
 afterAll(async () => {

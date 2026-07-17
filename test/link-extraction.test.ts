@@ -16,6 +16,7 @@ import {
   type SlugResolver,
 } from '../src/core/link-extraction.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
+import { withEnv } from './helpers/with-env.ts';
 
 // v0.27.1 cherry-3: image-to-page path-proximity heuristic.
 describe('imageOfCandidates', () => {
@@ -611,44 +612,29 @@ describe('link_inference_mode: mentions-only', () => {
   // 5. Resolver unit tests: env override → mode + derived booleans.
   test('resolveLinkInferenceMode: env "mentions-only" → mentions-only + both booleans true', async () => {
     const engine = makeFakeEngine(new Map());
-    const prev = process.env.GBRAIN_LINK_INFERENCE_MODE;
-    process.env.GBRAIN_LINK_INFERENCE_MODE = 'mentions-only';
-    try {
+    await withEnv({ GBRAIN_LINK_INFERENCE_MODE: 'mentions-only' }, async () => {
       expect(await resolveLinkInferenceMode(engine)).toBe('mentions-only');
       expect(await isStructuredFirstInferenceEnabled(engine)).toBe(true);
       expect(await isMentionsOnlyInferenceEnabled(engine)).toBe(true);
-    } finally {
-      if (prev === undefined) delete process.env.GBRAIN_LINK_INFERENCE_MODE;
-      else process.env.GBRAIN_LINK_INFERENCE_MODE = prev;
-    }
+    });
   });
 
   test('resolveLinkInferenceMode: env "structured-first" → structuredFirst true, mentionsOnly false', async () => {
     const engine = makeFakeEngine(new Map());
-    const prev = process.env.GBRAIN_LINK_INFERENCE_MODE;
-    process.env.GBRAIN_LINK_INFERENCE_MODE = 'structured-first';
-    try {
+    await withEnv({ GBRAIN_LINK_INFERENCE_MODE: 'structured-first' }, async () => {
       expect(await resolveLinkInferenceMode(engine)).toBe('structured-first');
       expect(await isStructuredFirstInferenceEnabled(engine)).toBe(true);
       expect(await isMentionsOnlyInferenceEnabled(engine)).toBe(false);
-    } finally {
-      if (prev === undefined) delete process.env.GBRAIN_LINK_INFERENCE_MODE;
-      else process.env.GBRAIN_LINK_INFERENCE_MODE = prev;
-    }
+    });
   });
 
   test('resolveLinkInferenceMode: unknown value "bogus" → legacy, both booleans false', async () => {
     const engine = makeFakeEngine(new Map());
-    const prev = process.env.GBRAIN_LINK_INFERENCE_MODE;
-    process.env.GBRAIN_LINK_INFERENCE_MODE = 'bogus';
-    try {
+    await withEnv({ GBRAIN_LINK_INFERENCE_MODE: 'bogus' }, async () => {
       expect(await resolveLinkInferenceMode(engine)).toBe('legacy');
       expect(await isStructuredFirstInferenceEnabled(engine)).toBe(false);
       expect(await isMentionsOnlyInferenceEnabled(engine)).toBe(false);
-    } finally {
-      if (prev === undefined) delete process.env.GBRAIN_LINK_INFERENCE_MODE;
-      else process.env.GBRAIN_LINK_INFERENCE_MODE = prev;
-    }
+    });
   });
 });
 
