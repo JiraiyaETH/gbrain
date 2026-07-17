@@ -1,0 +1,11 @@
+{
+  "task_id": "<stable-task-id>",
+  "objective": "<question>",
+  "nodes": [
+    {"id":"brain-packet","kind":"context","depends_on":[],"lane":"lead","status":"pending","budget":1,"acceptance":"dated packet or empty status","evidence_ids":[]},
+    {"id":"aware-lane","kind":"scout","depends_on":["brain-packet"],"lane":"aware","status":"pending","budget":5,"acceptance":"provenance and gaps","evidence_ids":[]},
+    {"id":"blind-lane","kind":"scout","depends_on":["brain-packet"],"lane":"blind","status":"pending","budget":5,"acceptance":"provenance and gaps","evidence_ids":[]},
+    {"id":"contradiction-search","kind":"verification","depends_on":["aware-lane","blind-lane"],"lane":"lead","status":"pending","budget":2,"acceptance":"disposition every conflict","evidence_ids":[]}
+  ],
+  "frontier_policy": "impact * uncertainty * information_gain; no repeated broad fan-out"
+}

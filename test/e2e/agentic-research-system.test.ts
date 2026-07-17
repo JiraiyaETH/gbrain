@@ -18,5 +18,10 @@ describe('agentic-research-system e2e fixture', () => {
     expect(ledger).toContain('Included Sources');
     expect(memo).toContain('Evidence Boundary');
     expect(receipt).toContain('Cross-Model Eval');
+    expect(skill).toContain('Brain-aware and Brain-blind');
+    expect(skill).toContain('gap-frontier');
+    expect(skill).toContain('no-write');
+    expect(readFileSync(join(root, 'skills', 'agentic-research-system', 'templates', 'research-dag.json'), 'utf-8')).toContain('frontier_policy');
+    expect(readFileSync(join(root, 'skills', 'agentic-research-system', 'templates', 'evidence-state.json'), 'utf-8')).toContain('promotion_proposals');
   });
 });
