@@ -140,6 +140,37 @@ export class PostgresEngine implements BrainEngine {
    * db.disconnect() and clobber the unrelated module-level connection.
    */
   private _connectionStyle: 'instance' | 'module' | null = null;
+  /**
+   * pgvector 0.8+ can continue an HNSW scan after a selective WHERE clause
+   * filters the initial approximate candidates. Without iterative scan, a
+   * source-scoped query can return zero rows even though that source has
+   * thousands of embedded chunks, because the global index's first candidate
+   * window happens to belong to other sources.
+   *
+   * Probe the extension version rather than `current_setting(..., true)`:
+   * pgvector registers these custom GUCs lazily, so a cold 0.8 session returns
+   * NULL even though SET LOCAL succeeds. Cache per engine/pool.
+   */
+  private _hnswIterativeScanSupported: boolean | null = null;
+
+  private async supportsHnswIterativeScan(): Promise<boolean> {
+    if (this._hnswIterativeScanSupported !== null) {
+      return this._hnswIterativeScanSupported;
+    }
+    try {
+      const rows = await this.sql<Array<{ extversion: string }>>`
+        SELECT extversion FROM pg_extension WHERE extname = 'vector'
+      `;
+      const match = /^(\d+)\.(\d+)/.exec(rows[0]?.extversion ?? '');
+      const major = match ? Number(match[1]) : -1;
+      const minor = match ? Number(match[2]) : -1;
+      this._hnswIterativeScanSupported = major > 0 || (major === 0 && minor >= 8);
+    } catch {
+      // Search remains compatible with pgvector <0.8 and restricted servers.
+      this._hnswIterativeScanSupported = false;
+    }
+    return this._hnswIterativeScanSupported;
+  }
 
   /**
    * v0.30.1 (Fix 1 + X1 + T5): instance-owned ConnectionManager.
@@ -179,6 +210,7 @@ export class PostgresEngine implements BrainEngine {
   // Lifecycle
   async connect(config: EngineConfig & { poolSize?: number; parentConnectionManager?: ConnectionManager }): Promise<void> {
     this._savedConfig = config;
+    this._hnswIterativeScanSupported = null;
     const url = config.database_url;
     if (config.poolSize) {
       // Instance-level connection for worker isolation. resolvePoolSize lets
@@ -1862,6 +1894,18 @@ export class PostgresEngine implements BrainEngine {
 
   async searchVector(embedding: Float32Array, opts?: SearchOpts): Promise<SearchResult[]> {
     const sql = this.sql;
+    const hasSelectiveHnswFilter = !!(
+      opts?.sourceId
+      || (opts?.sourceIds && opts.sourceIds.length > 0)
+      || opts?.type
+      || (opts?.types && opts.types.length > 0)
+      || opts?.language
+      || opts?.symbolKind
+      || opts?.afterDate
+      || opts?.beforeDate
+    );
+    const useIterativeHnsw = hasSelectiveHnswFilter
+      && await this.supportsHnswIterativeScan();
     const limit = clampSearchLimit(opts?.limit);
     const offset = opts?.offset || 0;
     const type = opts?.type;
@@ -2027,6 +2071,19 @@ export class PostgresEngine implements BrainEngine {
 
     const rows = await sql.begin(async sql => {
       await sql`SET LOCAL statement_timeout = '8s'`;
+      if (useIterativeHnsw) {
+        // pgvector 0.8+: keep scanning the global HNSW index until selective
+        // source/type/visibility filters yield the requested window. The outer
+        // query applies the final deterministic score ordering, while strict
+        // HNSW order keeps the candidate window repeatable. The default 20k
+        // tuple scan can still exhaust inside a
+        // semantically dense foreign-source cluster; cap at 100k so a 93k-chunk
+        // multi-source brain can reach its requested source instead of
+        // returning a false empty result.
+        await sql`SET LOCAL hnsw.ef_search = 1000`;
+        await sql`SET LOCAL hnsw.iterative_scan = strict_order`;
+        await sql`SET LOCAL hnsw.max_scan_tuples = 100000`;
+      }
       return await sql.unsafe(rawQuery, params as Parameters<typeof sql.unsafe>[1]);
     });
     return rows.map(rowToSearchResult);

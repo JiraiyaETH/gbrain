@@ -24,6 +24,7 @@ import {
 } from './return-policy.ts';
 import { applyAutocut, type AutocutDecision } from './autocut.ts';
 import { buildRelationalArm } from './relational-recall.ts';
+import { parseRelationalQuery } from './relational-intent.ts';
 import { loadConfigWithEngine } from '../config.ts';
 import { dedupResults } from './dedup.ts';
 import { applyReranker } from './rerank.ts';
@@ -772,6 +773,76 @@ export interface HybridSearchOpts extends SearchOpts {
 }
 
 /**
+ * Signed/contract relationship questions are aggregate queries. A cross-
+ * encoder can otherwise fill the entire return window with near-identical
+ * contract pages and hide the requested people plus project/company context.
+ * Preserve reranker order while applying a narrow page-level diversity cap
+ * to the first window; deferred rows remain available immediately afterward.
+ */
+export function diversifySignedRelationshipResults(
+  results: SearchResult[],
+  requestedWindow: number,
+): SearchResult[] {
+  const window = Math.min(results.length, Math.max(1, Math.min(10, requestedWindow)));
+  if (window < 2) return results;
+  const caps = new Map<string, number>([
+    ['contract', Math.max(1, Math.ceil(window / 2))],
+    ['person', Math.max(1, Math.floor(window * 0.3))],
+    ['company', 1],
+  ]);
+  const counts = new Map<string, number>();
+  const seenPages = new Set<string>();
+  const selected: number[] = [];
+  const deferred: number[] = [];
+  // When a reranker scored at least one full return window, never promote an
+  // unscored long-tail row merely to satisfy a type cap.  It is still retained
+  // immediately after the scored window.  Without this guard a far-tail
+  // conversation could leapfrog cross-encoder-scored contract/person rows.
+  const keepScoredWindow = results
+    .slice(0, window)
+    .every(row => Number.isFinite(row.rerank_score));
+  for (let i = 0; i < results.length; i++) {
+    const row = results[i]!;
+    const pageKey = `${row.source_id ?? 'default'}:${row.slug}`;
+    const cap = caps.get(row.type);
+    const typeCount = counts.get(row.type) ?? 0;
+    if (
+      selected.length < window
+      && (!keepScoredWindow || Number.isFinite(row.rerank_score))
+      && !seenPages.has(pageKey)
+      && (cap === undefined || typeCount < cap)
+    ) {
+      selected.push(i);
+      seenPages.add(pageKey);
+      counts.set(row.type, typeCount + 1);
+    } else {
+      deferred.push(i);
+    }
+  }
+  // Sparse result sets may not contain enough distinct page types. Fill the
+  // window with still-unique deferred rows before allowing duplicate chunks.
+  const stillDeferred: number[] = [];
+  for (const i of deferred) {
+    const row = results[i]!;
+    const pageKey = `${row.source_id ?? 'default'}:${row.slug}`;
+    if (
+      selected.length < window
+      && (!keepScoredWindow || Number.isFinite(row.rerank_score))
+      && !seenPages.has(pageKey)
+    ) {
+      selected.push(i);
+      seenPages.add(pageKey);
+    } else {
+      stillDeferred.push(i);
+    }
+  }
+  while (selected.length < window && stillDeferred.length > 0) {
+    selected.push(stillDeferred.shift()!);
+  }
+  return [...selected, ...stillDeferred].map(index => results[index]!);
+}
+
+/**
  * v0.42.20.0 (Fix 3, #1775) — bound the query-time embed so a stalled provider
  * (the user's zeroentropy case) fails over to keyword instead of hanging past
  * the CLI's 10s force-exit. Default 6s leaves headroom under that deadline.
@@ -1495,11 +1566,21 @@ export async function hybridSearch(
   const reranked = rerankerOpts.enabled
     ? await applyReranker(query, deduped, rerankerOpts as any)
     : deduped;
+  const relationalIntent = resolvedMode.relationalRetrieval
+    ? parseRelationalQuery(query)
+    : null;
+  const relationBalanced = relationalList.length > 0
+    && relationalIntent?.linkTypes?.includes('signed')
+    // Reordering must be independent of the requested page offset.  Using
+    // `limit + offset` made page 2 reorder under a different horizon, causing
+    // duplicates and omissions across pagination.
+    ? diversifySignedRelationshipResults(reranked, limit)
+    : reranked;
 
   // T3 — free-text alias hop. Runs AFTER rerank so a query that is a page's
   // declared chosen name reliably surfaces that page regardless of how the
   // reranker scored body chunks. Fail-open on pre-v110 brains.
-  const aliasHopped = await applyAliasHop(engine, reranked, query, {
+  const aliasHopped = await applyAliasHop(engine, relationBalanced, query, {
     sourceId: opts?.sourceId,
     sourceIds: opts?.sourceIds,
   });

@@ -91,4 +91,69 @@ describe('buildRelationalArm', () => {
     const list = await buildRelationalArm(eng, 'what connects Acme Alpha and Beta Corp?', { limit: 3 });
     expect(list.map(r => r.slug)).toContain('people/c-zoe-shared');
   });
+
+  test('resolves an unambiguous short title head and walks signed contract evidence', async () => {
+    await eng.putPage('projects/tap-program', {
+      type: 'project', title: 'TAP — Tailored Associate Program',
+      compiled_truth: 'A creator associate program.', timeline: '',
+    });
+    await eng.putPage('contracts/tap/alice-example', {
+      type: 'contract', title: 'Alice Example — TAP Associate',
+      compiled_truth: 'A signed TAP agreement.', timeline: '',
+    });
+    // Lower-confidence colon-prefixed notes must not make the stronger,
+    // unique em-dash display head ambiguous.
+    await eng.putPage('notes/tap-example', {
+      type: 'note', title: 'TAP: Supporting note',
+      compiled_truth: 'A note about TAP.', timeline: '',
+    });
+    await eng.addLink('projects/tap-program', 'contracts/tap/alice-example', '', 'mentions', 'manual');
+    await eng.addLink('people/alice-example', 'contracts/tap/alice-example', '', 'signed', 'manual');
+
+    const list = await buildRelationalArm(eng, 'who signed the TAP contract', { depth: 2, limit: 20 });
+    expect(list.map(row => row.slug)).toContain('people/alice-example');
+    expect(list.map(row => row.slug)).toContain('contracts/tap/alice-example');
+  });
+
+  test('rejects two display heads tied at the strongest match tier', async () => {
+    await eng.putPage('projects/amb-one', {
+      type: 'project', title: 'AMB — One', compiled_truth: 'One.', timeline: '',
+    });
+    await eng.putPage('projects/amb-two', {
+      type: 'project', title: 'AMB — Two', compiled_truth: 'Two.', timeline: '',
+    });
+    let seedsResolved = -1;
+    const list = await buildRelationalArm(eng, 'who signed the AMB contract', {
+      onMeta: meta => { seedsResolved = meta.seeds_resolved; },
+    });
+    expect(list).toEqual([]);
+    expect(seedsResolved).toBe(0);
+  });
+
+  test('treats LIKE metacharacters in a seed literally', async () => {
+    let seedsResolved = -1;
+    const list = await buildRelationalArm(eng, 'who signed the T_P contract', {
+      onMeta: meta => { seedsResolved = meta.seeds_resolved; },
+    });
+    expect(list).toEqual([]);
+    expect(seedsResolved).toBe(0);
+  });
+
+  test('KOLs signed to a company traverse creator and signature edges', async () => {
+    await eng.putPage('companies/silo-example', {
+      type: 'company', title: 'Silo Example', compiled_truth: 'A protocol.', timeline: '',
+    });
+    await eng.putPage('people/silo-kol', {
+      type: 'person', title: 'Silo KOL', compiled_truth: 'A creator.', timeline: '',
+    });
+    await eng.putPage('contracts/silo/silo-kol', {
+      type: 'contract', title: 'Silo KOL Agreement', compiled_truth: 'Signed.', timeline: '',
+    });
+    await eng.addLink('people/silo-kol', 'companies/silo-example', '', 'creator_for', 'manual');
+    await eng.addLink('people/silo-kol', 'contracts/silo/silo-kol', '', 'signed', 'manual');
+
+    const list = await buildRelationalArm(eng, 'who are all the KOLs signed to Silo Example', { depth: 2, limit: 20 });
+    expect(list.map(row => row.slug)).toContain('people/silo-kol');
+    expect(list.map(row => row.slug)).toContain('contracts/silo/silo-kol');
+  });
 });
