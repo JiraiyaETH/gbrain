@@ -695,6 +695,32 @@ const get_page: Operation = {
     let page = await ctx.engine.getPage(slug, { includeDeleted, ...sourceOpts });
     let resolved_slug: string | undefined;
 
+    // v0.42 corrective: slug_aliases is the authoritative old-slug redirect
+    // surface, but the read operation previously never consulted it. Resolve
+    // only after an active exact lookup misses so a live page always wins.
+    // Recovery reads deliberately keep include_deleted=true on the original
+    // slug and must not be redirected away from the tombstoned row.
+    if (!page && !includeDeleted) {
+      const aliasSources = sourceOpts.sourceIds
+        ?? (sourceOpts.sourceId ? [sourceOpts.sourceId] : ['default']);
+      // Keep alias provenance and canonical lookup in the same source. A
+      // federated alias can exist only in later source B while source A also
+      // owns the canonical slug; resolving across the whole array and then
+      // reading across the whole array would incorrectly return A's object.
+      for (const aliasSource of aliasSources) {
+        const canonicalSlug = await ctx.engine.resolveSlugWithAlias(slug, [aliasSource]);
+        if (canonicalSlug === slug) continue;
+        const candidate = await ctx.engine.getPage(canonicalSlug, {
+          includeDeleted: false,
+          sourceId: aliasSource,
+        });
+        if (!candidate) continue;
+        page = candidate;
+        resolved_slug = canonicalSlug;
+        break;
+      }
+    }
+
     if (!page && fuzzy) {
       const candidates = await ctx.engine.resolveSlugs(slug, fuzzyScope);
       if (candidates.length === 1) {
