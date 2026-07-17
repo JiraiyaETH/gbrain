@@ -1,10 +1,10 @@
 ---
 name: agentic-research-system
-version: 1.2.0
+version: 1.3.0
 description: |
-  Use for high-caliber, source-backed agentic research: Brain-first context,
-  bounded scouts, evidence ledgers, citation/critique gates, decision memo,
-  cross-model review, and controlled promotion into Brain, skills, or evals.
+  Decision-grade, source-backed research with Brain-aware and Brain-blind
+  lanes, bounded gap-directed scouts, evidence ledgers, citation audit, and
+  operator-controlled promotion proposals.
 triggers:
   - "agentic research"
   - "deep research system"
@@ -20,88 +20,116 @@ tools: [query, search, get_page, web_search, web_extract, delegate_task, browser
 metadata:
   hermes:
     tags: [research, subagents, citations, evals, source-ledger, decision-memo]
-    related_skills: [brain-ops, data-research, perplexity-research, academic-verify, cross-modal-review, skillify]
+    related_skills: [brain-ops, data-research, academic-verify, cross-modal-review, skillify]
 ---
 
 # Agentic Research System
 
 ## Contract
 
-For serious research, produce a bounded, source-backed research artifact and a compact user-facing verdict. The lead owns judgment; scouts are read-only evidence collectors. The process MUST:
+Produce a bounded research artifact and decision-first verdict. The owning lead
+serializes judgment and promotion; concurrent workers may only propose evidence,
+claims, gaps, contradictions, and follow-ups. Native GBrain write gates are the
+only canonical promotion path; this skill does not assume a queue exists.
 
-1. Check Brain first when the topic touches prior people, companies, projects, decisions, or durable claims, and inject a dated `brain_context` packet into every external lane.
-2. Create a protocol-lite brief before research (objective, decision, scope, freshness, source classes, tier, output, quality bar, stop rules).
-3. Route acquisition by target: known URL → extract; unknown → search; known domain → map/selective extract; corpus → crawl; current discourse → social/current search; UI-only → browser receipt; data/PDF → code/data lane; academic/method → original papers.
-4. Keep fan-out bounded and provider-neutral. Scouts return provenance, claims, caveats, gaps, and follow-ups; they never synthesize, mutate, log in, send, purchase, post, edit the repo, or write Brain.
-5. Classify findings against Brain as `new`, `changed`, `missing`, `contradictory`, or `confirming`; absence is never novelty.
-6. Maintain search/inclusion, evidence/source, claim, citation, run, and (when applicable) eval ledgers. No snippet, model-summary, or uncited provider output may support a material claim.
-7. Run critic/competing-hypotheses and pre-synthesis gates, then citation audit; every material claim maps to approved source IDs or is labeled hypothesis.
-8. Separate facts, judgment, hypotheses, evidence confidence, and recommendation strength; run cross-model review for high-stakes or reusable output.
-9. End with a receipt and explicit promotion decision: Brain, skill, eval case, or nothing.
-10. Treat canonical Brain write-back as a proposal until the controlled gate passes; no native write call before operator-approved scope, taxonomy/schema check, dry-run diff, and provenance/contradiction review.
+Every serious run MUST have: protocol-lite brief; dated Brain packet; editable DAG;
+task-scoped durable evidence workspace; shared evidence/claim state; source,
+claim, citation, and run ledgers; paired aware/blind lanes; gap-frontier
+scouting; source acquisition router; independent temporal/factual verification
+with capability parity; evidence-before-belief promotion; pre-synthesis/citation
+audit; and a no-write promotion proposal.
 
-## When to use
+## Use / don't use
 
-Use for deep/decision-grade, technical/vendor/market/protocol/academic diligence, benchmark synthesis, or reusable research process review. Do not use for a single-URL summary, one-canonical-source lookup, unsafe/private investigation, external action, or recurring watch before manual evidence/eval validation.
+Use for deep, technical, vendor, market, academic, benchmark, current-state, or
+reusable-process research. Do not use for a one-URL summary, one-canonical-source
+lookup, unsafe/private investigation, or external action.
 
 ## Operating phases
 
-1. **Brief and Brain packet.** Use `templates/research-brief.md`; run Brain search → query if thin → get. Record `brain_context_status: empty` when applicable and do not claim novelty.
-2. **Route through the source acquisition router and scout.** Select the smallest tier that fits (Quick, Standard, Deep, Ocean). Give each lane scope, allowed tools, source classes, stop condition, caveats, and the delta contract. Apply the caps and downgrade rules in [operating protocol](references/operating-protocol-v1.1.md).
-3. **Ledger and audit.** Use the templates below. Reject snippet-only support, disclose contradictions, downgrade weak evidence, and run the critic before synthesis.
-4. **Synthesize and evaluate.** Use `templates/research-memo.md`; the Citation Auditor controls allowed source IDs. For high-stakes work use `templates/eval-report.md` and the cross-modal gate described in the reference.
-5. **Receipt and promotion.** Use `templates/run-receipt.md`. For benchmark/unapproved runs, promotion is `not_run` and write-back is prohibited. Only GBrain-native write surfaces may write Brain; never raw filesystem edits.
+1. **Brief + plan.** Fill `templates/research-brief.md`. Create an editable DAG
+   in `templates/research-dag.json`; nodes have IDs, dependencies, status,
+   lane, budget, and acceptance criteria. Persist all artifacts under a unique
+   task workspace (never a shared mutable directory).
+2. **Brain packet.** Read Brain first (`search → query if thin → get`) and write
+   a dated, bounded packet into the workspace. Empty Brain means no novelty
+   claim. Inject the same packet into the Brain-aware lane; the blind lane gets
+   the objective and source policy but not Brain claims.
+3. **Shared state.** Initialize `templates/evidence-state.json`. Workers append
+   proposals with stable source/claim IDs; the lead merges/deduplicates and
+   records status (`proposed|verified|rejected|contradictory`). Workers never
+   overwrite judgment or canonical pages.
+4. **Scout the frontier.** The lead dispatches only the highest-value open DAG
+   gaps (not repeated broad fan-out). Each scout receives scope, allowed tools,
+   source classes, stop condition, and a bounded budget. Preserve provider-neutral
+   acquisition and downgrade/terminate on budget, auth, or side-effect breach.
+5. **Paired verification.** Run temporally fresh and factual checks independently,
+   with equivalent tools, source budgets, and instructions in both lanes. Search
+   explicitly for contradictions and anchoring-induced omissions. Classify each
+   finding against Brain: `new|changed|missing|contradictory|confirming`.
+6. **Evidence-before-belief.** A claim may become `verified` only after direct
+   source support, provenance, freshness check, and contradiction disposition.
+   The lead proposes promotion only after citation audit and pre-synthesis gates;
+   unsupported material claims remain hypotheses or are removed.
+7. **Synthesize + audit.** Use `templates/research-memo.md`; facts, judgment,
+   hypotheses, evidence confidence, and recommendation strength stay separate.
+   No snippet, model summary, or uncited provider output supports a material claim.
+8. **Promotion proposal + receipt.** Use `templates/run-receipt.md`. Proposal is
+   no-write by default. Canonical Brain promotion requires operator approval,
+   taxonomist/schema check, rendered diff, native write, readback, and sync.
 
-## Required artifact set
+## Bounded tiers
 
-- Brief: `templates/research-brief.md`
-- Source/inclusion ledger: `templates/source-ledger.md`, `templates/source-card.json`
-- Claim ledger/cards: `templates/claim-card.json`
-- Citation registry: `templates/citation-registry.json`
-- Memo: `templates/research-memo.md`
-- Eval: `templates/eval-report.md`, `templates/eval-case.json`
-- Receipt: `templates/run-receipt.md`
-- Complete methodology, rubrics, schemas, source basis, and examples: [references/operating-protocol-v1.1.md](references/operating-protocol-v1.1.md)
+| Tier | Shape | Source cap |
+|---|---|---:|
+| Quick | lead + one focused check | 3 |
+| Standard | paired lanes + critic | 10 |
+| Deep | paired lanes + 3–5 directed scouts | 25 |
+| Ocean | explicit operator approval and custom budget | stated in brief |
 
-## Compatibility anchors
+A scout returns provenance, exact supported claims, caveats, gaps, and follow-ups;
+never a final conclusion or side effect. Brain-first lookup is `search → query
+if thin → get`, with a dated packet. Subagent Structure is bounded proposal work:
+scouts never own judgment. The Cross-Model Eval Gate uses Skillify when configured;
+otherwise record the exact blocker. See [operating protocol](references/operating-protocol-v1.1.md),
+[source-basis guidance](references/source-basis-v1.3.md), and [upgrade mechanisms](references/upgrade-mechanisms-v1.3.md).
 
-## Phase 4 — Subagent Structure
+## Required artifacts
 
-## Phase 9 — Cross-Model Eval Gate
+Brief; `research-dag.json`; `evidence-state.json`; source/claim/citation ledgers;
+Brain packet; aware/blind lane receipts; memo; eval report; and run receipt.
+Templates live in `templates/`. The deterministic tree validator is
+`scripts/agentic-research-system.mjs`.
 
-The detailed phases remain in the linked protocol: **Pre-Synthesis Validator** and **Citation Auditor**. No snippet citations are permitted.
+## Pre-Synthesis Validator and Citation Auditor
 
-## Hard gates
+The Pre-Synthesis Validator and Citation Auditor enforce claim/source mapping.
+No snippet citations are permitted. Promotion Decision is recorded in the
+receipt as a no-write proposal unless every native gate is approved.
 
-Fail and retrieve again (or explicitly downgrade/remove) on: `CLAIM_WITHOUT_SOURCE_ID`, `SNIPPET_CITED_AS_SOURCE`, `DECISION_CRITICAL_SOURCE_WEAK`, `SOURCE_STALE_FOR_BRIEF`, `CONTRADICTION_NOT_DISCLOSED`, or `SCOUT_BOUNDARY_BREACH`. Deep/Ocean targets are zero unsupported material claims, zero snippet citations, and direct support or explicit downgrade for every decision-critical claim.
+## Hard gates and output
 
-## Controlled canonical Brain promotion gate
-
-Record `WRITE_BACK_GATE` before any `put_page`, `add_timeline_entry`, `add_link`, or equivalent:
-
-- Brain/source and context packet resolved;
-- durable findings have claim IDs and approved source IDs;
-- contradictions disclosed/dispositioned and citation/provenance audit passed;
-- finding is novel or verified correction;
-- brain-taxonomist/schema path check passed;
-- operator approved the specific scope;
-- dry-run/rendered diff reviewed;
-- after an approved write, read back and run `gbrain sync --no-pull --no-embed`.
-
-Without every applicable checkbox, keep proposed updates in the research artifact and do not write Brain.
-
-## Output contract
+Fail or downgrade on `CLAIM_WITHOUT_SOURCE_ID`, `SNIPPET_CITED_AS_SOURCE`,
+`CONTRADICTION_NOT_DISCLOSED`, `SOURCE_STALE_FOR_BRIEF`, `SCOUT_BOUNDARY_BREACH`,
+or `BELIEF_BEFORE_EVIDENCE`. Deep/Ocean runs require zero unsupported material
+claims and direct support or explicit downgrade for every decision-critical claim.
 
 ```text
 Verdict: <decision-first summary>
 Confidence: <evidence confidence>
 Recommendation strength: <strong|directional|speculative|do-not-act-yet>
-Why: <2-4 bullets>
-Evidence boundary: <what was/was not checked>
-Artifacts: <memo, ledgers, receipt paths>
-Next move: <one clear action or blocker>
+Evidence boundary: <checked and not checked>
+Artifacts: <workspace paths>
+Promotion: <no-write proposal|operator-approved native write|nothing>
+Next move: <one action or blocker>
 ```
 
-### Verification
+## Verification
 
-Confirm the brief, Brain packet, bounded scouts, source/claim/citation ledgers, critic, memo, eval disposition, receipt, and promotion decision. Detailed checklists and anti-anchoring safeguards remain in the linked reference.
+Confirm the brief, DAG, shared state, Brain packet, both lanes, directed gap
+dispatch, independent verification, contradiction search, ledgers, citation audit,
+memo, eval disposition, no-write proposal, and receipt readback. Run Skillify
+structural/check-resolvable/skillpack checks plus targeted unit, integration,
+LLM/routing evals and the read-only E2E fixture. Cross-modal review is preferred;
+if unavailable, record the exact blocker and use one independent review without
+claiming provider diversity.

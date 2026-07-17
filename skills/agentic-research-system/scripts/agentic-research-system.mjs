@@ -12,6 +12,8 @@ const REQUIRED_TEMPLATES = [
   'eval-case.json',
   'research-memo.md',
   'run-receipt.md',
+  'research-dag.json',
+  'evidence-state.json',
 ];
 
 export function validateSkillTree(skillDir = new URL('..', import.meta.url).pathname) {

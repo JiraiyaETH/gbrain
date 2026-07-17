@@ -16,11 +16,19 @@ describe('agentic-research-system skill', () => {
     expect(content.startsWith('---\n')).toBe(true);
     expect(content).toContain('name: agentic-research-system');
     expect(content).toContain('## Contract');
-    expect(content).toContain('## Phase 4 — Subagent Structure');
-    expect(content).toContain('## Phase 9 — Cross-Model Eval Gate');
+    expect(content).toContain('Subagent Structure is bounded proposal work');
+    expect(content).toContain('The Cross-Model Eval Gate uses Skillify');
+    expect(content).not.toContain('## Phase 4 — Subagent Structure');
+    expect(content).not.toContain('## Phase 9 — Cross-Model Eval Gate');
+    expect(content).toContain('6. **Evidence-before-belief.**');
     expect(content).toContain('Pre-Synthesis Validator');
     expect(content).toContain('No snippet citations');
     expect(content).toContain('Citation Auditor');
+    expect(content).toContain('shared evidence/claim state');
+    expect(content).toContain('editable DAG');
+    expect(content).toContain('gap-frontier');
+    expect(content).toContain('Brain-aware and Brain-blind');
+    expect(content).toContain('evidence-before-belief');
   });
 
   test('all required templates exist and encode source/claim/eval receipts', () => {
@@ -34,6 +42,8 @@ describe('agentic-research-system skill', () => {
       'templates/eval-case.json',
       'templates/research-memo.md',
       'templates/run-receipt.md',
+      'templates/research-dag.json',
+      'templates/evidence-state.json',
     ];
     for (const rel of required) {
       expect(existsSync(join(skillDir, rel))).toBe(true);

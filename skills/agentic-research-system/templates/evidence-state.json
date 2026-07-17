@@ -1,0 +1,14 @@
+{
+  "task_id": "<stable-task-id>",
+  "workspace": "<durable-task-workspace>",
+  "brain_context_status": "resolved|empty|blocked",
+  "sources": [],
+  "claims": [],
+  "edges": [],
+  "gaps": [],
+  "verifications": {"temporal": [], "factual": []},
+  "lane_receipts": {"aware": null, "blind": null},
+  "contradictions": [],
+  "promotion_proposals": [],
+  "ownership": {"lead": "<owner>", "workers_may_propose": true, "canonical_writer": "native GBrain gate only"}
+}
