@@ -96,6 +96,18 @@ describe('parseRelationalQuery — archetypes', () => {
     expect(parseRelationalQuery('who provides services to Tailored')!.linkTypes).toEqual(['service_provider_for']);
     expect(parseRelationalQuery('who signed contracts/tap/arndxt-873cd435')!.linkTypes).toEqual(['signed']);
   });
+
+  test('signed aggregate phrasings isolate the entity seed', () => {
+    const tap = parseRelationalQuery('who signed the TAP contract');
+    expect(tap?.seeds).toEqual(['TAP']);
+    expect(tap?.linkTypes).toEqual(['signed', 'mentions']);
+    expect(tap?.direction).toBe('both');
+
+    const silo = parseRelationalQuery('who are all the KOLs signed to Silo');
+    expect(silo?.seeds).toEqual(['Silo']);
+    expect(silo?.linkTypes).toEqual(['creator_for', 'signed']);
+    expect(silo?.direction).toBe('both');
+  });
 });
 
 describe('parseRelationalQuery — precision-first / no-match', () => {

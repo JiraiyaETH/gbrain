@@ -192,6 +192,24 @@ function buildPatterns(vocab?: RelationVocab): CompiledPattern[] {
   });
 
   // who_rel — "who <verb> <seed>".
+  // Signed aggregate phrasings need two small precision-preserving repairs:
+  // (1) "the TAP contract" names TAP, not an entity called "TAP contract";
+  // (2) "who are the KOLs signed to Silo" asks for the creator/signature
+  // neighborhood around Silo.  Both remain seed-gated by the resolver.
+  patterns.push({
+    re: new RegExp(
+      `\\bwho\\s+(?:signed|was a signer on|were signers on)\\s+(?:the\\s+)?${SEED}\\s+(?:contracts?|agreements?)\\s*\\??$`,
+      'i',
+    ),
+    kind: 'who_rel', linkTypes: ['signed', 'mentions'], direction: 'both', seedGroups: 1,
+  });
+  patterns.push({
+    re: new RegExp(
+      `\\bwho\\s+(?:are|were)\\s+(?:all\\s+)?(?:the\\s+)?(?:creators?|kols?|people|associates?)\\s+(?:signed|contracted)\\s+(?:to|with|for)\\s+${SEED}\\s*\\??$`,
+      'i',
+    ),
+    kind: 'who_rel', linkTypes: ['creator_for', 'signed'], direction: 'both', seedGroups: 1,
+  });
   for (const v of WHO_REL_VERBS) {
     patterns.push({
       re: new RegExp(`\\bwho\\s+(?:${v.verb})\\s+${SEED}\\s*\\??$`, 'i'),

@@ -176,14 +176,79 @@ describe('applyReranker — fail-open on every RerankError reason', () => {
 
   test('fail-open on malformed reranker response (empty results array)', async () => {
     const results = [makeResult('a', 1.0, 'a')];
+    let calls = 0;
     const opts: RerankerOpts = {
       enabled: true,
       topNIn: 1,
       topNOut: null,
-      rerankerFn: async () => [],
+      rerankerFn: async () => { calls++; return []; },
     };
     const out = await applyReranker('q', results, opts);
     expect(out).toEqual(results);
+    expect(calls).toBe(2);
+  });
+
+  test('retries malformed partial coverage once and accepts a complete response', async () => {
+    const results = [makeResult('a', 1.0, 'a'), makeResult('b', 0.5, 'b')];
+    let calls = 0;
+    const out = await applyReranker('q', results, {
+      enabled: true,
+      topNIn: 2,
+      topNOut: null,
+      rerankerFn: async () => {
+        calls++;
+        return calls === 1
+          ? [{ index: 1, relevanceScore: 0.9 }]
+          : [{ index: 1, relevanceScore: 0.9 }, { index: 0, relevanceScore: 0.2 }];
+      },
+    });
+    expect(calls).toBe(2);
+    expect(out.map(row => row.slug)).toEqual(['b', 'a']);
+    expect(out.every(row => Number.isFinite(row.rerank_score))).toBe(true);
+  });
+
+  test('rejects duplicate indices and non-finite scores after bounded retry', async () => {
+    const results = [makeResult('a', 1.0, 'a'), makeResult('b', 0.5, 'b')];
+    let calls = 0;
+    const out = await applyReranker('q', results, {
+      enabled: true,
+      topNIn: 2,
+      topNOut: null,
+      rerankerFn: async () => {
+        calls++;
+        return calls === 1
+          ? [{ index: 0, relevanceScore: 0.9 }, { index: 0, relevanceScore: 0.2 }]
+          : [{ index: 0, relevanceScore: Number.NaN }, { index: 1, relevanceScore: 0.2 }];
+      },
+    });
+    expect(calls).toBe(2);
+    expect(out).toEqual(results);
+  });
+
+  test('retries a transient timeout but not an authentication failure', async () => {
+    const results = [makeResult('a', 1.0, 'a')];
+    let transientCalls = 0;
+    const recovered = await applyReranker('q', results, {
+      enabled: true, topNIn: 1, topNOut: null,
+      rerankerFn: async () => {
+        transientCalls++;
+        if (transientCalls === 1) throw new RerankError('slow', 'timeout');
+        return [{ index: 0, relevanceScore: 0.8 }];
+      },
+    });
+    expect(transientCalls).toBe(2);
+    expect(recovered[0]?.rerank_score).toBe(0.8);
+
+    let authCalls = 0;
+    const failed = await applyReranker('q', [makeResult('b', 1.0, 'b')], {
+      enabled: true, topNIn: 1, topNOut: null,
+      rerankerFn: async () => {
+        authCalls++;
+        throw new RerankError('bad key', 'auth');
+      },
+    });
+    expect(authCalls).toBe(1);
+    expect(failed[0]?.slug).toBe('b');
   });
 });
 

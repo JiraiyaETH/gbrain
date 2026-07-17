@@ -89,13 +89,65 @@ async function resolveSeedScoped(
   const seen = new Set<string>();
   for (const sid of sources) {
     const r = await resolveEntitySlugWithSource(engine, sid, phrase);
-    if (!r || r.source === 'fallback_slugify') continue;
-    const key = `${sid}:${r.slug}`;
+    let slug = r && r.source !== 'fallback_slugify' ? r.slug : null;
+    // Short project/product names such as "TAP" are deliberately excluded
+    // from the general bare-person prefix resolver.  For a relational seed,
+    // an unambiguous display-title head ("TAP — Tailored Associate Program")
+    // is still strong evidence.  This fallback is read-only, source-scoped,
+    // and refuses ambiguity; it never accepts slugify's invented page.
+    if (!slug) slug = await resolveUnambiguousDisplayHead(engine, sid, phrase);
+    if (!slug) continue;
+    const key = `${sid}:${slug}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ source_id: sid, slug: r.slug });
+    out.push({ source_id: sid, slug });
   }
   return out;
+}
+
+async function resolveUnambiguousDisplayHead(
+  engine: BrainEngine,
+  sourceId: string,
+  phrase: string,
+): Promise<string | null> {
+  const clean = phrase.trim();
+  if (!clean || clean.length > 80) return null;
+  // LIKE parameters are still patterns: parameterization prevents SQL
+  // injection, not `%`/`_` wildcard expansion.  Escape all pattern
+  // metacharacters so a user seed can match only its literal title head.
+  const literalLike = clean.replace(/[\\%_]/g, '\\$&');
+  const rows = await engine.executeRaw<{ slug: string }>(
+    `WITH candidates AS (
+       SELECT slug,
+              CASE
+                WHEN lower(title) = lower($2) THEN 0
+                WHEN lower(title) LIKE (lower($3) || ' —%') ESCAPE '\\'
+                  OR lower(title) LIKE (lower($3) || ' –%') ESCAPE '\\' THEN 1
+                WHEN lower(title) LIKE (lower($3) || ' - %') ESCAPE '\\' THEN 2
+                WHEN lower(title) LIKE (lower($3) || ':%') ESCAPE '\\' THEN 3
+                ELSE 4
+              END AS match_rank
+         FROM pages
+        WHERE source_id = $1
+          AND deleted_at IS NULL
+          AND (
+            lower(title) = lower($2)
+            OR lower(title) LIKE (lower($3) || ' —%') ESCAPE '\\'
+            OR lower(title) LIKE (lower($3) || ' –%') ESCAPE '\\'
+            OR lower(title) LIKE (lower($3) || ' - %') ESCAPE '\\'
+            OR lower(title) LIKE (lower($3) || ':%') ESCAPE '\\'
+          )
+     ), best AS (
+       SELECT MIN(match_rank) AS match_rank FROM candidates
+     )
+     SELECT c.slug
+       FROM candidates c
+       JOIN best b ON b.match_rank = c.match_rank
+      ORDER BY c.slug ASC
+      LIMIT 2`,
+    [sourceId, clean, literalLike],
+  );
+  return rows.length === 1 ? rows[0].slug : null;
 }
 
 /** Batch-hydrate fanout rows into SearchResult rows in fanout (ranked) order. */

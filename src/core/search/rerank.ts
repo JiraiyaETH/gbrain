@@ -44,6 +44,28 @@ function hashQuery(query: string): string {
   return createHash('sha256').update(query, 'utf8').digest('hex').slice(0, 8);
 }
 
+const MAX_RERANK_ATTEMPTS = 2;
+
+function validateCompleteRerank(
+  value: unknown,
+  expected: number,
+): boolean {
+  if (!Array.isArray(value) || value.length !== expected) return false;
+  const seen = new Set<number>();
+  for (const row of value) {
+    if (
+      !row || typeof row !== 'object'
+      || !Number.isInteger((row as RerankResult).index)
+      || (row as RerankResult).index < 0
+      || (row as RerankResult).index >= expected
+      || !Number.isFinite((row as RerankResult).relevanceScore)
+      || seen.has((row as RerankResult).index)
+    ) return false;
+    seen.add((row as RerankResult).index);
+  }
+  return seen.size === expected;
+}
+
 /**
  * Reorder the top `topNIn` results by reranker relevance score. The
  * un-reranked tail (any rows past topNIn) preserves its original RRF
@@ -73,35 +95,44 @@ export async function applyReranker(
   // confuse the reranker, but we still send them — the upstream model decides.
   const documents = head.map(r => r.chunk_text || r.title || '');
 
-  let reranked: RerankResult[];
-  try {
-    const rerankerFn = opts.rerankerFn ?? gatewayRerank;
-    reranked = await rerankerFn({
-      query,
-      documents,
-      timeoutMs: opts.timeoutMs,
-      ...(opts.model ? { model: opts.model } : {}),
-    });
-  } catch (err) {
-    const reason: RerankFailureReason =
-      err instanceof RerankError ? err.reason : 'unknown';
-    const errorSummary = err instanceof Error ? err.message : String(err);
+  const rerankerFn = opts.rerankerFn ?? gatewayRerank;
+  let reranked: RerankResult[] | null = null;
+  let failureReason: RerankFailureReason = 'unknown';
+  let failureSummary = 'reranker returned incomplete or malformed score coverage';
+  for (let attempt = 1; attempt <= MAX_RERANK_ATTEMPTS; attempt++) {
+    try {
+      const candidate = await rerankerFn({
+        query,
+        documents,
+        timeoutMs: opts.timeoutMs,
+        ...(opts.model ? { model: opts.model } : {}),
+      });
+      if (validateCompleteRerank(candidate, head.length)) {
+        reranked = candidate;
+        break;
+      }
+      failureReason = 'unknown';
+      failureSummary = `reranker score coverage invalid (${Array.isArray(candidate) ? candidate.length : 'non-array'}/${head.length})`;
+    } catch (err) {
+      failureReason = err instanceof RerankError ? err.reason : 'unknown';
+      failureSummary = err instanceof Error ? err.message : String(err);
+      if (failureReason === 'auth' || failureReason === 'payload_too_large') break;
+    }
+  }
+  if (!reranked) {
     try {
       logRerankFailure({
         model: opts.model ?? 'unknown',
-        reason,
+        reason: failureReason,
         query_hash: hashQuery(query),
         doc_count: documents.length,
-        error_summary: errorSummary,
+        error_summary: failureSummary,
       });
     } catch {
       // Audit logging must never break search.
     }
     return results;
   }
-
-  // Defensive: if the reranker returned a malformed shape, pass through.
-  if (!Array.isArray(reranked) || reranked.length === 0) return results;
 
   // Build the reordered head. We keep ONLY indices the reranker returned
   // (so a top_n response with fewer items than head.length naturally
@@ -124,9 +155,8 @@ export async function applyReranker(
       reorderedHead.push(item);
     }
   }
-  // If the reranker dropped some head items (rare; usually only happens
-  // with explicit top_n), preserve their original positions at the end
-  // of the head section so we don't silently lose recall.
+  // Complete score coverage is validated above; retain this defensive loop
+  // so a future refactor cannot silently lose recall.
   for (let i = 0; i < head.length; i++) {
     if (!seen.has(i)) reorderedHead.push(head[i]!);
   }
