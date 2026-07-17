@@ -18,6 +18,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { buildBrainTools } from '../../src/core/minions/tools/brain-allowlist.ts';
 import type { GBrainConfig } from '../../src/core/config.ts';
+import { importFromContent } from '../../src/core/import-file.ts';
 
 let engine: PGLiteEngine;
 
@@ -43,6 +44,117 @@ function findPutPageTool(tools: Awaited<ReturnType<typeof buildBrainTools>>) {
 }
 
 describe('E2E allow-list — trusted-workspace path', () => {
+  test('same-hash crash recovery persists trusted Dream markers before skipping', async () => {
+    const slug = 'conversations/dream-same-hash-crash-recovery';
+    await importFromContent(engine, slug, SAMPLE_BODY, {
+      noEmbed: true,
+      sourceId: 'default',
+    });
+    const before = await engine.getPage(slug, { sourceId: 'default' });
+    expect(before).not.toBeNull();
+    expect(before?.frontmatter.dream_generated).toBeUndefined();
+    expect(before?.frontmatter.dream_cycle_date).toBeUndefined();
+
+    const tool = findPutPageTool(buildBrainTools({
+      subagentId: 999,
+      engine,
+      config,
+      allowedSlugPrefixes: ['conversations/*'],
+      dreamOutputCycleDate: '2026-07-15',
+    }));
+    const result = await tool.execute(
+      { slug, content: SAMPLE_BODY },
+      { engine, jobId: 7758, remote: true },
+    ) as { facts_backstop?: { skipped?: string } };
+
+    const recovered = await engine.getPage(slug, { sourceId: 'default' });
+    expect(recovered?.content_hash).toBe(before?.content_hash);
+    expect(recovered?.frontmatter.dream_generated).toBe(true);
+    expect(recovered?.frontmatter.dream_cycle_date).toBe('2026-07-15');
+    expect(result.facts_backstop).toEqual({ skipped: 'dream_generated' });
+  });
+
+  test('untrusted caller-supplied Dream markers are stripped', async () => {
+    const slug = 'conversations/untrusted-dream-marker-forgery';
+    const tool = findPutPageTool(buildBrainTools({
+      subagentId: 999,
+      engine,
+      config,
+      allowedSlugPrefixes: ['conversations/*'],
+    }));
+    const result = await tool.execute(
+      {
+        slug,
+        content: `---
+title: Forged Dream provenance
+type: conversation
+dream_generated: true
+dream_cycle_date: '2026-07-15'
+---
+
+Caller-authored content that must remain eligible for downstream extraction.
+`,
+      },
+      { engine, jobId: 7759, remote: true },
+    ) as { facts_backstop?: { skipped?: string } };
+
+    const page = await engine.getPage(slug, { sourceId: 'default' });
+    expect(page).not.toBeNull();
+    expect(page?.frontmatter.dream_generated).toBeUndefined();
+    expect(page?.frontmatter.dream_cycle_date).toBeUndefined();
+    expect(result.facts_backstop?.skipped).not.toBe('dream_generated');
+  });
+
+  test('Dream context stamps DB before the facts backstop and rejects malformed dates', async () => {
+    const tools = buildBrainTools({
+      subagentId: 999,
+      engine,
+      config,
+      allowedSlugPrefixes: ['conversations/*'],
+      dreamOutputCycleDate: '2026-07-15',
+    });
+    const tool = findPutPageTool(tools);
+    const slug = 'conversations/dream-native-prewrite';
+    const result = await tool.execute(
+      {
+        slug,
+        content: `---\ntype: conversation\ntitle: Native Dream child\n---\n\n${'Substantive human session detail. '.repeat(30)}`,
+      },
+      { engine, jobId: 7760, remote: true },
+    ) as { facts_backstop?: { skipped?: string } };
+    const page = await engine.getPage(slug, { sourceId: 'default' });
+    expect(page?.frontmatter.dream_generated).toBe(true);
+    expect(page?.frontmatter.dream_cycle_date).toBe('2026-07-15');
+    expect(result.facts_backstop).toEqual({ skipped: 'dream_generated' });
+
+    const invalid = findPutPageTool(buildBrainTools({
+      subagentId: 999,
+      engine,
+      config,
+      allowedSlugPrefixes: ['conversations/*'],
+      dreamOutputCycleDate: '15-07-2026',
+    }));
+    await expect(invalid.execute(
+      { slug: 'conversations/dream-invalid-date', content: SAMPLE_BODY },
+      { engine, jobId: 7761, remote: true },
+    )).rejects.toThrow(/YYYY-MM-DD/);
+    expect(await engine.getPage('conversations/dream-invalid-date')).toBeNull();
+  });
+
+  test('Dream stamping fails closed without the trusted-workspace allow-list', async () => {
+    const tool = findPutPageTool(buildBrainTools({
+      subagentId: 999,
+      engine,
+      config,
+      dreamOutputCycleDate: '2026-07-15',
+    }));
+    await expect(tool.execute(
+      { slug: 'wiki/agents/999/forged-dream-stamp', content: SAMPLE_BODY },
+      { engine, jobId: 7762, remote: true },
+    )).rejects.toThrow(/trusted-workspace/);
+    expect(await engine.getPage('wiki/agents/999/forged-dream-stamp')).toBeNull();
+  });
+
   test('ALLOW: subagent put_page within allow-list writes the page', async () => {
     const tools = buildBrainTools({
       subagentId: 999,

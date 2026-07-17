@@ -467,6 +467,16 @@ export interface SubagentHandlerData {
    */
   source_id?: string;
   /**
+   * Trusted Dream-orchestrator output stamp. When present, every put_page
+   * issued by this protected child is persisted with dream_generated=true
+   * and this exact YYYY-MM-DD cycle date before any extraction backstop runs.
+   *
+   * The put_page operation accepts this only together with viaSubagent=true
+   * and a non-empty trusted-workspace allow-list. Ordinary/MCP subagents
+   * cannot use it to forge gate-owned provenance.
+   */
+  dream_output_cycle_date?: string;
+  /**
    * v0.41 Approach C: opt out of the auto-generated tool-usage preamble
    * that `buildSystemPrompt()` splices into `system`. Default behavior
    * (omitted or false) prepends a deterministic preamble listing each

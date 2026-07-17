@@ -192,6 +192,41 @@ export interface ParsedPage {
   tags: string[];
 }
 
+const HASH_EPHEMERAL_FRONTMATTER_KEYS = [
+  'captured_at',
+  'enriched_at',
+  'enriched_by',
+  'ingested_at',
+  // Trusted Dream provenance is derived from the orchestrator context, not
+  // semantic page content. Excluding it lets legacy reverse-write repair
+  // stamp DB/file identity without invalidating the existing content hash.
+  'dream_generated',
+  'dream_cycle_date',
+  QUARANTINE_KEY,
+  CONTENT_FLAG_KEY,
+  EMBED_SKIP_KEY,
+] as const;
+
+/**
+ * Canonical markdown-import hash. Exported for trusted metadata-only repair
+ * paths that must keep pages.content_hash consistent without re-chunking or
+ * invoking an embedding provider.
+ */
+export function markdownContentHash(page: ParsedPage): string {
+  const stableFrontmatter: Record<string, unknown> = { ...page.frontmatter };
+  for (const key of HASH_EPHEMERAL_FRONTMATTER_KEYS) delete stableFrontmatter[key];
+  return createHash('sha256')
+    .update(JSON.stringify({
+      title: page.title,
+      type: page.type,
+      compiled_truth: page.compiled_truth,
+      timeline: page.timeline,
+      frontmatter: stableFrontmatter,
+      tags: [...page.tags].sort(),
+    }))
+    .digest('hex');
+}
+
 export interface ImportResult {
   slug: string;
   status: 'imported' | 'skipped' | 'error';
@@ -293,6 +328,18 @@ export async function importFromContent(
      * leave it unset → markers preserved (the gate + CLI own them).
      */
     remote?: boolean;
+    /**
+     * Trusted server-derived Dream cycle date. This is not a caller-facing
+     * frontmatter escape hatch: the put_page operation sets it only after the
+     * protected trusted-workspace context has passed its allow-list and date
+     * checks. importFromContent strips caller-supplied Dream markers from every
+     * remote payload, then derives the two anti-loop fields from this value.
+     *
+     * Keeping the trusted value out-of-band also lets the hash-match path
+     * transactionally repair an older identical row whose Dream markers were
+     * lost before reverse-write completed.
+     */
+    trustedDreamCycleDate?: string;
   } = {},
 ): Promise<ImportResult> {
   // v0.18.0+ multi-source: when caller is syncing under a non-default source,
@@ -301,6 +348,7 @@ export async function importFromContent(
   // silently fabricated a duplicate at (default, slug) — causing later
   // bare-slug subqueries (getTags, deleteChunks, etc.) to crash with 21000.
   const sourceId = opts.sourceId;
+  const txOpts = sourceId ? { sourceId } : undefined;
   // Reject oversized payloads before any parsing, chunking, or embedding happens.
   // Uses Buffer.byteLength to count UTF-8 bytes the same way disk size would,
   // so the network path behaves identically to the file path.
@@ -321,13 +369,29 @@ export async function importFromContent(
   // tags/slug, so a remote MCP put_page (ctx.remote !== false, threaded as
   // opts.remote) could otherwise plant `quarantine` (hide a page from search +
   // suppress chunks) or `content_flag.detail` (inject text into the agent's
-  // trusted "this looks odd" channel) on clean content. Only the content-
-  // sanity gate (below) and trusted local CLIs may set these. Fail-closed:
-  // strip whenever opts.remote === true.
+  // trusted "this looks odd" channel) on clean content. Dream provenance is
+  // also server-owned: accepting caller-authored `dream_generated` would let a
+  // remote writer suppress facts/chronicle extraction and create self-mining
+  // blind spots. Fail closed by stripping all five fields from remote input.
   if (opts.remote === true && parsed.frontmatter) {
     delete parsed.frontmatter[QUARANTINE_KEY];
     delete parsed.frontmatter[CONTENT_FLAG_KEY];
     delete parsed.frontmatter[EMBED_SKIP_KEY];
+    delete parsed.frontmatter.dream_generated;
+    delete parsed.frontmatter.dream_cycle_date;
+  }
+
+  // Re-add Dream provenance only from the trusted operation context. The
+  // operation layer proves the protected trusted-workspace allow-list before
+  // threading this date; validate again here so library misuse fails closed.
+  if (opts.trustedDreamCycleDate !== undefined) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(opts.trustedDreamCycleDate)) {
+      throw new Error(
+        `trusted Dream cycle date must be YYYY-MM-DD; got ${JSON.stringify(opts.trustedDreamCycleDate)}`,
+      );
+    }
+    parsed.frontmatter.dream_generated = true;
+    parsed.frontmatter.dream_cycle_date = opts.trustedDreamCycleDate;
   }
 
   // Vendor-neutral guardrail seam (observe-only, fail-open). Runs AFTER
@@ -537,30 +601,15 @@ export async function importFromContent(
   // is real, unbounded embedding spend). Same bug class as the captured_at /
   // ingested_at fix above; the gate re-derives the markers deterministically
   // on the next import, so dropping them from the hash is safe.
-  const HASH_EPHEMERAL_FRONTMATTER_KEYS = [
-    'captured_at',
-    'enriched_at',
-    'enriched_by',
-    'ingested_at',
-    QUARANTINE_KEY,
-    CONTENT_FLAG_KEY,
-    EMBED_SKIP_KEY,
-  ];
-  const stableFrontmatter: Record<string, unknown> = { ...parsed.frontmatter };
-  for (const k of HASH_EPHEMERAL_FRONTMATTER_KEYS) {
-    delete stableFrontmatter[k];
-  }
   // Hash includes all meaningful fields for idempotency.
-  const hash = createHash('sha256')
-    .update(JSON.stringify({
-      title: parsed.title,
-      type: parsed.type,
-      compiled_truth: parsed.compiled_truth,
-      timeline: parsed.timeline,
-      frontmatter: stableFrontmatter,
-      tags: parsed.tags.sort(),
-    }))
-    .digest('hex');
+  const hash = markdownContentHash({
+    type: parsed.type,
+    title: parsed.title,
+    compiled_truth: parsed.compiled_truth,
+    timeline: parsed.timeline,
+    frontmatter: parsed.frontmatter,
+    tags: parsed.tags,
+  });
 
   const parsedPage: ParsedPage = {
     type: parsed.type,
@@ -571,8 +620,47 @@ export async function importFromContent(
     tags: parsed.tags,
   };
 
-  const existing = await engine.getPage(slug, sourceId ? { sourceId } : undefined);
+  const existing = await engine.getPage(slug, txOpts);
   if (existing?.content_hash === hash && !opts.forceRechunk) {
+    // Dream markers are intentionally hash-ephemeral, so an older unmarked DB
+    // row can have the same semantic hash as a newly completed trusted Dream
+    // child. Do not return until the server-derived provenance is durable.
+    // This transaction is the crash boundary: before commit the repair rolls
+    // back; after commit downstream extraction cannot observe an unmarked row.
+    if (opts.trustedDreamCycleDate !== undefined) {
+      const dreamCycleDate = opts.trustedDreamCycleDate;
+      await engine.transaction(async tx => {
+        const before = await tx.getPage(slug, txOpts);
+        if (!before || before.content_hash !== hash) {
+          throw new Error(
+            `[import] trusted Dream marker repair lost same-hash precondition for ${slug}@${sourceId ?? 'default'}; retry import`,
+          );
+        }
+        if (before.frontmatter?.dream_generated === true &&
+            before.frontmatter?.dream_cycle_date === dreamCycleDate) {
+          return;
+        }
+        const updated = await tx.mergePageFrontmatter(slug, sourceId ?? 'default', {
+          dream_generated: true,
+          dream_cycle_date: dreamCycleDate,
+        });
+        if (!updated) {
+          throw new Error(
+            `[import] trusted Dream marker repair could not update ${slug}@${sourceId ?? 'default'}`,
+          );
+        }
+        const after = await tx.getPage(slug, txOpts);
+        if (!after || after.content_hash !== hash ||
+            after.frontmatter?.dream_generated !== true ||
+            after.frontmatter?.dream_cycle_date !== dreamCycleDate ||
+            after.type !== before.type || after.title !== before.title ||
+            after.compiled_truth !== before.compiled_truth || after.timeline !== before.timeline) {
+          throw new Error(
+            `[import] trusted Dream marker repair verification failed for ${slug}@${sourceId ?? 'default'}`,
+          );
+        }
+      });
+    }
     return { slug, status: 'skipped', chunks: 0, parsedPage };
   }
 
@@ -741,7 +829,6 @@ export async function importFromContent(
   // caller's sourceId so writes target (sourceId, slug) rather than the
   // schema DEFAULT — required for multi-source brains; harmless ('default')
   // for single-source callers.
-  const txOpts = sourceId ? { sourceId } : undefined;
   await engine.transaction(async (tx) => {
     if (existing) await tx.createVersion(slug, txOpts);
 

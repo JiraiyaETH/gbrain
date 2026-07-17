@@ -84,6 +84,18 @@ const DEFAULT_DRAIN_WINDOW_SECONDS = 300;
 const EXIT_DRAIN_INCOMPLETE = 3;
 
 /**
+ * Scheduled wrappers opt into fail-closed partial handling without changing
+ * the long-standing interactive/manual CLI contract.
+ */
+export function shouldDreamExitNonZero(
+  status: CycleReport['status'],
+  strictValue = process.env.GBRAIN_DREAM_STRICT,
+): boolean {
+  const strict = strictValue === '1' || strictValue?.toLowerCase() === 'true';
+  return status === 'failed' || (strict && status === 'partial');
+}
+
+/**
  * Collect every occurrence of `--<flag> <value>` in argv. Used to
  * detect repeated flags with different values (e.g.
  * `--source X --source Y`) and to surface a clean usage error
@@ -602,9 +614,10 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     printHuman(report);
   }
 
-  // Exit non-zero when the cycle failed overall (helps cron spot real problems).
-  // 'partial' is not a failure — it means some phase warned but the cycle ran.
-  if (report.status === 'failed') {
+  // Interactive/manual runs preserve the historical partial=0 contract.
+  // Scheduled wrappers set GBRAIN_DREAM_STRICT=1 so a failed synthesize child
+  // (which makes the overall cycle partial when other phases ran) propagates.
+  if (shouldDreamExitNonZero(report.status)) {
     process.exit(1);
   }
 

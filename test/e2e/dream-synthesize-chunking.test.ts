@@ -21,7 +21,10 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
-import { runPhaseSynthesize } from '../../src/core/cycle/synthesize.ts';
+import {
+  runPhaseSynthesize,
+  splitTranscriptByBudget,
+} from '../../src/core/cycle/synthesize.ts';
 
 interface TestRig {
   engine: PGLiteEngine;
@@ -182,8 +185,8 @@ describe('E2E synthesize chunking — D8 single-chunk deduplication', () => {
       writeFileSync(filePath, content);
       const contentHash = await seedVerdict(rig.engine, filePath, content);
 
-      // Pre-seed a completed `subagent` job at the legacy idempotency key.
-      const legacyKey = `dream:synth:default:${filePath}:${contentHash.slice(0, 16)}`;
+      // Pre-seed a completed `subagent` job at the corpus-global legacy key.
+      const legacyKey = `dream:synth:${filePath}:${contentHash.slice(0, 16)}`;
       await rig.engine.executeRaw(
         `INSERT INTO minion_jobs (name, queue, status, idempotency_key, finished_at)
          VALUES ('subagent', 'default', 'completed', $1, now())`,
@@ -202,10 +205,58 @@ describe('E2E synthesize chunking — D8 single-chunk deduplication', () => {
         };
         expect(details.children_submitted).toBe(0);
         expect(details.skips).toHaveLength(1);
-        expect(details.skips[0].reason).toBe('already_synthesized_legacy_single_chunk');
+        expect(details.skips[0].reason).toBe('already_synthesized_legacy_job');
       });
 
       // No NEW subagent job: still exactly one (the seeded completed row).
+      const jobs = await rig.engine.executeRaw<{ cnt: string | number }>(
+        `SELECT count(*) AS cnt FROM minion_jobs WHERE name = 'subagent'`,
+      );
+      expect(Number(jobs[0].cnt)).toBe(1);
+      const summarySlug = `dream-cycle-summaries/${new Date().toISOString().slice(0, 10)}`;
+      expect(await rig.engine.getPage(summarySlug, { sourceId: 'robotics' })).toBeNull();
+    } finally {
+      await rig.cleanup();
+    }
+  }, 30_000);
+
+  test('completed incident-era per-source lineage suppresses replay in another source', async () => {
+    const rig = await setupRig();
+    try {
+      await rig.engine.executeRaw(
+        `INSERT INTO sources (id, name, config)
+         VALUES ('robotics', 'robotics', '{"federated": true}'::jsonb)`,
+      );
+      await rig.engine.setConfig('dream.synthesize.enabled', 'true');
+      await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
+
+      const basename = '2026-04-25-cross-source-replay.txt';
+      const filePath = corpusPath(rig.corpusDir, basename);
+      const content = 'one global transcript corpus\n'.repeat(200);
+      writeFileSync(filePath, content);
+      const contentHash = await seedVerdict(rig.engine, filePath, content);
+
+      // 353fe97b wrote this completed lineage for source "default". A later
+      // robotics Autopilot cycle must recognize it instead of multiplying the
+      // same global transcript into a second source.
+      const incidentKey = `dream:synth:default:${filePath}:${contentHash.slice(0, 16)}`;
+      await rig.engine.executeRaw(
+        `INSERT INTO minion_jobs (name, queue, status, idempotency_key, finished_at)
+         VALUES ('subagent', 'default', 'completed', $1, now())`,
+        [incidentKey],
+      );
+
+      await withoutAnthropicKey(async () => {
+        await withSubagentAutoCancel(rig.engine, async () => {
+          const result = await runPhaseSynthesize(rig.engine, {
+            brainDir: rig.brainDir,
+            dryRun: false,
+            sourceId: 'robotics',
+          });
+          expect((result.details as { children_submitted: number }).children_submitted).toBe(0);
+        });
+      });
+
       const jobs = await rig.engine.executeRaw<{ cnt: string | number }>(
         `SELECT count(*) AS cnt FROM minion_jobs WHERE name = 'subagent'`,
       );
@@ -214,10 +265,60 @@ describe('E2E synthesize chunking — D8 single-chunk deduplication', () => {
       await rig.cleanup();
     }
   }, 30_000);
+
+  test('completed incident-era chunk lineage suppresses every chunk across sources', async () => {
+    const rig = await setupRig();
+    try {
+      await rig.engine.executeRaw(
+        `INSERT INTO sources (id, name, config)
+         VALUES ('robotics', 'robotics', '{"federated": true}'::jsonb)`,
+      );
+      await rig.engine.setConfig('dream.synthesize.enabled', 'true');
+      await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
+      await rig.engine.setConfig('dream.synthesize.max_prompt_tokens', '100000');
+
+      const basename = '2026-04-25-cross-source-chunk-replay.txt';
+      const filePath = corpusPath(rig.corpusDir, basename);
+      const content = 'chunked global transcript line\n'.repeat(50_000);
+      writeFileSync(filePath, content);
+      const contentHash = await seedVerdict(rig.engine, filePath, content);
+      const hash16 = contentHash.slice(0, 16);
+      const chunks = splitTranscriptByBudget(content, contentHash, 350_000);
+      expect(chunks.length).toBeGreaterThan(1);
+
+      for (let i = 0; i < chunks.length; i++) {
+        await rig.engine.executeRaw(
+          `INSERT INTO minion_jobs (name, queue, status, idempotency_key, finished_at)
+           VALUES ('subagent', 'default', 'completed', $1, now())`,
+          [`dream:synth:default:${filePath}:${hash16}:c${i}of${chunks.length}`],
+        );
+      }
+
+      await withoutAnthropicKey(async () => {
+        await withSubagentAutoCancel(rig.engine, async () => {
+          const result = await runPhaseSynthesize(rig.engine, {
+            brainDir: rig.brainDir,
+            dryRun: false,
+            sourceId: 'robotics',
+          });
+          expect((result.details as { children_submitted: number }).children_submitted).toBe(0);
+        });
+      });
+
+      const jobs = await rig.engine.executeRaw<{ cnt: string | number }>(
+        `SELECT count(*) AS cnt FROM minion_jobs WHERE name = 'subagent'`,
+      );
+      expect(Number(jobs[0].cnt)).toBe(chunks.length);
+      const summarySlug = `dream-cycle-summaries/${new Date().toISOString().slice(0, 10)}`;
+      expect(await rig.engine.getPage(summarySlug, { sourceId: 'robotics' })).toBeNull();
+    } finally {
+      await rig.cleanup();
+    }
+  }, 30_000);
 });
 
 describe('E2E synthesize chunking — fan-out shape', () => {
-  test('non-default source threads through child data, contradiction read, key, summary DB write, and summary path', async () => {
+  test('cancelled child fails phase, preserves routing evidence, and writes no summary/cooldown', async () => {
     const rig = await setupRig();
     try {
       await rig.engine.executeRaw(
@@ -246,7 +347,10 @@ describe('E2E synthesize chunking — fan-out shape', () => {
             dryRun: false,
             sourceId: 'robotics',
           });
+          expect(result.status).toBe('fail');
           expect((result.details as { children_submitted: number }).children_submitted).toBe(1);
+          expect((result.details as { child_status_counts: { cancelled: number } }).child_status_counts.cancelled).toBe(1);
+          expect((result.details as { cooldown_written: boolean }).cooldown_written).toBe(false);
         });
       });
 
@@ -257,18 +361,19 @@ describe('E2E synthesize chunking — fan-out shape', () => {
       expect(jobs).toHaveLength(1);
       expect(jobs[0].data.source_id).toBe('robotics');
       expect(jobs[0].idempotency_key)
-        .toBe(`dream:synth:robotics:${filePath}:${contentHash.slice(0, 16)}`);
+        .toBe(`dream:synth:${filePath}:${contentHash.slice(0, 16)}`);
 
       const summarySlug = `dream-cycle-summaries/${new Date().toISOString().slice(0, 10)}`;
-      expect(await rig.engine.getPage(summarySlug, { sourceId: 'robotics' })).not.toBeNull();
+      expect(await rig.engine.getPage(summarySlug, { sourceId: 'robotics' })).toBeNull();
       expect(await rig.engine.getPage(summarySlug, { sourceId: 'default' })).toBeNull();
-      expect(existsSync(join(rig.brainDir, '.sources', 'robotics', `${summarySlug}.md`))).toBe(true);
+      expect(existsSync(join(rig.brainDir, '.sources', 'robotics', `${summarySlug}.md`))).toBe(false);
+      expect(await rig.engine.getConfig('dream.synthesize.last_completion_ts')).toBeNull();
     } finally {
       await rig.cleanup();
     }
   }, 30_000);
 
-  test('single-chunk transcript uses source-scoped idempotency key', async () => {
+  test('single-chunk transcript uses corpus-global idempotency key', async () => {
     const rig = await setupRig();
     try {
       await rig.engine.setConfig('dream.synthesize.enabled', 'true');
@@ -293,7 +398,7 @@ describe('E2E synthesize chunking — fan-out shape', () => {
         });
       });
 
-      const expectedKey = `dream:synth:default:${filePath}:${contentHash.slice(0, 16)}`;
+      const expectedKey = `dream:synth:${filePath}:${contentHash.slice(0, 16)}`;
       const rows = await rig.engine.executeRaw<{ idempotency_key: string }>(
         `SELECT idempotency_key FROM minion_jobs WHERE name = 'subagent' ORDER BY id`,
       );
@@ -376,10 +481,10 @@ describe('E2E synthesize chunking — fan-out shape', () => {
         `SELECT idempotency_key FROM minion_jobs WHERE name = 'subagent' ORDER BY id`,
       );
       expect(rows.length).toBeGreaterThan(1);
-      // Every key matches the chunked shape `dream:synth:<source>:<path>:<hash16>:c<i>of<N>`.
+      // Every key matches the corpus-global chunked shape.
       for (const r of rows) {
         expect(r.idempotency_key).toMatch(
-          new RegExp(`^dream:synth:default:${escapeRe(filePath)}:${hash16}:c\\d+of\\d+$`),
+          new RegExp(`^dream:synth:${escapeRe(filePath)}:${hash16}:c\\d+of\\d+$`),
         );
       }
       // Chunk indices are unique 0..N-1.

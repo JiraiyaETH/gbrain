@@ -68,6 +68,7 @@ describe('shell-subagent handler', () => {
       return handler(makeCtx({
         prompt: 'Synthesize this transcript.',
         allowed_slug_prefixes: ['wiki/personal/reflections/*'],
+        dream_output_cycle_date: '2026-07-15',
       }));
     });
 
@@ -82,6 +83,8 @@ describe('shell-subagent handler', () => {
     const allowed = await engine.getPage('wiki/personal/reflections/2026-04-25-allowed-abc123');
     expect(allowed).not.toBeNull();
     expect(allowed!.title).toBe('Allowed Reflection');
+    expect(allowed!.frontmatter.dream_generated).toBe(true);
+    expect(allowed!.frontmatter.dream_cycle_date).toBe('2026-07-15');
 
     const disallowed = await engine.getPage('wiki/private/not-allowed');
     expect(disallowed).toBeNull();

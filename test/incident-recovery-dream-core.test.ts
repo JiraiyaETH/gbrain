@@ -9,6 +9,20 @@ import {
   discoverTranscripts,
   readSingleTranscript,
 } from '../src/core/cycle/transcript-discovery.ts';
+import {
+  allSynthesizeChildrenCompleted,
+  classifySynthesizeChildOutcome,
+  countSynthesizeChildOutcomes,
+  runPhaseSynthesize,
+  synthesizeCompletionKey,
+  synthesizeIdempotencyKey,
+  synthesizeLogicalCompletionKey,
+  synthesizeLogicalIdempotencyKey,
+} from '../src/core/cycle/synthesize.ts';
+import { MinionQueue } from '../src/core/minions/queue.ts';
+import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { shouldDreamExitNonZero } from '../src/commands/dream.ts';
+
 const tempDirs: string[] = [];
 
 function tempDir(prefix: string): string {
@@ -84,6 +98,8 @@ describe('corrective Dream transcript identity + provenance gate', () => {
     const expectedTranscript = sha256Tuple([expectedSession, 1]);
     expect(first[0].logicalIdentity?.logicalSessionId).toBe(expectedSession);
     expect(first[0].logicalIdentity?.logicalTranscriptId).toBe(expectedTranscript);
+    expect(synthesizeLogicalIdempotencyKey(first[0].logicalIdentity!))
+      .toBe(`dream:synth:logical:v1:${expectedTranscript}`);
   });
 
   test('actual exporter numeric manifest parts agree with i/N frontmatter for Claude and Hermes', () => {
@@ -127,6 +143,11 @@ describe('corrective Dream transcript identity + provenance gate', () => {
 
     const first = discoverTranscripts({ corpusDir: dir, minChars: 100 });
     expect(first).toHaveLength(2);
+    const firstKeys = new Map(first.map(item => [
+      item.filePath,
+      synthesizeLogicalIdempotencyKey(item.logicalIdentity!),
+    ]));
+
     for (const [index, path] of paths.entries()) {
       const metadata: Record<string, unknown> = { ...manifests[index], part: '2/2' };
       delete metadata.output_path;
@@ -134,6 +155,10 @@ describe('corrective Dream transcript identity + provenance gate', () => {
     }
     const changed = discoverTranscripts({ corpusDir: dir, minChars: 100 });
     expect(changed).toHaveLength(2);
+    expect(new Map(changed.map(item => [
+      item.filePath,
+      synthesizeLogicalIdempotencyKey(item.logicalIdentity!),
+    ]))).toEqual(firstKeys);
     expect(new Set(changed.map(item => item.logicalIdentity!.logicalTranscriptId)).size).toBe(2);
 
     manifests[0].part = 1;
@@ -460,4 +485,200 @@ describe('corrective Dream transcript identity + provenance gate', () => {
     })}\n`);
     expect(discoverTranscripts({ corpusDir: dir, minChars: 100 })).toEqual([]);
   });
+});
+
+describe('corrective Dream terminal outcome + scheduled exit policy', () => {
+  test('classifies every required terminal outcome and timeout-shaped failures exactly', () => {
+    const completed = classifySynthesizeChildOutcome({ id: 1, status: 'completed', error_text: null });
+    const failed = classifySynthesizeChildOutcome({ id: 2, status: 'failed', error_text: 'model error' });
+    const dead = classifySynthesizeChildOutcome({ id: 3, status: 'dead', error_text: 'attempts exhausted' });
+    const timedOut = classifySynthesizeChildOutcome({ id: 4, status: 'dead', error_text: 'wall-clock timeout exceeded' });
+    const cancelled = classifySynthesizeChildOutcome({ id: 5, status: 'cancelled', error_text: null });
+    const unknown = classifySynthesizeChildOutcome({ id: 6, status: 'active', error_text: null });
+    const outcomes = [completed, failed, dead, timedOut, cancelled, unknown];
+    expect(outcomes.map(outcome => outcome.status))
+      .toEqual(['completed', 'failed', 'dead', 'timed_out', 'cancelled', 'unknown']);
+    expect(countSynthesizeChildOutcomes(outcomes)).toEqual({
+      completed: 1,
+      failed: 1,
+      dead: 1,
+      timed_out: 1,
+      cancelled: 1,
+      unknown: 1,
+      total: 6,
+    });
+    expect(allSynthesizeChildrenCompleted([completed])).toBe(true);
+    for (const nonSuccess of [failed, dead, timedOut, cancelled, unknown]) {
+      expect(allSynthesizeChildrenCompleted([completed, nonSuccess])).toBe(false);
+    }
+    expect(allSynthesizeChildrenCompleted([])).toBe(false);
+  });
+
+  test('manual partial stays zero while scheduled strict partial and all failed runs are nonzero', () => {
+    expect(shouldDreamExitNonZero('partial', undefined)).toBe(false);
+    expect(shouldDreamExitNonZero('partial', '0')).toBe(false);
+    expect(shouldDreamExitNonZero('partial', '1')).toBe(true);
+    expect(shouldDreamExitNonZero('partial', 'true')).toBe(true);
+    expect(shouldDreamExitNonZero('failed', undefined)).toBe(true);
+    expect(shouldDreamExitNonZero('ok', '1')).toBe(false);
+  });
+});
+
+describe('corrective Dream stable/legacy completion migration', () => {
+  test('changed bytes under stable or legacy-only completion skip before verdict; unchanged legacy also skips', async () => {
+    const engine = new PGLiteEngine();
+    await engine.connect({ engine: 'pglite' } as never);
+    await engine.initSchema();
+    const corpusDir = tempDir('gbrain-dream-completion-corpus-');
+    const brainDir = tempDir('gbrain-dream-completion-brain-');
+    try {
+      await engine.setConfig('dream.synthesize.enabled', 'true');
+      await engine.setConfig('dream.synthesize.session_corpus_dir', corpusDir);
+
+      const stablePath = join(corpusDir, '2026-07-15__claude-code__session-stable-1.md');
+      writeFileSync(stablePath, renderTranscript(exporterMeta(), 'original'));
+      const discovered = discoverTranscripts({ corpusDir, minChars: 100 });
+      const stableIdentity = discovered[0].logicalIdentity!;
+      await engine.executeRaw(
+        `INSERT INTO minion_jobs (name, queue, status, idempotency_key, result, finished_at)
+         VALUES ('subagent', 'default', 'completed', $1, $2::text::jsonb, now())`,
+        [
+          synthesizeLogicalIdempotencyKey(stableIdentity),
+          JSON.stringify({ result: 'completed without page writes', stop_reason: 'end_turn' }),
+        ],
+      );
+      writeFileSync(stablePath, renderTranscript(exporterMeta(), 'changed after completion'));
+
+      const first = await runPhaseSynthesize(engine, {
+        brainDir,
+        dryRun: false,
+        sourceId: 'default',
+      });
+      expect(first.status).toBe('ok');
+      expect(first.details.children_submitted).toBe(0);
+      expect(first.details.children_resumed).toBe(1);
+      expect(await engine.getConfig(synthesizeLogicalCompletionKey(stableIdentity))).not.toBeNull();
+      await engine.unsetConfig(synthesizeCompletionKey());
+
+      const migratedPath = join(corpusDir, '2026-07-14__claude-code__session-legacy-migration.md');
+      const migratedMeta = exporterMeta({
+        session_id: 'session-legacy-migration',
+        export_date: '2026-07-14',
+      });
+      writeFileSync(migratedPath, renderTranscript(migratedMeta, 'legacy bytes before exporter frontmatter drift'));
+      const migratedBefore = discoverTranscripts({ corpusDir, minChars: 100 })
+        .find(item => item.filePath === migratedPath)!;
+      const migratedIdentity = migratedBefore.logicalIdentity!;
+      await engine.executeRaw(
+        `INSERT INTO minion_jobs (name, queue, status, idempotency_key, finished_at)
+         VALUES ('subagent', 'default', 'completed', $1, now())`,
+        [synthesizeIdempotencyKey(migratedPath, migratedBefore.contentHash.slice(0, 16))],
+      );
+      writeFileSync(migratedPath, renderTranscript(migratedMeta, 'changed bytes after legacy-only completion'));
+
+      const migrated = await runPhaseSynthesize(engine, {
+        brainDir,
+        dryRun: false,
+        sourceId: 'default',
+      });
+      expect((migrated.details.skips as Array<{ reason: string }>).map(item => item.reason))
+        .toContain('already_synthesized_legacy_job');
+      expect(await engine.getConfig(synthesizeLogicalCompletionKey(migratedIdentity))).toBeNull();
+
+      const sourcePrefixedPath = join(corpusDir, '2026-07-13__claude-code__session-source-prefixed.md');
+      const sourcePrefixedMeta = exporterMeta({
+        session_id: 'session-source-prefixed',
+        export_date: '2026-07-13',
+      });
+      writeFileSync(sourcePrefixedPath, renderTranscript(sourcePrefixedMeta, 'incident-era source-prefixed bytes'));
+      const sourcePrefixedBefore = discoverTranscripts({ corpusDir, minChars: 100 })
+        .find(item => item.filePath === sourcePrefixedPath)!;
+      const sourcePrefixedIdentity = sourcePrefixedBefore.logicalIdentity!;
+      await engine.executeRaw(
+        `INSERT INTO minion_jobs (name, queue, status, idempotency_key, finished_at)
+         VALUES ('subagent', 'default', 'completed', $1, now())`,
+        [`dream:synth:default:${sourcePrefixedPath}:${sourcePrefixedBefore.contentHash.slice(0, 16)}`],
+      );
+      writeFileSync(sourcePrefixedPath, renderTranscript(sourcePrefixedMeta, 'changed bytes after source-prefixed legacy completion'));
+
+      const sourcePrefixed = await runPhaseSynthesize(engine, {
+        brainDir,
+        dryRun: false,
+        sourceId: 'robotics',
+      });
+      expect((sourcePrefixed.details.skips as Array<{ reason: string }>).map(item => item.reason))
+        .toContain('already_synthesized_legacy_job');
+      expect(await engine.getConfig(synthesizeLogicalCompletionKey(sourcePrefixedIdentity))).toBeNull();
+
+      const legacyPath = join(corpusDir, '2026-07-14-legacy.txt');
+      const legacyContent = 'legacy durable conversation. '.repeat(180);
+      writeFileSync(legacyPath, legacyContent);
+      const legacyHash = createHash('sha256').update(legacyContent, 'utf8').digest('hex');
+      await engine.executeRaw(
+        `INSERT INTO minion_jobs (name, queue, status, idempotency_key, finished_at)
+         VALUES ('subagent', 'default', 'completed', $1, now())`,
+        [synthesizeIdempotencyKey(legacyPath, legacyHash.slice(0, 16))],
+      );
+      const second = await runPhaseSynthesize(engine, {
+        brainDir,
+        dryRun: false,
+        sourceId: 'default',
+      });
+      const reasons = (second.details.skips as Array<{ reason: string }>).map(item => item.reason);
+      expect(reasons).toContain('already_synthesized_marker');
+      expect(reasons).toContain('already_synthesized_legacy_job');
+      const verdictCount = await engine.executeRaw<{ count: string }>('SELECT count(*)::text AS count FROM dream_verdicts');
+      expect(Number(verdictCount[0].count)).toBe(0);
+    } finally {
+      await engine.disconnect();
+    }
+  }, 30_000);
+});
+
+describe('corrective MinionQueue settled-once retries', () => {
+  test('concurrent completed submissions preserve completion while concurrent failed retries rearm once', async () => {
+    const engine = new PGLiteEngine();
+    await engine.connect({ engine: 'pglite' } as never);
+    await engine.initSchema();
+    try {
+      const queue = new MinionQueue(engine);
+      const completed = await queue.add('sync', { generation: 1 }, { idempotency_key: 'settled-once-completed' });
+      const claimed = await queue.claim('settled-token', 30_000, 'default', ['sync']);
+      await queue.completeJob(claimed!.id, 'settled-token', { ok: true });
+
+      const completedHits = await Promise.all(Array.from({ length: 5 }, (_, index) =>
+        queue.add(
+          'sync',
+          { generation: index + 2 },
+          { idempotency_key: 'settled-once-completed' },
+          undefined,
+          { rearmCompleted: false },
+        )));
+      expect(new Set(completedHits.map(job => job.id))).toEqual(new Set([completed.id]));
+      expect(completedHits.every(job => job.status === 'completed')).toBe(true);
+      expect((await queue.getJob(completed.id))?.status).toBe('completed');
+
+      const retry = await queue.add('sync', { generation: 1 }, { idempotency_key: 'settled-once-retry' });
+      await engine.executeRaw(
+        `UPDATE minion_jobs SET status = 'failed', finished_at = now(), error_text = 'fixture failure' WHERE id = $1`,
+        [retry.id],
+      );
+      const retried = await Promise.all(Array.from({ length: 5 }, (_, index) =>
+        queue.add(
+          'sync',
+          { generation: index + 2 },
+          { idempotency_key: 'settled-once-retry' },
+          undefined,
+          { rearmCompleted: false },
+        )));
+      expect(new Set(retried.map(job => job.id))).toEqual(new Set([retry.id]));
+      expect(retried.every(job => job.status === 'waiting')).toBe(true);
+      const rows = await engine.executeRaw<{ count: string }>(
+        `SELECT count(*)::text AS count FROM minion_jobs WHERE idempotency_key = 'settled-once-retry'`,
+      );
+      expect(Number(rows[0].count)).toBe(1);
+    } finally {
+      await engine.disconnect();
+    }
+  }, 30_000);
 });

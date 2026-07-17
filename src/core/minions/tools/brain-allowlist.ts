@@ -209,6 +209,8 @@ export interface BuildBrainToolsOpts {
    * Unset → legacy 'default'.
    */
   sourceId?: string;
+  /** Exact Dream cycle date stamped by put_page for protected children. */
+  dreamOutputCycleDate?: string;
 }
 
 interface OpContextDeps {
@@ -220,6 +222,7 @@ interface OpContextDeps {
   brainId?: string;
   allowedSlugPrefixes?: readonly string[];
   sourceId?: string;
+  dreamOutputCycleDate?: string;
 }
 
 function buildOpContext(deps: OpContextDeps): OperationContext {
@@ -242,6 +245,7 @@ function buildOpContext(deps: OpContextDeps): OperationContext {
     allowedSlugPrefixes: deps.allowedSlugPrefixes
       ? [...deps.allowedSlugPrefixes]
       : undefined,
+    dreamOutputCycleDate: deps.dreamOutputCycleDate,
   };
 }
 
@@ -293,6 +297,7 @@ export function buildBrainTools(opts: BuildBrainToolsOpts): ToolDef[] {
           brainId: opts.brainId,
           allowedSlugPrefixes: opts.allowedSlugPrefixes,
           sourceId: opts.sourceId,
+          dreamOutputCycleDate: opts.dreamOutputCycleDate,
         });
         const params = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
         return op.handler(opCtx, params);
