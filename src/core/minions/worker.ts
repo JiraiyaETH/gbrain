@@ -29,6 +29,14 @@ import {
 } from './lock-renewal-tick.ts';
 import { lockRenewalAudit } from '../audit/lock-renewal-audit.ts';
 import { isRetryableConnError } from '../retry-matcher.ts';
+import {
+  runAutopilotJobWithWriterLease,
+  type AutopilotWriterExecutionOptions,
+} from './autopilot-writer-lease.ts';
+import {
+  AutopilotCorpusWriterLockReleaseError,
+  isAutopilotCorpusWriterLockReleaseFailure,
+} from '../autopilot-corpus-writer-lock.ts';
 
 /**
  * Abort reasons that signal infrastructure failure (PgBouncer outage,
@@ -120,7 +128,13 @@ export function getAccurateRss(
  *  CLI layer (jobs.ts:work) subscribes and decides whether to call process.exit. */
 export type UnhealthyReason =
   | { reason: 'db_dead'; consecutiveFailures: number; message: string }
-  | { reason: 'stalled'; waitingCount: number; idleMinutes: number };
+  | { reason: 'stalled'; waitingCount: number; idleMinutes: number }
+  | {
+      reason: 'corpus_writer_lock_release_failed';
+      jobId: number;
+      jobName: string;
+      message: string;
+    };
 
 /**
  * Read the quiet_hours JSONB column off a MinionJob, if present. The
@@ -166,6 +180,8 @@ export class MinionWorker extends EventEmitter {
   private jobsCompleted = 0;
   /** Idempotency latch for gracefulShutdown — per-job and periodic check sites can race. */
   private gracefulShutdownFired = false;
+  /** Test/runtime injection for the external writer lease boundary. */
+  private autopilotWriterExecutionOptions: AutopilotWriterExecutionOptions | undefined;
   /**
    * Set true when the RSS watchdog (not a normal SIGTERM) initiated the
    * drain. The CLI handler (src/commands/jobs.ts case 'work') reads this
@@ -188,9 +204,12 @@ export class MinionWorker extends EventEmitter {
 
   constructor(
     private engine: BrainEngine,
-    opts?: MinionWorkerOpts & MinionQueueOpts,
+    opts?: MinionWorkerOpts & MinionQueueOpts & {
+      autopilotWriterExecutionOptions?: AutopilotWriterExecutionOptions;
+    },
   ) {
     super();
+    this.autopilotWriterExecutionOptions = opts?.autopilotWriterExecutionOptions;
     this.queue = new MinionQueue(engine, {
       maxSpawnDepth: opts?.maxSpawnDepth,
       maxAttachmentBytes: opts?.maxAttachmentBytes,
@@ -258,7 +277,9 @@ export class MinionWorker extends EventEmitter {
     if (this.listenerCount('unhealthy') === 0) {
       const detail = info.reason === 'db_dead'
         ? `DB unreachable (${info.consecutiveFailures} probes): ${info.message}`
-        : `worker stalled (${info.waitingCount} waiting, ${info.idleMinutes}m idle)`;
+        : info.reason === 'stalled'
+          ? `worker stalled (${info.waitingCount} waiting, ${info.idleMinutes}m idle)`
+          : `corpus-writer lock release failed for job ${info.jobId} (${info.jobName}): ${info.message}`;
       console.error(
         `[health] FATAL: ${detail}. No 'unhealthy' listener registered; ` +
         `defaulting to process.exit(1) for process-manager restart.`,
@@ -993,7 +1014,54 @@ export class MinionWorker extends EventEmitter {
     };
 
     try {
-      const result = await handler(context);
+      // Autopilot queue submission is not the mutation boundary: a worker may
+      // claim the row after the scheduler has released its tick. Acquire the
+      // shared corpus lease immediately around actual handler execution. The
+      // handler then acquires any DB cycle lock, preserving one lock order:
+      // corpus writer -> DB cycle lock.
+      const writerExecution = await runAutopilotJobWithWriterLease(
+        context,
+        () => handler(context),
+        this.autopilotWriterExecutionOptions,
+      );
+      if (writerExecution.status === 'deferred') {
+        if (abort.signal.aborted) {
+          const reason = abort.signal.reason instanceof Error
+            ? abort.signal.reason
+            : new Error(String(abort.signal.reason || 'aborted'));
+          throw reason;
+        }
+
+        clearInterval(lockTimer);
+        const errorText = `autopilot corpus-writer lock ${writerExecution.reason}` +
+          (writerExecution.helperExitCode == null ? '' : ` (helper exit ${writerExecution.helperExitCode})`);
+        try {
+          await context.updateProgress({
+            phase: 'corpus_writer_lock',
+            status: 'deferred',
+            reason: writerExecution.reason,
+            retry_after_ms: writerExecution.retryAfterMs,
+          });
+        } catch {
+          // Progress is advisory; the token-fenced state transition is below.
+        }
+        const released = await this.queue.releaseDeferredJob(
+          job.id,
+          lockToken,
+          errorText,
+          writerExecution.retryAfterMs,
+        );
+        if (!released) {
+          console.warn(`Job ${job.id} writer-lock defer dropped (lock token mismatch)`);
+          return;
+        }
+        console.log(
+          `Job ${job.id} (${job.name}) deferred for corpus-writer lock; ` +
+          `retrying in ${writerExecution.retryAfterMs}ms (no attempt burned)`,
+        );
+        return;
+      }
+      const result = writerExecution.value;
 
       clearInterval(lockTimer);
 
@@ -1013,24 +1081,56 @@ export class MinionWorker extends EventEmitter {
       // strand the parent in waiting-children.
     } catch (err) {
       clearInterval(lockTimer);
+      const fatalWriterRelease = isAutopilotCorpusWriterLockReleaseFailure(err);
+      try {
+        // The handler already completed, so stamp the queue row successful
+        // before stopping this process. Replaying it after supervisor restart
+        // could duplicate a corpus mutation that already committed.
+        if (
+          err instanceof AutopilotCorpusWriterLockReleaseError &&
+          err.dispatchCompleted
+        ) {
+          const result = err.completedValue;
+          const completed = await this.queue.completeJob(
+            job.id,
+            lockToken,
+            result != null
+              ? (typeof result === 'object'
+                  ? result as Record<string, unknown>
+                  : { value: result })
+              : undefined,
+          );
+          if (!completed) {
+            console.warn(
+              `Job ${job.id} completion after writer-lock release failure dropped ` +
+              '(lock token mismatch, job was reclaimed)',
+            );
+          }
+          return;
+        }
 
-      // If the per-job abort fired, derive the reason from signal.reason (set
-      // by whichever site aborted: 'timeout' / 'cancel' / 'lock-lost'). We call
-      // failJob unconditionally — the DB match on status='active' + lock_token
-      // makes it idempotent: if another path (handleTimeouts, cancelJob, stall)
-      // already flipped status, our call no-ops cleanly. The prior silent-return
-      // left jobs stranded in 'active' until a secondary sweep, breaking
-      // timeout/cancel contracts downstream callers rely on.
-      let errorText: string;
-      let abortReason: string | null = null;
-      if (abort.signal.aborted) {
-        abortReason = abort.signal.reason instanceof Error
-          ? abort.signal.reason.message
-          : String(abort.signal.reason || 'aborted');
-        errorText = `aborted: ${abortReason}`;
-      } else {
-        errorText = err instanceof Error ? err.message : String(err);
-      }
+        // If the per-job abort fired, derive the reason from signal.reason (set
+        // by whichever site aborted: 'timeout' / 'cancel' / 'lock-lost'). We call
+        // failJob unconditionally — the DB match on status='active' + lock_token
+        // makes it idempotent: if another path (handleTimeouts, cancelJob, stall)
+        // already flipped status, our call no-ops cleanly. The prior silent-return
+        // left jobs stranded in 'active' until a secondary sweep, breaking
+        // timeout/cancel contracts downstream callers rely on.
+        let errorText: string;
+        let abortReason: string | null = null;
+        if (abort.signal.aborted) {
+          abortReason = abort.signal.reason instanceof Error
+            ? abort.signal.reason.message
+            : String(abort.signal.reason || 'aborted');
+          errorText = `aborted: ${abortReason}`;
+        } else if (
+          err instanceof AutopilotCorpusWriterLockReleaseError &&
+          err.hasPrimaryDispatchError
+        ) {
+          errorText = String(err.primaryDispatchError);
+        } else {
+          errorText = err instanceof Error ? err.message : String(err);
+        }
 
       // v0.41.22.2 (D8a / codex C6): infrastructure aborts (lock-renewal-failed,
       // lock-lost) are NOT job defects — they're connection / coordination
@@ -1127,10 +1227,25 @@ export class MinionWorker extends EventEmitter {
       // flip + remove_on_fail delete. Worker stays out of multi-statement
       // crash-window territory.
 
-      if (newStatus === 'delayed') {
-        console.log(`Job ${job.id} (${job.name}) failed, retrying in ${Math.round(backoffMs)}ms (attempt ${job.attempts_made + 1}/${job.max_attempts})`);
-      } else {
-        console.log(`Job ${job.id} (${job.name}) permanently failed: ${errorText}`);
+        if (newStatus === 'delayed') {
+          console.log(`Job ${job.id} (${job.name}) failed, retrying in ${Math.round(backoffMs)}ms (attempt ${job.attempts_made + 1}/${job.max_attempts})`);
+        } else {
+          console.log(`Job ${job.id} (${job.name}) permanently failed: ${errorText}`);
+        }
+      } finally {
+        if (fatalWriterRelease) {
+          const message = err instanceof Error ? err.message : String(err);
+          // owner.json names this process PID. Remaining alive would make the
+          // lock permanently non-stealable, so stop the loop and hand process
+          // termination to the CLI/supervisor ownership boundary.
+          this.gracefulShutdown('corpus-writer-lock-release-failed');
+          this.emitUnhealthy({
+            reason: 'corpus_writer_lock_release_failed',
+            jobId: job.id,
+            jobName: job.name,
+            message,
+          });
+        }
       }
     }
   }

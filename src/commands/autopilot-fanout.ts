@@ -32,7 +32,13 @@
 
 import type { BrainEngine, SourceRow } from '../core/engine.ts';
 import type { MinionQueue } from '../core/minions/queue.ts';
-import { NON_GLOBAL_PHASES, GLOBAL_PHASES, LAST_GLOBAL_AT_KEY } from '../core/cycle.ts';
+import {
+  AUTOPILOT_GLOBAL_PHASES,
+  AUTOPILOT_NON_GLOBAL_PHASES,
+  AUTOPILOT_PHASES,
+  LAST_GLOBAL_AT_KEY,
+} from '../core/cycle.ts';
+import { withAutopilotJobProvenance } from '../core/minions/autopilot-writer-lease.ts';
 
 const FULL_CYCLE_FLOOR_MIN = 60;
 
@@ -462,7 +468,7 @@ export async function dispatchPerSource(
     // (default source) and pre-v0.18 brains without the sources table.
     const job = await queue.add(
       'autopilot-cycle',
-      { repoPath: opts.repoPath },
+      withAutopilotJobProvenance({ repoPath: opts.repoPath, phases: AUTOPILOT_PHASES }),
       {
         queue: 'default',
         idempotency_key: `autopilot-cycle:${opts.slot}`,
@@ -506,7 +512,7 @@ export async function dispatchPerSource(
       const remoteUrl = typeof src.config?.remote_url === 'string' ? src.config.remote_url : null;
       const job = await queue.add(
         'autopilot-cycle',
-        {
+        withAutopilotJobProvenance({
           repoPath: opts.repoPath,
           source_id: src.id,
           pull: !!remoteUrl,
@@ -514,8 +520,8 @@ export async function dispatchPerSource(
           // (+ mixed) phases. The brain-wide global phases (embed, orphans,
           // purge, …) run once in autopilot-global-maintenance, not N times
           // concurrently here — the fix for the 4→10GB RSS blowout.
-          phases: NON_GLOBAL_PHASES,
-        },
+          phases: AUTOPILOT_NON_GLOBAL_PHASES,
+        }),
         {
           queue: 'default',
           // Per-source idempotency key — two ticks for the same source
@@ -640,7 +646,7 @@ export async function dispatchGlobalMaintenance(
 
   const job = await queue.add(
     'autopilot-global-maintenance',
-    { repoPath: opts.repoPath, phases: GLOBAL_PHASES },
+    withAutopilotJobProvenance({ repoPath: opts.repoPath, phases: AUTOPILOT_GLOBAL_PHASES }),
     {
       queue: 'default',
       // Structural single-flight: one global job per slot; maxWaiting:1 coalesces
