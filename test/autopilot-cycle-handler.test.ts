@@ -78,6 +78,16 @@ describe('autopilot-cycle handler source_id validation + archive recheck', () =>
     expect(['ok', 'clean']).toContain(result.status);
   });
 
+  test('stale per-source payload cannot cross into global maintenance phases', async () => {
+    await seedSource('lane-boundary');
+    const result = await runHandlerOnce({
+      repoPath: brainDir,
+      source_id: 'lane-boundary',
+      phases: ['lint', 'embed', 'orphans', 'extract_atoms'],
+    });
+    expect(result.report.phases.map((phase: { phase: string }) => phase.phase)).toEqual(['lint']);
+  });
+
   test('source_id pointing at non-existent source returns skipped', async () => {
     const result = await runHandlerOnce({ repoPath: brainDir, source_id: 'no-such-source', phases: ['lint'] });
     expect(result.status).toBe('skipped');

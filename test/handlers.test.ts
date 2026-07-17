@@ -77,6 +77,9 @@ describe('autopilot-cycle handler — partial failure does NOT throw', () => {
     expect(report).toBeDefined();
     expect(report.schema_version).toBe('1');
     expect(Array.isArray(report.phases)).toBe(true);
+    expect(report.phases.map((p: any) => p.phase)).not.toContain('synthesize');
+    expect(report.phases.map((p: any) => p.phase)).not.toContain('patterns');
+    expect(report.phases.map((p: any) => p.phase)).not.toContain('extract_atoms');
     // The filesystem-dependent phases should have failed on a missing dir.
     const failedPhases = report.phases
       .filter((p: any) => p.status === 'fail')
@@ -188,9 +191,8 @@ describe('autopilot-cycle handler — phase passthrough', () => {
     }
   }, 30_000);
 
-  test('empty phases array falls back to all phases (same as no phases)', async () => {
+  test('empty phases array falls back to the Autopilot-safe phase set', async () => {
     const handler = (worker as any).handlers.get('autopilot-cycle');
-    // Empty array should fall through to ALL_PHASES (same as omitting phases)
     const result = await handler({
       data: { repoPath: '/definitely-does-not-exist-for-phase-test', phases: [] },
       signal: { aborted: false } as any,
@@ -203,9 +205,12 @@ describe('autopilot-cycle handler — phase passthrough', () => {
     expect(phaseNames).toContain('lint');
     expect(phaseNames).toContain('backlinks');
     expect(phaseNames).toContain('sync');
+    expect(phaseNames).not.toContain('synthesize');
+    expect(phaseNames).not.toContain('patterns');
+    expect(phaseNames).not.toContain('extract_atoms');
   }, 30_000);
 
-  test('non-array phases value is ignored (falls back to all)', async () => {
+  test('non-array phases value falls back to the Autopilot-safe phase set', async () => {
     const handler = (worker as any).handlers.get('autopilot-cycle');
     // String instead of array — should be ignored
     const result = await handler({
@@ -220,5 +225,57 @@ describe('autopilot-cycle handler — phase passthrough', () => {
     expect(phaseNames).toContain('lint');
     expect(phaseNames).toContain('sync');
     expect(phaseNames).toContain('embed');
+    expect(phaseNames).not.toContain('synthesize');
+    expect(phaseNames).not.toContain('patterns');
+    expect(phaseNames).not.toContain('extract_atoms');
   }, 30_000);
+
+  test('stale explicit payload cannot execute manual-only phases', async () => {
+    const handler = (worker as any).handlers.get('autopilot-cycle');
+    const result = await handler({
+      data: {
+        repoPath: '/definitely-does-not-exist-for-phase-test',
+        phases: ['lint', 'synthesize', 'patterns', 'extract_atoms'],
+      },
+      signal: { aborted: false } as any,
+      job: { id: 14, name: 'autopilot-cycle' } as any,
+    });
+
+    expect(result.report.phases.map((p: any) => p.phase)).toEqual(['lint']);
+  }, 30_000);
+
+  test('manual-only explicit payload is rejected without running a cycle', async () => {
+    const handler = (worker as any).handlers.get('autopilot-cycle');
+    const result = await handler({
+      data: {
+        repoPath: '/definitely-does-not-exist-for-phase-test',
+        phases: ['synthesize', 'patterns', 'extract_atoms'],
+      },
+      signal: { aborted: false } as any,
+      job: { id: 15, name: 'autopilot-cycle' } as any,
+    });
+
+    expect(result.status).toBe('skipped');
+    expect(result.report.reason).toBe('no_autopilot_phases');
+  }, 30_000);
+});
+
+describe('dedicated Dream phase handlers remain explicit execution lanes', () => {
+  for (const phase of ['synthesize', 'patterns']) {
+    test(`${phase} handler still delegates to runCycle`, async () => {
+      const handler = (worker as any).handlers.get(phase);
+      expect(handler).toBeDefined();
+      const result = await handler({
+        data: { repoPath: '/definitely-does-not-exist-for-dream-handler-test' },
+        signal: { aborted: false } as any,
+        job: { id: 20, name: phase } as any,
+      });
+      expect(result.phase).toBe(phase);
+      expect(result.report.phases.map((p: any) => p.phase)).toEqual([phase]);
+    }, 30_000);
+  }
+
+  test('protected extract-atoms drain handler remains registered for explicit/manual use', () => {
+    expect((worker as any).handlers.get('extract-atoms-drain')).toBeDefined();
+  });
 });

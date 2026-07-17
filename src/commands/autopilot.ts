@@ -39,6 +39,12 @@ import { detectInstallMethod } from './upgrade.ts';
 import { evaluateQuietHours } from '../core/minions/quiet-hours.ts';
 import { inspectLock } from '../core/db-lock.ts';
 import { isCodeStrategyConfig } from '../core/source-health.ts';
+import { isSourceFederated } from '../core/sources-load.ts';
+import {
+  isAutopilotCorpusWriterLockReleaseFailure,
+  withAutopilotCorpusWriterLock,
+} from '../core/autopilot-corpus-writer-lock.ts';
+import { withAutopilotJobProvenance } from '../core/minions/autopilot-writer-lease.ts';
 
 /**
  * v0.37.7.0 #1162 — classify autopilot reconnect-loop errors.
@@ -150,7 +156,9 @@ export function shouldDispatchSyncFreshnessForSource(source: {
   local_path?: string | null;
   config?: unknown;
 }): boolean {
-  return !!source.local_path && !isCodeStrategyConfig(source.config);
+  return !!source.local_path &&
+    isSourceFederated(source.config) &&
+    !isCodeStrategyConfig(source.config);
 }
 
 // ── Self-upgrade silent channel (v0.42; opt-in, supervisor-relaunch) ─────────
@@ -404,6 +412,8 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
 
   let stopping = false;
   let childSupervisor: ChildWorkerSupervisor | null = null;
+  let activeTickAbort: AbortController | null = null;
+  let activeTickPromise: Promise<unknown> | null = null;
 
   if (spawnManagedWorker) {
     const cliPath = resolveGbrainCliPath();
@@ -481,10 +491,22 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
   //
   // No `process.on('exit')` handler — its callback runs synchronously and
   // cannot await the worker's drain.
-  const shutdown = async (sig: string) => {
+  const shutdown = async (sig: string, exitCode = 0) => {
     if (stopping) return;
     stopping = true;
     console.log(`Autopilot stopping (${sig}).`);
+    // Do not release the shared corpus-writer lease while a tick can still
+    // mutate the corpus.  Abort first (inline runCycle consumes this signal),
+    // then wait for the inline tick's finally-release before exiting. Minion
+    // workers own their execution-boundary leases and drain independently.
+    activeTickAbort?.abort();
+    if (activeTickPromise) {
+      try {
+        await activeTickPromise;
+      } catch {
+        // The tick already logged its primary failure; shutdown must continue.
+      }
+    }
     if (childSupervisor) {
       childSupervisor.killChild('SIGTERM');
       await childSupervisor.awaitChildExit(35_000);
@@ -493,7 +515,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
       }
     }
     try { unlinkSync(lockPath); } catch { /* already gone */ }
-    process.exit(0);
+    process.exit(exitCode);
   };
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
   process.on('SIGINT',  () => { void shutdown('SIGINT'); });
@@ -697,18 +719,17 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
               try {
                 const job = await queue.add(
                   'sync',
-                  {
+                  withAutopilotJobProvenance({
                     sourceId: src.id,
                     repoPath: src.local_path,
                     auto_embed_backfill: true,
                     embed_reason: 'autopilot_freshness',
-                  },
+                  }),
                   {
                     queue: 'default',
                     idempotency_key: `autopilot-sync:${src.id}:${slot}`,
                     max_attempts: 2,
                     timeout_ms: timeoutMs,
-                    maxWaiting: 1,
                   },
                 );
                 if (jsonMode) {
@@ -726,113 +747,6 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
           }
         } catch (e) {
           logError('dispatch.freshness-gate', e);
-        }
-
-        // ── #1685 GAP D: per-source extract_atoms auto-drain ───────────────
-        // The silent-backlog incident: a pack that doesn't declare extract_atoms
-        // never runs the phase in the routine cycle, so the atom backlog grows
-        // invisibly. Auto-submit a bounded, PROTECTED drain per source when the
-        // backlog exceeds the threshold AND the active pack doesn't declare the
-        // phase. Default-ON, daily-spend-capped, time-sloted key so a new slot
-        // opens each UTC day (CODEX #1/#2/#3, DECISION 3C). Postgres-only —
-        // PGLite has no multi-process worker to run the job.
-        if (engine.kind === 'postgres') {
-          try {
-            const enabled = (await engine.getConfig('autopilot.auto_drain.enabled')) !== 'false';
-            if (enabled) {
-              const { packDeclaresPhase } = await import('../core/cycle.ts');
-              const parsePosInt = (v: string | null, d: number): number => {
-                if (v == null) return d;
-                const n = parseInt(v, 10);
-                return Number.isFinite(n) && n > 0 ? n : d;
-              };
-              const parseNonNegFloat = (v: string | null, d: number): number => {
-                if (v == null) return d;
-                const n = parseFloat(v);
-                return Number.isFinite(n) && n >= 0 ? n : d;
-              };
-              const threshold = parsePosInt(await engine.getConfig('autopilot.auto_drain.threshold'), 25);
-              const windowSeconds = parsePosInt(await engine.getConfig('autopilot.auto_drain.window_seconds'), 120);
-              const maxUsdPerDay = parseNonNegFloat(await engine.getConfig('autopilot.auto_drain.max_usd_per_day'), 2.0);
-              // Each drain run is BudgetTracker-capped at ~$0.30; bound the
-              // brain-wide daily count instead of a real-time spend ledger.
-              const PER_RUN_USD = 0.3;
-              const maxJobsToday = Math.max(0, Math.floor(maxUsdPerDay / PER_RUN_USD));
-              const utcDay = new Date().toISOString().slice(0, 10);
-
-              let submittedToday = 0;
-              try {
-                const rows = await engine.executeRaw<{ cnt: number }>(
-                  `SELECT count(*)::int AS cnt FROM minion_jobs WHERE name = 'extract-atoms-drain' AND created_at >= $1::timestamptz`,
-                  [`${utcDay}T00:00:00Z`],
-                );
-                submittedToday = rows[0]?.cnt ?? 0;
-              } catch {
-                // count is best-effort; treat as 0 (cap still bounds submits this tick).
-              }
-
-              if (submittedToday < maxJobsToday) {
-                const { loadAllSources } = await import('../core/sources-load.ts');
-                const { countExtractAtomsBacklog } = await import('../core/cycle/extract-atoms.ts');
-                const sources = await loadAllSources(engine);
-                for (const src of sources) {
-                  if (submittedToday >= maxJobsToday) break; // brain-wide daily cap (fairness)
-                  if (!src.local_path) continue;
-                  // Use the source's active pack. If that pack declares
-                  // extract_atoms the routine source cycle already drains it.
-                  const declares = await packDeclaresPhase(engine, 'extract_atoms', src.id);
-                  if (declares) continue;
-                  const backlog = await countExtractAtomsBacklog(engine, src.id);
-                  if (backlog === null || backlog <= threshold) continue;
-                  // Time-sloted key (CODEX #2): a static key would block the
-                  // source FOREVER once the first job completes. A new UTC-day
-                  // slot reopens it each day.
-                  const idemKey = `autopilot-extract-atoms-drain:${src.id}:${utcDay}`;
-                  try {
-                    // CODEX (impl review #4): DO NOT use maxWaiting here — it
-                    // coalesces by (name, queue), NOT by source, so source B's
-                    // submit would return source A's waiting row, B would never
-                    // queue, and the cap counter would over-count. The per-source
-                    // idempotency key is the correct dedup. Pre-check it so we
-                    // submit + count only genuinely-new sources (queue.add returns
-                    // the existing row on an idempotency hit with no created flag,
-                    // which would otherwise over-count the daily cap). The
-                    // single-instance autopilot lock + the unique idempotency
-                    // index make this pre-check race-free.
-                    const dupe = await engine.executeRaw<{ one: number }>(
-                      `SELECT 1 AS one FROM minion_jobs WHERE idempotency_key = $1 LIMIT 1`,
-                      [idemKey],
-                    );
-                    if (dupe.length > 0) continue; // already queued/drained for this source today
-                    const job = await queue.add(
-                      'extract-atoms-drain',
-                      { sourceId: src.id, window: windowSeconds, repoPath: src.local_path },
-                      {
-                        queue: 'default',
-                        idempotency_key: idemKey,
-                        max_attempts: 1,
-                        timeout_ms: timeoutMs,
-                      },
-                      { allowProtectedSubmit: true },
-                    );
-                    submittedToday++;
-                    if (jsonMode) {
-                      process.stderr.write(JSON.stringify({
-                        event: 'dispatched', job_id: job.id, mode: 'auto-drain',
-                        source_id: src.id, backlog,
-                      }) + '\n');
-                    } else {
-                      console.log(`[dispatch] job #${job.id} extract-atoms-drain (auto-drain: ${src.id}; backlog=${backlog})`);
-                    }
-                  } catch (e) {
-                    logError('dispatch.auto-drain', e);
-                  }
-                }
-              }
-            }
-          } catch (e) {
-            logError('dispatch.auto-drain-gate', e);
-          }
         }
 
         // Cheap path: engine.getHealth() is a single SQL count query.
@@ -976,7 +890,24 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
           // D9 content-hash idempotency keys (from computeRecommendations).
           // maxWaiting:1 per submit per codex #17 (closes the backpressure
           // gap the prior implementation had for targeted submits).
+          const {
+            filterAutopilotPlanSteps,
+            isAutopilotExcludedPhase,
+          } = await import('../core/cycle.ts');
           for (const step of plan) {
+            if (!isAutopilotExcludedPhase(step.job)) continue;
+            if (jsonMode) {
+              process.stderr.write(JSON.stringify({
+                event: 'skip_autopilot_phase',
+                mode: 'targeted',
+                step: step.id,
+                phase: step.job,
+              }) + '\n');
+            } else {
+              console.log(`[skip] ${step.job} is explicit/manual-only; Autopilot did not dispatch it`);
+            }
+          }
+          for (const step of filterAutopilotPlanSteps(plan)) {
             try {
               const isProtected = !!step.protected;
               const submitOpts = {
@@ -988,7 +919,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
               };
               const job = await queue.add(
                 step.job,
-                step.params,
+                withAutopilotJobProvenance(step.params),
                 submitOpts,
                 isProtected ? { allowProtectedSubmit: true } : undefined,
               );
@@ -1004,39 +935,87 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
         }
       } catch (e) { logError('dispatch', e); cycleOk = false; }
     } else {
-      // Inline fallback — delegate to runCycle so lint + backlinks +
-      // orphan sweep run too (previously this path only did sync +
-      // extract + embed, which didn't match the Minions-dispatch
-      // path's phase set). Now both converge on the same primitive.
+      // Inline mode performs the mutation in this process, so hold one shared
+      // writer lease for the actual cycle. Minion mode intentionally does NOT
+      // lock queue submission; the worker gates tagged handler execution.
+      const tickAbort = new AbortController();
+      activeTickAbort = tickAbort;
+      const corpusTick = Promise.resolve().then(() => withAutopilotCorpusWriterLock(async (tickSignal) => {
+        if (tickSignal?.aborted || stopping) return;
+
+        // Inline fallback — delegate to runCycle so lint + backlinks +
+        // orphan sweep run too (previously this path only did sync +
+        // extract + embed, which didn't match the Minions-dispatch
+        // path's phase set). Now both converge on the same primitive.
+        try {
+          const { runCycle, AUTOPILOT_PHASES } = await import('../core/cycle.ts');
+          const report = await runCycle(engine, {
+            brainDir: repoPath,
+            // Autopilot daemon path: pulls by default (matches
+            // pre-v0.17 autopilot behavior). CLI dream defaults false
+            // for cron safety; that choice is scoped to dream only.
+            pull: true,
+            phases: AUTOPILOT_PHASES,
+            signal: tickSignal,
+            yieldBetweenPhases: async () => {
+              await new Promise(r => setImmediate(r));
+            },
+          });
+          // Only 'failed' (every attempted phase failed) trips the autopilot
+          // circuit breaker. 'partial' means at least one phase warned or
+          // failed while others ran — that's a soft signal, not a fatal
+          // condition. Treating 'partial' as failure here caused respawn
+          // storms under KeepAlive=true on brains where a single phase
+          // (typically `orphans`) emits a 'warn' every cycle in steady state.
+          if (report.status === 'failed') {
+            cycleOk = false;
+          }
+          if (jsonMode) {
+            process.stderr.write(JSON.stringify({ event: 'cycle-inline', status: report.status, duration_ms: report.duration_ms, totals: report.totals }) + '\n');
+          } else {
+            const t = report.totals;
+            console.log(`[cycle-inline ${report.status}] lint=${t.lint_fixes} backlinks=${t.backlinks_added} synced=${t.pages_synced} extracted=${t.pages_extracted} embedded=${t.pages_embedded} orphans=${t.orphans_found}`);
+          }
+        } catch (e) { logError('cycle-inline', e); cycleOk = false; }
+      }, { signal: tickAbort.signal, required: true }));
+      activeTickPromise = corpusTick;
       try {
-        const { runCycle } = await import('../core/cycle.ts');
-        const report = await runCycle(engine, {
-          brainDir: repoPath,
-          // Autopilot daemon path: pulls by default (matches
-          // pre-v0.17 autopilot behavior). CLI dream defaults false
-          // for cron safety; that choice is scoped to dream only.
-          pull: true,
-          yieldBetweenPhases: async () => {
-            await new Promise(r => setImmediate(r));
-          },
-        });
-        // Only 'failed' (every attempted phase failed) trips the autopilot
-        // circuit breaker. 'partial' means at least one phase warned or
-        // failed while others ran — that's a soft signal, not a fatal
-        // condition. Treating 'partial' as failure here caused respawn
-        // storms under KeepAlive=true on brains where a single phase
-        // (typically `orphans`) emits a 'warn' every cycle in steady state.
-        if (report.status === 'failed') {
-          cycleOk = false;
+        const lockOutcome = await corpusTick;
+        if (lockOutcome.status === 'deferred') {
+          if (jsonMode) {
+            process.stderr.write(JSON.stringify({
+              event: 'cycle_deferred',
+              reason: `corpus_writer_lock_${lockOutcome.reason}`,
+              helper_exit_code: lockOutcome.helper_exit_code,
+              detail: lockOutcome.detail,
+            }) + '\n');
+          } else {
+            console.log(
+              `[defer] corpus writer lock ${lockOutcome.reason}; no inline Autopilot phases ran this tick` +
+              (lockOutcome.helper_exit_code == null ? '' : ` (helper exit ${lockOutcome.helper_exit_code})`),
+            );
+          }
+          if (lockOutcome.reason === 'helper_error' || lockOutcome.reason === 'invalid_config') {
+            cycleOk = false;
+          }
         }
-        if (jsonMode) {
-          process.stderr.write(JSON.stringify({ event: 'cycle-inline', status: report.status, duration_ms: report.duration_ms, totals: report.totals }) + '\n');
-        } else {
-          const t = report.totals;
-          console.log(`[cycle-inline ${report.status}] lint=${t.lint_fixes} backlinks=${t.backlinks_added} synced=${t.pages_synced} extracted=${t.pages_extracted} embedded=${t.pages_embedded} orphans=${t.orphans_found}`);
+      } catch (e) {
+        logError('corpus-writer-lock', e);
+        cycleOk = false;
+        if (isAutopilotCorpusWriterLockReleaseFailure(e)) {
+          // owner.json names this long-lived daemon PID. Continuing would make
+          // the failed-release lock non-stealable forever. Exit non-zero so
+          // launchd restarts us and dead-PID recovery can reclaim it.
+          await shutdown('corpus-writer-lock-release-failed', 1);
+          return;
         }
-      } catch (e) { logError('cycle-inline', e); cycleOk = false; }
+      } finally {
+        if (activeTickPromise === corpusTick) activeTickPromise = null;
+        if (activeTickAbort === tickAbort) activeTickAbort = null;
+      }
     }
+
+    if (stopping) break;
 
     // 4. Health check + adaptive interval (same for both paths)
     let interval = baseInterval;

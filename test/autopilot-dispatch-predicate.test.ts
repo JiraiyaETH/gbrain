@@ -43,6 +43,13 @@ describe('autopilot sync-freshness fan-out predicate', () => {
     })).toBe(true);
   });
 
+  test('isolated local sources are not sync freshness targets', () => {
+    expect(shouldDispatchSyncFreshnessForSource({
+      local_path: '/repo',
+      config: { federated: false },
+    })).toBe(false);
+  });
+
   test('sources without local_path are not sync freshness targets', () => {
     expect(shouldDispatchSyncFreshnessForSource({
       local_path: null,

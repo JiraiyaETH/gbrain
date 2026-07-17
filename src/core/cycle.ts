@@ -259,6 +259,47 @@ export const PHASE_SCOPE: Record<CyclePhase, PhaseScope> = {
 export const GLOBAL_PHASES: CyclePhase[] = ALL_PHASES.filter((p) => PHASE_SCOPE[p] === 'global');
 export const NON_GLOBAL_PHASES: CyclePhase[] = ALL_PHASES.filter((p) => PHASE_SCOPE[p] !== 'global');
 
+/**
+ * Explicit/manual-only phases that Autopilot must never dispatch.
+ * They remain in ALL_PHASES so `gbrain dream` and dedicated protected
+ * handlers retain their explicit behavior.
+ */
+export const AUTOPILOT_EXCLUDED_PHASES: readonly CyclePhase[] = ['synthesize', 'patterns', 'extract_atoms'];
+const AUTOPILOT_EXCLUDED_PHASE_SET: ReadonlySet<CyclePhase> = new Set(AUTOPILOT_EXCLUDED_PHASES);
+
+export function isAutopilotExcludedPhase(phase: unknown): phase is CyclePhase {
+  return typeof phase === 'string' && AUTOPILOT_EXCLUDED_PHASE_SET.has(phase as CyclePhase);
+}
+
+/** Autopilot's complete maintenance lane: ALL_PHASES minus explicit/manual work. */
+export const AUTOPILOT_PHASES: CyclePhase[] = ALL_PHASES.filter((p) => !isAutopilotExcludedPhase(p));
+/** Per-source Autopilot fan-out, also excluding brain-global phases. */
+export const AUTOPILOT_NON_GLOBAL_PHASES: CyclePhase[] = NON_GLOBAL_PHASES.filter((p) => !isAutopilotExcludedPhase(p));
+/** Brain-wide Autopilot maintenance. Kept explicit so handler validation fails closed. */
+export const AUTOPILOT_GLOBAL_PHASES: CyclePhase[] = GLOBAL_PHASES.filter((p) => !isAutopilotExcludedPhase(p));
+
+/**
+ * Normalize an untrusted/stale queued phase payload at the execution boundary.
+ * Missing, non-array, and empty payloads use the supplied safe fallback;
+ * explicit non-empty payloads are intersected with the allowed Autopilot set.
+ */
+export function selectAutopilotPhases(
+  requested: unknown,
+  allowed: readonly CyclePhase[] = AUTOPILOT_PHASES,
+): CyclePhase[] {
+  const safeAllowed = allowed.filter((phase) => !isAutopilotExcludedPhase(phase));
+  if (!Array.isArray(requested) || requested.length === 0) return safeAllowed;
+  const allowedSet = new Set<CyclePhase>(safeAllowed);
+  return requested.filter(
+    (phase): phase is CyclePhase => typeof phase === 'string' && allowedSet.has(phase as CyclePhase),
+  );
+}
+
+/** Filter a doctor/recommendation plan before the targeted Autopilot submit loop. */
+export function filterAutopilotPlanSteps<T extends { job: unknown }>(steps: readonly T[]): T[] {
+  return steps.filter((step) => !isAutopilotExcludedPhase(step.job));
+}
+
 /** Config key holding the ISO timestamp of the last successful global-maintenance run. */
 export const LAST_GLOBAL_AT_KEY = 'autopilot.last_global_at';
 

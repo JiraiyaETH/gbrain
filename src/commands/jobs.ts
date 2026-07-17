@@ -920,10 +920,16 @@ HANDLER TYPES (built in)
             `[health] FATAL: DB unreachable after ${info.consecutiveFailures} probes (${info.message}). ` +
             `Exiting for process-manager restart.`,
           );
-        } else {
+        } else if (info.reason === 'stalled') {
           console.error(
             `[health] FATAL: Worker stalled — ${info.waitingCount} waiting job(s) for ` +
             `registered handlers, ${info.idleMinutes}m idle. Exiting for process-manager restart.`,
+          );
+        } else {
+          console.error(
+            `[health] FATAL: Corpus-writer lock release failed for job ${info.jobId} ` +
+            `(${info.jobName}): ${info.message}. Exiting so the supervisor can ` +
+            'restart and dead-PID stale recovery can reclaim the lock.',
           );
         }
         process.exit(1);
@@ -1639,7 +1645,12 @@ export async function registerBuiltinHandlers(
   // `gbrain jobs get <id>` shows the full structured report. Does NOT
   // throw on partial: a flaky phase must not block every future cycle.
   worker.register('autopilot-cycle', async (job) => {
-    const { runCycle } = await import('../core/cycle.ts');
+    const {
+      AUTOPILOT_NON_GLOBAL_PHASES,
+      AUTOPILOT_PHASES,
+      runCycle,
+      selectAutopilotPhases,
+    } = await import('../core/cycle.ts');
     // v0.41.30 (T2): fall back to null (NOT cwd '.') when no repo is configured.
     // The queued cycle is the same primitive `gbrain dream` uses; a checkout-less
     // postgres brain should skip filesystem phases (no_brain_dir) and run the
@@ -1720,13 +1731,26 @@ export async function registerBuiltinHandlers(
     // against the wrong tree. Legacy (no source_id) keeps the global repoPath.
     const effectiveBrainDir: string | null = sourceId ? sourceLocalPath : repoPath;
 
-    // Allow callers to select phases via job data (e.g. skip embed for
-    // fast cycles). Validates against ALL_PHASES to prevent injection.
-    const { ALL_PHASES } = await import('../core/cycle.ts');
-    const validPhases = new Set(ALL_PHASES);
-    const requestedPhases = Array.isArray(job.data.phases)
-      ? (job.data.phases as string[]).filter(p => validPhases.has(p as any))
-      : undefined;
+    // Execution-boundary guard for stale/malformed/explicit queue payloads.
+    // Missing payloads use the dispatch lane's safe default. Explicit payloads
+    // stay within the handler's dispatch lane and always remove manual-only
+    // work. This also contains stale jobs queued by an older runtime.
+    const fallbackPhases = sourceId ? AUTOPILOT_NON_GLOBAL_PHASES : AUTOPILOT_PHASES;
+    const requestedPhases = Array.isArray(job.data.phases) && job.data.phases.length > 0
+      ? selectAutopilotPhases(job.data.phases, fallbackPhases)
+      : fallbackPhases;
+    const explicitNonEmptyPayload = Array.isArray(job.data.phases) && job.data.phases.length > 0;
+    if (explicitNonEmptyPayload && requestedPhases.length === 0) {
+      return {
+        partial: false,
+        status: 'skipped',
+        report: {
+          reason: 'no_autopilot_phases',
+          requested_phases: job.data.phases,
+          ...(sourceId ? { source_id: sourceId } : {}),
+        },
+      };
+    }
 
     // Pull default: legacy `true` for back-compat; explicit boolean wins.
     const pull = typeof job.data.pull === 'boolean' ? job.data.pull : true;
@@ -1751,7 +1775,7 @@ export async function registerBuiltinHandlers(
       pull,
       signal: job.signal, // propagate abort so cycle bails on timeout/cancel
       ...(sourceId ? { sourceId } : {}),
-      ...(requestedPhases && requestedPhases.length > 0 ? { phases: requestedPhases as any } : {}),
+      phases: requestedPhases,
       yieldBetweenPhases: async () => {
         // Yield to the event loop so worker lock-renewal can fire.
         await new Promise<void>(r => setImmediate(r));
@@ -1772,16 +1796,30 @@ export async function registerBuiltinHandlers(
   // No source_id → uses the legacy global cycle lock; stamps autopilot.last_global_at
   // on success so the dispatch gate backs off.
   worker.register('autopilot-global-maintenance', async (job) => {
-    const { runCycle, GLOBAL_PHASES, LAST_GLOBAL_AT_KEY, ALL_PHASES } = await import('../core/cycle.ts');
+    const {
+      AUTOPILOT_GLOBAL_PHASES,
+      LAST_GLOBAL_AT_KEY,
+      runCycle,
+      selectAutopilotPhases,
+    } = await import('../core/cycle.ts');
     const repoPath: string | null = typeof job.data.repoPath === 'string'
       ? job.data.repoPath
       : (await engine.getConfig('sync.repo_path')) ?? null;
 
-    const validPhases = new Set(ALL_PHASES);
-    const requested = Array.isArray(job.data.phases)
-      ? (job.data.phases as string[]).filter((p) => validPhases.has(p as never))
-      : GLOBAL_PHASES;
-    const phases = (requested.length > 0 ? requested : GLOBAL_PHASES) as typeof GLOBAL_PHASES;
+    const phases = Array.isArray(job.data.phases) && job.data.phases.length > 0
+      ? selectAutopilotPhases(job.data.phases, AUTOPILOT_GLOBAL_PHASES)
+      : AUTOPILOT_GLOBAL_PHASES;
+    const explicitNonEmptyPayload = Array.isArray(job.data.phases) && job.data.phases.length > 0;
+    if (explicitNonEmptyPayload && phases.length === 0) {
+      return {
+        partial: false,
+        status: 'skipped',
+        report: {
+          reason: 'no_autopilot_phases',
+          requested_phases: job.data.phases,
+        },
+      };
+    }
 
     const report = await runCycle(engine, {
       brainDir: repoPath,

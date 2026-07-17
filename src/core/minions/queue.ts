@@ -1163,34 +1163,23 @@ export class MinionQueue {
   }
 
   /**
-   * v0.41 Bug 2 — release a job back to `delayed` after a
-   * `RateLeaseUnavailableError` bounce, WITHOUT incrementing `attempts_made`.
+   * Release a coordination-blocked job back to `delayed` WITHOUT incrementing
+   * `attempts_made`. Used by rate-lease pressure and external corpus-writer
+   * contention: neither is a job defect, so neither may consume retries or
+   * dead-letter otherwise-valid work. By default runtime clocks are reset
+   * because the next successful claim, not time spent waiting before handler
+   * entry, owns the timeout budget. Callers that defer after entering a handler
+   * can preserve the historical clock by passing `resetRuntimeClock=false`.
    *
-   * The field-report bug: pre-v0.41, lease-full bounces routed through
-   * `failJob` which bumps `attempts_made`. After 3 bounces the job hit
-   * `max_attempts` (default 3) and dead-lettered with message
-   * `rate lease "anthropic:messages" full (8/8)`. Operators saw a dead
-   * job and assumed a real failure.
-   *
-   * This method is the workhorse fix: status → `delayed`, jittered backoff
-   * via `delay_until`, `attempts_made` UNCHANGED. The handler comment at
-   * `src/core/minions/handlers/subagent.ts:425` ("treat as renewable
-   * error so the worker re-claims") is now actually true.
-   *
-   * Audit row write to `minion_lease_pressure_log` is the caller's
-   * responsibility (the worker has the model/queue context); this method
-   * stays focused on the state-machine flip. Same `lock_token + status='active'`
-   * idempotency guard as `failJob` so a racing stall sweep / cancel still
-   * wins. Returns `null` on lock_token mismatch.
-   *
-   * Returns the updated `MinionJob` row on success so the caller can stamp
-   * the audit row with provenance from the SAME row that just flipped.
+   * Same token fence as `failJob`; a racing cancel/stall transition wins and
+   * this returns null. Callers own any domain-specific audit row.
    */
-  async releaseLeaseFullJob(
+  async releaseDeferredJob(
     id: number,
     lockToken: string,
     errorText: string,
     backoffMs: number,
+    resetRuntimeClock = true,
   ): Promise<MinionJob | null> {
     const rows = await this.engine.executeRaw<Record<string, unknown>>(
       `UPDATE minion_jobs SET
@@ -1198,13 +1187,28 @@ export class MinionQueue {
         error_text = $1,
         stacktrace = COALESCE(stacktrace, '[]'::jsonb) || to_jsonb($1::text),
         delay_until = now() + ($2::double precision * interval '1 millisecond'),
-        lock_token = NULL, lock_until = NULL, updated_at = now()
+        lock_token = NULL, lock_until = NULL,
+        timeout_at = CASE WHEN $5::boolean THEN NULL ELSE timeout_at END,
+        started_at = CASE WHEN $5::boolean THEN NULL ELSE started_at END,
+        updated_at = now()
        WHERE id = $3 AND status = 'active' AND lock_token = $4
        RETURNING *`,
-      [errorText, backoffMs, id, lockToken],
+      [errorText, backoffMs, id, lockToken, resetRuntimeClock],
     );
     if (rows.length === 0) return null;
     return rowToMinionJob(rows[0]);
+  }
+
+  /** Back-compatible rate-lease spelling over the generic no-attempt defer. */
+  async releaseLeaseFullJob(
+    id: number,
+    lockToken: string,
+    errorText: string,
+    backoffMs: number,
+  ): Promise<MinionJob | null> {
+    // Preserve the historical rate-lease timeout accounting: the handler was
+    // already entered before it discovered provider capacity was exhausted.
+    return this.releaseDeferredJob(id, lockToken, errorText, backoffMs, false);
   }
 
   /** Update job progress (token-fenced). */
