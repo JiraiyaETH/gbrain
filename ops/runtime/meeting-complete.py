@@ -52,7 +52,10 @@ HOME = Path(os.environ.get("GBRAIN_HOME", os.path.expanduser("~"))).resolve()
 BRAIN_DIR = Path(os.environ.get("BRAIN_DIR", str(HOME / "brain"))).resolve()
 MEETINGS_DIR = BRAIN_DIR / "meetings"
 SKILL_DIR = Path(
-    os.environ.get("MEETING_INGESTION_SKILL_DIR", str(SCRIPT_DIR / "meeting-ingestion"))
+    os.environ.get(
+        "MEETING_INGESTION_SKILL_DIR",
+        str(RUNTIME_SKILLS_DIR / "meeting-ingestion"),
+    )
 ).resolve()
 QA_SCRIPT = Path(
     os.environ.get("MEETING_QA_SCRIPT", str(SKILL_DIR / "scripts/qa-meeting.sh"))
