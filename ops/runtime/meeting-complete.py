@@ -1215,8 +1215,18 @@ def run_claude(
     }
 
 
-def run_isolation_canary(context: dict[str, Path], protected_path: Path) -> dict[str, Any]:
-    """No-model proof of read/write isolation, tool denial, and Claude startup."""
+def run_isolation_canary(
+    context: dict[str, Path],
+    protected_path: Path,
+    meeting_rel: str = "meetings/test.md",
+) -> dict[str, Any]:
+    """No-model proof of read/write isolation, tool denial, and Claude startup.
+
+    meeting_rel should be the run's actual selected meeting file (relative to
+    the brain root) so the allowed-read probe targets a file that exists in
+    the sandbox copy; the historical meetings/test.md fixture no longer
+    exists in a maintained brain.
+    """
     environment, scrubbed = isolated_agent_environment(context)
     sensitive_sentinel = STATE_DIR / f".agent-sensitive-canary-{uuid.uuid4().hex}"
     atomic_write_text(sensitive_sentinel, "canary-secret-must-not-be-readable\n", 0o600)
@@ -1227,11 +1237,11 @@ def run_isolation_canary(context: dict[str, Path], protected_path: Path) -> dict
     except (OSError, StopIteration):
         ssh_probe = ssh_dir / ".meeting-canary-nonexistent"
     environment["PROTECTED_PATH"] = str(protected_path)
-    environment["PROTECTED_READ_PATH"] = str(BRAIN_DIR / "meetings/test.md")
+    environment["PROTECTED_READ_PATH"] = str(BRAIN_DIR / meeting_rel)
     environment["SENSITIVE_SENTINEL"] = str(sensitive_sentinel)
     environment["CONFIG_PATH"] = str(config_path)
     environment["SSH_PROBE_PATH"] = str(ssh_probe)
-    environment["SANDBOX_MEETING"] = str(context["brain_dir"] / "meetings/test.md")
+    environment["SANDBOX_MEETING"] = str(context["brain_dir"] / meeting_rel)
     environment["SANDBOX_SKILL"] = str(context["skill_dir"] / "SKILL.md")
     environment["CLAUDE_EXECUTABLE"] = str(context["claude_executable"])
     script = (
@@ -1944,7 +1954,9 @@ def process_meeting(
             if not sandbox_path.exists():
                 raise PipelineFailure("agent-sandbox", f"sandbox meeting missing: {slug}")
             canary_path = STATE_DIR / f".agent-outside-write-canary-{uuid.uuid4().hex}"
-            isolation_canary = run_isolation_canary(agent_context, canary_path)
+            isolation_canary = run_isolation_canary(
+                agent_context, canary_path, f"{slug}.md"
+            )
             result["stages"]["isolation_canary"] = isolation_canary
             if not isolation_canary.get("passed"):
                 raise PipelineFailure(
