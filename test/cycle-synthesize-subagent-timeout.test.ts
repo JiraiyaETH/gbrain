@@ -65,7 +65,12 @@ describe('runPhaseSynthesize subagent timeout config', () => {
         sourceId: 'default',
       });
 
-      expect(result.status).toBe('ok');
+      // The 1 ms wait deliberately prevents a worker from completing. Since
+      // incident B, incomplete children fail the phase instead of reporting a
+      // false success; this test only needs the submitted row to inspect its
+      // execution timeout.
+      expect(result.status).toBe('fail');
+      expect(result.error?.code).toBe('SYNTH_CHILD_INCOMPLETE');
 
       const jobs = await engine.executeRaw<{ timeout_ms: string | number | null }>(
         `SELECT timeout_ms
