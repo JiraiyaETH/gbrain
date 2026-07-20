@@ -1046,10 +1046,12 @@ def isolated_agent_workspace():
             ignore=shutil.ignore_patterns(".git"),
         )
         shutil.copytree(RUNTIME_SKILLS_DIR, sandbox_skills, symlinks=False)
-        # SKILL_DIR defaults to a subdir of RUNTIME_SKILLS_DIR (already copied
-        # above); dirs_exist_ok keeps this idempotent while still honoring an
-        # external MEETING_INGESTION_SKILL_DIR override.
-        shutil.copytree(SKILL_DIR, sandbox_skill, symlinks=False, dirs_exist_ok=True)
+        # SKILL_DIR defaults to a subdir of RUNTIME_SKILLS_DIR, which the
+        # wholesale copy above already materialized (read-only, so an
+        # overwrite would EACCES). Copy separately only for an external
+        # MEETING_INGESTION_SKILL_DIR override.
+        if not sandbox_skill.exists():
+            shutil.copytree(SKILL_DIR, sandbox_skill, symlinks=False)
         deny_log = root / "denied-tools.log"
         atomic_write_text(deny_log, "", 0o600)
         for tool in ("gbrain", "psql", "pg_dump", "pg_restore", "createdb", "dropdb", "supabase"):
