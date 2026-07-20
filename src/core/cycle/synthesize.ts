@@ -117,9 +117,10 @@ export function allSynthesizeChildrenCompleted(outcomes: readonly SynthesizeChil
  * resolver returns for known Anthropic aliases.
  */
 const MODEL_CONTEXT_TOKENS: Record<string, number> = {
+  'claude-opus-4-8': 1_000_000,
   'claude-opus-4-7': 1_000_000,
   'claude-opus-4-6': 1_000_000,
-  'claude-sonnet-4-6': 200_000,
+  'claude-sonnet-4-6': 1_000_000,
   'claude-sonnet-4-5': 200_000,
   'claude-haiku-4-5-20251001': 200_000,
 };
@@ -158,7 +159,10 @@ function computeChunkCharBudget(
   if (configMaxPromptTokens !== null) {
     return Math.floor(configMaxPromptTokens * CHARS_PER_TOKEN);
   }
-  const ctx = MODEL_CONTEXT_TOKENS[model];
+  // Config values may carry a provider prefix (`anthropic:claude-opus-4-8`);
+  // the map keys on bare model ids, so strip the prefix before lookup.
+  const bare = model.includes(':') ? model.slice(model.indexOf(':') + 1) : model;
+  const ctx = MODEL_CONTEXT_TOKENS[bare];
   if (ctx === undefined) {
     warnUnknownModelOnce(model);
     return Math.floor(UNKNOWN_MODEL_BUDGET_TOKENS * CHARS_PER_TOKEN);
