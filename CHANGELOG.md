@@ -2,6 +2,55 @@
 
 All notable changes to GBrain will be documented in this file.
 
+## [0.42.62.1] - 2026-07-20
+
+Operational hardening release: the dream pipeline gets hard spend bounds, the
+operator-machine runtime lanes move into version control, and structured
+timeline rows gain provenance + reconciliation so page edits converge instead
+of accumulating stale rows.
+
+### Added
+- **Dream spend bounds.** Scheduled synthesis now selects the exact closed
+  night only and caps paid synthesis children per run
+  (`dream.synthesize.max_paid_children_per_run`, default 10). Overflow
+  transcripts stay pending with no completion/cooldown state, so nothing is
+  lost and nothing fans out unbounded. Manual `gbrain dream` backfills remain
+  explicitly selectable.
+- **`gbrain dream close-backlog --before <date> [--dry-run]`.** Writes
+  idempotent operator-discard markers for historical transcripts so scheduled
+  runs can never drain an old backlog; raw evidence files are untouched.
+- **`ops/runtime/`.** The operator-machine launchd lanes (session exporters,
+  scheduled-dream gate, meeting completion, enrich, locks, receipts) now live
+  in the repo with a reproducible `build-runtime.sh` that assembles a sealed,
+  checksummed runtime from the committed tree.
+- **Timeline provenance + reconciliation** (migration v124). Structured
+  timeline rows carry `managed_by`/`origin_key`; page-content extraction paths
+  now reconcile transactionally (reworded lines update in place, removed lines
+  are deleted for parser-owned rows only). Manual, meeting, enrichment, and
+  chronicle rows are never touched. `gbrain timeline repair --content` (strict
+  dry-run by default) adopts and cleans legacy parser rows.
+- **Unified timeline parsers.** Filesystem bullet extraction delegates to the
+  shared line parser, so FS and DB extraction write identical rows (fixes the
+  fragmented-summary class where hyphens inside slugs split rows).
+
+### Fixed
+- Strict scheduled dream exit is scoped to synthesis-critical phases; chronic
+  maintenance warnings no longer fail an otherwise-successful night.
+- Exporters: settled-source drift (resumed sessions appending bytes) is
+  diagnostic instead of run-fatal, and only sessions actually selected into a
+  run contribute settlement dates to its receipt — both previously wedged the
+  nightly chain permanently.
+- Meeting completion under the canonical runtime layout: skill payload path,
+  idempotent sandbox skill copy, and the isolation canary now probes the run's
+  actual meeting file instead of a legacy fixture.
+- Dream chunk budgeting recognizes `claude-opus-4-8` (1M context) and strips
+  provider prefixes before context-window lookup.
+
+To take advantage of v0.42.62.1: rebuild and repoint your sealed runtime with
+`ops/runtime/build-runtime.sh <dest>`; migration v124 applies on the next
+`gbrain init --migrate-only` (or automatically on connect); then review legacy
+timeline cleanup with `gbrain timeline repair --content` before `--apply`.
+
 ## [0.42.62.0] - 2026-07-17
 
 **If your brain holds more than one source, everything now lands in the right one. Link extraction, timeline extraction, background cycles, and webhook captures used to quietly file some of their output under the default source; all of those paths now carry the correct source identity. Background agent jobs got tougher too: a failed database reconnect can no longer wedge the engine, and workers recover from dropped connections instead of crash-looping. If you run the admin dashboard behind a reverse proxy, the live activity panel finally connects. Long agent conversations cost less because repeated context is reused between turns on Anthropic calls. Local LiteLLM proxies work out of the box. Nested sources scan correctly again instead of reporting zero files. And the project's automated checks now include dependency vulnerability scanning, static code-security analysis, and signed provenance for release builds. Thirty merged changes in all, the largest batch to date, each one reviewed and verified against the live codebase before landing.**
