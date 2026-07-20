@@ -113,8 +113,28 @@ class ActiveTreeTests(unittest.TestCase):
             }),
             "success",
         )
+    def test_settled_drift_is_diagnostic_not_export_fatal(self) -> None:
+        # A settled logical session whose source bytes changed later (resumed
+        # conversation) is the same mining lineage and is excluded from export;
+        # it must not withhold the night's success receipt.
         self.assertEqual(
-            CLAUDE_EXPORTER.scheduled_export_status({"settled_drift": 1}),
+            CLAUDE_EXPORTER.scheduled_export_status({"settled_drift": 5}),
+            "success",
+        )
+
+    def test_output_drift_and_migration_failures_stay_fatal(self) -> None:
+        self.assertEqual(
+            CLAUDE_EXPORTER.scheduled_export_status({"existing_output_drift": 1}),
+            "failed",
+        )
+        self.assertEqual(
+            CLAUDE_EXPORTER.scheduled_export_status({"legacy_migration_failed": 1}),
+            "failed",
+        )
+        self.assertEqual(
+            CLAUDE_EXPORTER.scheduled_export_status(
+                {"stale_partial_replacement_failed": 1}
+            ),
             "failed",
         )
 

@@ -1710,8 +1710,13 @@ def export_session(
 
 # --- main ------------------------------------------------------------------------------
 def scheduled_export_status(totals: dict[str, Any]) -> str:
+    # settled_drift is deliberately NOT fatal: a settled logical session whose
+    # source bytes changed later (a resumed Claude Code conversation appending
+    # to the same file) is the same mining lineage — it is already excluded
+    # from export/selection, so it must not withhold the night's success
+    # receipt. The counter (and settled_drift_sessions) stays in the summary
+    # for anomaly review.
     fatal_keys = (
-        "settled_drift",
         "existing_output_drift",
         "legacy_migration_failed",
         "stale_partial_replacement_failed",
@@ -1813,6 +1818,10 @@ def main() -> int:
             totals[status] = totals.get(status, 0) + 1
             if status == "skipped_automated":
                 automated_session_ids.add(str(result["session_id"]))
+            if status == "settled_drift":
+                totals.setdefault("settled_drift_sessions", []).append(
+                    str(result["session_id"])
+                )
             if status == "withdraw_unsettled":
                 unsettled_prior_ids.add(str(result["session_id"]))
             if result.get("settlement_date"):

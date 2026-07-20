@@ -1334,9 +1334,11 @@ def export_for_date(
     manifest_entries.sort(key=lambda item: (item["profile"], item["session_id"], item["export_date"], int(item.get("part") or 0)))
     manifest_status = write_manifest(corpus_dir, manifest_entries)
     totals["manifest"] = manifest_status
+    # settled_drift is not fatal (same-lineage resumed sessions; excluded from
+    # export anyway) — mirror of scheduled_export_status in the Claude exporter.
     totals["status"] = (
         "failed"
-        if totals["warnings"] or totals["settled_drift"] or totals["existing_output_drift"]
+        if totals["warnings"] or totals["existing_output_drift"]
         else "success"
     )
     return totals
