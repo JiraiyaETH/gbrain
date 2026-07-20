@@ -31,7 +31,7 @@
 import { readFileSync, readdirSync, lstatSync, existsSync } from 'fs';
 import { setCliExitVerdict } from '../core/cli-force-exit.ts';
 import { join, relative, dirname } from 'path';
-import type { BrainEngine, LinkBatchInput, TimelineBatchInput } from '../core/engine.ts';
+import type { BrainEngine, LinkBatchInput, TimelineReconcileCandidate } from '../core/engine.ts';
 import type { PageType } from '../core/types.ts';
 import { parseMarkdown } from '../core/markdown.ts';
 import {
@@ -47,7 +47,7 @@ import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts'
 import { pathToSlug, pruneDir, isSyncable } from '../core/sync.ts';
 // v0.41.18.0: withRetry + isRetryableConnError + WithRetryOpts moved to
 // src/core/retry.ts as the canonical primitive. Engine methods
-// (addLinksBatch/addTimelineEntriesBatch/upsertChunks) now self-retry via
+// (addLinksBatch/reconcileTimelineEntriesForPage/upsertChunks) now self-retry via
 // engine-level wrap; call sites here will be unwrapped in T4. Re-exported
 // from this module for now to preserve any out-of-tree callers' import paths;
 // the next major version may drop the re-export.
@@ -65,12 +65,10 @@ import { runSlidingPool } from '../core/worker-pool.ts';
 import { isAborted } from '../core/abort-check.ts';
 import { parseWorkers, resolveWorkersWithClamp } from '../core/sync-concurrency.ts';
 import { ensureWellFormed } from '../core/text-safe.ts';
+import { PAGE_TIMELINE_MANAGED_BY } from '../core/timeline-reconcile.ts';
 
-// Batch size for addLinksBatch / addTimelineEntriesBatch.
-// Postgres bind-parameter limit is 65535. Links use 4 cols/row → 16K hard ceiling;
-// timeline uses 5 cols/row → 13K hard ceiling. 100 is conservative on round-trip
-// count but safe at any future schema width and keeps per-batch error blast radius
-// small (a malformed row aborts at most 100, not thousands).
+// Batch size for addLinksBatch. Postgres's bind-parameter limit is 65535;
+// 100 is conservative and keeps each error blast radius small.
 const BATCH_SIZE = 100;
 
 // v0.42.7 (#1696): keyset batch size for `extract --stale`. SMALL by design —
@@ -582,15 +580,9 @@ export interface ExtractOpts {
   /**
    * Brain source id to stamp on extracted fs-walk rows (#1747 / #1503).
    *
-   * The fs-walk extractors build LinkBatchInput / TimelineBatchInput rows
-   * with no source_id, so addLinksBatch / addTimelineEntriesBatch map
-   * missing → literal 'default'. On a brain whose content lives in a
-   * non-'default' source (e.g. 'wiki'), the batch INSERT's
-   * `JOIN pages ON (slug, source_id='default')` drops EVERY row → 0
-   * inserted, no error (the "created 0 from N pages" silent no-op).
-   * Threading the resolved source id here stamps from/to/origin_source_id
-   * so the JOIN matches. When undefined, rows fall back to 'default' as
-   * before (single-'default'-source brains unaffected).
+   * The fs-walk link extractor builds LinkBatchInput rows with no source_id,
+   * while page timelines reconcile by an explicit source id. Threading the
+   * resolved id here keeps both writes attached to the intended source.
    */
   sourceId?: string;
 }
@@ -1073,7 +1065,6 @@ async function extractForSlugs(
   const mentionsOnly = inferenceMode === 'mentions-only';
 
   const linkBatch: LinkBatchInput[] = [];
-  const timelineBatch: TimelineBatchInput[] = [];
 
   async function flushLinks() {
     if (linkBatch.length === 0) return;
@@ -1093,25 +1084,9 @@ async function extractForSlugs(
     }
   }
 
-  async function flushTimeline() {
-    if (timelineBatch.length === 0) return;
-    const snapshot = timelineBatch.slice();
-    timelineBatch.length = 0;
-    try {
-      timelineCreated += await engine.addTimelineEntriesBatch(snapshot, { auditSite: 'extract.timeline_inc' });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (!jsonMode) console.error(`  timeline batch error (${snapshot.length} rows lost): ${msg}`);
-    }
-  }
-
-  // v0.41.15.0 (T7): sliding-pool fan-out. The shared linkBatch /
-  // timelineBatch arrays + flush functions still serve correctly because
-  // every push + length check + length=0 reset is synchronous JS — no
-  // await between the check and the reset means workers never see a
-  // half-cleared batch. flushLinks/flushTimeline snapshot before await,
-  // so the second worker's pushes during the await land cleanly in the
-  // (now-empty) batch for the next flush.
+  // v0.41.15.0 (T7): sliding-pool fan-out. The shared linkBatch + flush
+  // function remain safe because every push/check/reset is synchronous JS.
+  // Timeline candidates reconcile page-by-page and hold no shared buffer.
   await runSlidingPool({
     items: slugs,
     workers,
@@ -1153,21 +1128,20 @@ async function extractForSlugs(
 
         if (doTimeline) {
           const entries = extractTimelineFromContent(content, slug);
-          for (const entry of entries) {
-            if (dryRun) {
+          if (dryRun) {
+            for (const entry of entries) {
               if (!jsonMode) console.log(`  ${entry.slug}: ${entry.date} — ${entry.summary}`);
               timelineCreated++;
-            } else {
-              timelineBatch.push({
-                slug: entry.slug,
-                date: entry.date,
-                source: entry.source,
-                summary: entry.summary,
-                detail: entry.detail,
-                source_id: sourceId,
-              });
-              if (timelineBatch.length >= BATCH_SIZE) await flushTimeline();
             }
+          } else {
+            const reconciled = await engine.reconcileTimelineEntriesForPage(
+              sourceId,
+              slug,
+              PAGE_TIMELINE_MANAGED_BY,
+              entries,
+              { auditSite: 'extract.timeline_inc', signal },
+            );
+            timelineCreated += reconciled.created;
           }
         }
 
@@ -1178,7 +1152,6 @@ async function extractForSlugs(
   });
 
   await flushLinks();
-  await flushTimeline();
   progress.finish();
 
   if (!jsonMode) {
@@ -1293,8 +1266,7 @@ async function extractTimelineFromDir(
   // v0.41.15.0 (T7): in-process worker count. Default 1.
   workers: number = 1,
   signal?: AbortSignal,
-  // #1747/#1503: stamp resolved brain source id so addTimelineEntriesBatch
-  // matches non-'default' source pages.
+  // #1747/#1503: reconcile against the resolved non-'default' source page.
   sourceId = 'default',
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
@@ -1306,22 +1278,6 @@ async function extractTimelineFromDir(
   const dryRunSeen = dryRun ? new Set<string>() : null;
 
   let created = 0;
-  const batch: TimelineBatchInput[] = [];
-  async function flush() {
-    if (batch.length === 0) return;
-    const snapshot = batch.slice();
-    batch.length = 0;
-    try {
-      created += await engine.addTimelineEntriesBatch(snapshot, { auditSite: 'extract.timeline_fs' });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (jsonMode) {
-        process.stderr.write(JSON.stringify({ event: 'batch_error', size: snapshot.length, error: msg }) + '\n');
-      } else {
-        console.error(`  batch error (${snapshot.length} timeline rows lost): ${msg}`);
-      }
-    }
-  }
 
   await runSlidingPool({
     items: files,
@@ -1334,30 +1290,30 @@ async function extractTimelineFromDir(
       try {
         const content = readFileSync(file.path, 'utf-8');
         const slug = pathToSlug(file.relPath);
-        for (const entry of extractTimelineFromContent(content, slug)) {
+        const entries = extractTimelineFromContent(content, slug);
+        for (const entry of entries) {
           if (dryRunSeen) {
             const key = `${entry.slug}::${entry.date}::${entry.summary}`;
             if (dryRunSeen.has(key)) continue;
             dryRunSeen.add(key);
             if (!jsonMode) console.log(`  ${entry.slug}: ${entry.date} — ${entry.summary}`);
             created++;
-          } else {
-            batch.push({
-              slug: entry.slug,
-              date: entry.date,
-              source: entry.source,
-              summary: entry.summary,
-              detail: entry.detail,
-              source_id: sourceId,
-            });
-            if (batch.length >= BATCH_SIZE) await flush();
           }
+        }
+        if (!dryRunSeen) {
+          const reconciled = await engine.reconcileTimelineEntriesForPage(
+            sourceId,
+            slug,
+            PAGE_TIMELINE_MANAGED_BY,
+            entries,
+            { auditSite: 'extract.timeline_fs', signal },
+          );
+          created += reconciled.created;
         }
       } catch { /* skip unreadable */ }
       progress.tick(1);
     },
   });
-  await flush();
   progress.finish();
 
   if (!jsonMode) {
@@ -1413,16 +1369,24 @@ export async function extractTimelineForSlugs(
   // v0.18.0+ multi-source: source-qualify so timeline rows don't fan out
   // across every source containing the slug (the addTimelineEntry's
   // INSERT...SELECT-from-pages fan-out was Data R1's HIGH 2).
-  const entryOpts = opts?.sourceId ? { sourceId: opts.sourceId } : undefined;
+  const sourceId = opts?.sourceId ?? 'default';
   let created = 0;
   for (const slug of slugs) {
     const filePath = join(repoPath, slug + '.md');
     if (!existsSync(filePath)) continue;
     try {
       const content = readFileSync(filePath, 'utf-8');
-      for (const entry of extractTimelineFromContent(content, slug)) {
-        try { await engine.addTimelineEntry(entry.slug, { date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail }, entryOpts); created++; } catch { /* skip */ } // gbrain-allow-direct-insert: gbrain extract single-row fallback for timeline entries
-      }
+      const entries = extractTimelineFromContent(content, slug);
+      try {
+        const reconciled = await engine.reconcileTimelineEntriesForPage(
+          sourceId,
+          slug,
+          PAGE_TIMELINE_MANAGED_BY,
+          entries,
+          { auditSite: 'extract.timeline_inc' },
+        );
+        created += reconciled.created;
+      } catch { /* skip */ }
     } catch { /* skip */ }
   }
   return created;
@@ -1646,7 +1610,7 @@ async function extractTimelineFromDB(
   opts?: { sourceIdFilter?: string },
 ): Promise<{ created: number; pages: number }> {
   // v0.32.8: listAllPageRefs enumerates (slug, source_id) pairs so we can
-  // thread sourceId to getPage and addTimelineEntriesBatch. Pre-fix used
+  // thread sourceId to getPage and timeline reconciliation. Pre-fix used
   // getAllSlugs() which collapsed same-slug-different-source pages.
   //
   // v0.37.7.0 #1204: when sourceIdFilter is set, scope the walk to one
@@ -1660,25 +1624,8 @@ async function extractTimelineFromDB(
   const progress = createProgress(cliOptsToProgressOptions(getCliOptions()));
   progress.start('extract.timeline_db', allRefs.length);
 
-  // Dedup in dry-run only — DB enforces uniqueness via ON CONFLICT in batch writes.
+  // Dedup in dry-run only — apply mode reconciles one owned projection/page.
   const dryRunSeen = dryRun ? new Set<string>() : null;
-
-  const batch: TimelineBatchInput[] = [];
-  async function flush() {
-    if (batch.length === 0) return;
-    const snapshot = batch.slice();
-    batch.length = 0;
-    try {
-      created += await engine.addTimelineEntriesBatch(snapshot, { auditSite: 'extract.timeline_db' });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (jsonMode) {
-        process.stderr.write(JSON.stringify({ event: 'batch_error', size: snapshot.length, error: msg }) + '\n');
-      } else {
-        console.error(`  batch error (${snapshot.length} timeline rows lost): ${msg}`);
-      }
-    }
-  }
 
   for (const { slug, source_id } of allRefs) {
     const page = await engine.getPage(slug, { sourceId: source_id });
@@ -1707,17 +1654,21 @@ async function extractTimelineFromDB(
           console.log(`  ${slug}: ${entry.date} — ${entry.summary}`);
         }
         created++;
-      } else {
-        // v0.32.8 F4: thread source_id so the JOIN matches the right page
-        // when two sources share the same slug.
-        batch.push({ slug, date: entry.date, summary: entry.summary, detail: entry.detail || '', source_id });
-        if (batch.length >= BATCH_SIZE) await flush();
       }
+    }
+    if (!dryRunSeen) {
+      const reconciled = await engine.reconcileTimelineEntriesForPage(
+        source_id,
+        slug,
+        PAGE_TIMELINE_MANAGED_BY,
+        entries,
+        { auditSite: 'extract.timeline_db' },
+      );
+      created += reconciled.created;
     }
     processed++;
     progress.tick(1);
   }
-  await flush();
   progress.finish();
 
   if (!jsonMode) {
@@ -1738,8 +1689,8 @@ async function extractTimelineFromDB(
  * them (NON-swallowing — a flush throw propagates and aborts the sweep), THEN
  * stamp the batch's pages. A page is never stamped fresh with lost edges; a
  * crash mid-sweep leaves the unflushed/unstamped pages stale and they
- * re-extract next run (addLinksBatch ON CONFLICT DO NOTHING + timeline dedup
- * make re-extraction idempotent). EVERY processed page is stamped, including
+ * re-extract next run (addLinksBatch ON CONFLICT DO NOTHING + timeline
+ * reconciliation make re-extraction idempotent). EVERY processed page is stamped, including
  * zero-link pages — they WERE processed.
  */
 async function extractStaleFromDB(
@@ -1809,7 +1760,11 @@ async function extractStaleFromDB(
     if (rows.length === 0) break;
 
     const linkRows: LinkBatchInput[] = [];
-    const timelineRows: TimelineBatchInput[] = [];
+    const timelinePages: Array<{
+      sourceId: string;
+      slug: string;
+      candidates: TimelineReconcileCandidate[];
+    }> = [];
     const processedRefs: Array<{ slug: string; source_id: string; extractedAt: string }> = [];
 
     for (const page of rows) {
@@ -1828,9 +1783,11 @@ async function extractStaleFromDB(
           to_source_id: r.toSourceId, origin_source_id: page.source_id,
         });
       }
-      for (const entry of parseTimelineEntries(fullContent)) {
-        timelineRows.push({ slug: page.slug, date: entry.date, summary: entry.summary, detail: entry.detail || '', source_id: page.source_id });
-      }
+      timelinePages.push({
+        sourceId: page.source_id,
+        slug: page.slug,
+        candidates: parseTimelineEntries(fullContent),
+      });
       // EVERY processed page is stamped (incl. zero-link pages). D4 race fix:
       // stamp with the row's READ updated_at, NOT now() — a concurrent edit
       // landing between this SELECT and the stamp advances updated_at past the
@@ -1845,14 +1802,21 @@ async function extractStaleFromDB(
     }
 
     // Flush NON-swallowing (CDX-4): a throw here propagates out of the sweep so
-    // the batch's pages stay unstamped and re-extract next run. addLinksBatch is
-    // ON CONFLICT DO NOTHING + timeline dedups, so partial-chunk writes are
-    // idempotent on re-extraction.
+    // the batch's pages stay unstamped and re-extract next run. addLinksBatch
+    // conflict handling and per-page timeline reconciliation make partial
+    // writes idempotent on re-extraction.
     for (let i = 0; i < linkRows.length; i += BATCH_SIZE) {
       linksCreated += await engine.addLinksBatch(linkRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' }); // gbrain-allow-direct-insert: gbrain extract --stale — canonical link reconciliation from markdown body
     }
-    for (let i = 0; i < timelineRows.length; i += BATCH_SIZE) {
-      timelineCreated += await engine.addTimelineEntriesBatch(timelineRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' });
+    for (const page of timelinePages) {
+      const reconciled = await engine.reconcileTimelineEntriesForPage(
+        page.sourceId,
+        page.slug,
+        PAGE_TIMELINE_MANAGED_BY,
+        page.candidates,
+        { auditSite: 'extract.stale' },
+      );
+      timelineCreated += reconciled.created;
     }
     // Stamp LAST, directly (not the swallowing stampExtracted) so a stamp
     // failure surfaces instead of looping forever.

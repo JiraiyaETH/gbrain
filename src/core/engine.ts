@@ -195,6 +195,22 @@ export interface TimelineBatchInput {
   source_id?: string;
 }
 
+/** Current page-content candidate for provenance-aware timeline reconciliation. */
+export interface TimelineReconcileCandidate {
+  date: string;
+  source?: string;
+  summary: string;
+  detail?: string;
+}
+
+export interface TimelineReconcileResult {
+  pageFound: boolean;
+  created: number;
+  updated: number;
+  deleted: number;
+  candidates: number;
+}
+
 /**
  * A single dedicated database connection, isolated from the engine's pool.
  *
@@ -1415,6 +1431,19 @@ export interface BrainEngine {
    * Callers MUST NOT wrap externally; see {@link BatchOpts} retry contract.
    */
   addTimelineEntriesBatch(entries: TimelineBatchInput[], opts?: BatchOpts): Promise<number>;
+  /**
+   * Replace one parser-owned page projection transactionally. Current
+   * candidates are upserted by stable origin key; absent owned rows are
+   * deleted. Rows owned by any other producer (including NULL/manual) are
+   * never selected.
+   */
+  reconcileTimelineEntriesForPage(
+    sourceId: string,
+    slug: string,
+    managedBy: string,
+    candidates: TimelineReconcileCandidate[],
+    opts?: BatchOpts,
+  ): Promise<TimelineReconcileResult>;
   getTimeline(slug: string, opts?: TimelineOpts): Promise<TimelineEntry[]>;
 
   // v0.42.x — Life Chronicle (#2390) timeline reads. All filter the depth page

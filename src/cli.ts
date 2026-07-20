@@ -292,6 +292,25 @@ async function main() {
     return;
   }
 
+  // `timeline` is normally the shared get_timeline operation. The repair
+  // namespace is local-only and mutating, so intercept only this explicit
+  // subcommand before generic operation argument parsing.
+  if (command === 'timeline' && subArgs[0] === 'repair') {
+    const repairArgs = subArgs.slice(1);
+    const { runTimelineRepair } = await import('./commands/timeline-repair.ts');
+    if (repairArgs.includes('--help') || repairArgs.includes('-h')) {
+      await runTimelineRepair(null, repairArgs);
+      return;
+    }
+    const engine = await connectEngine();
+    try {
+      await runTimelineRepair(engine, repairArgs);
+    } finally {
+      await finishCliTeardown({ engine });
+    }
+    return;
+  }
+
   // Per-command --help
   if (hasHelpFlag(subArgs)) {
     const op = cliOps.get(command) ?? cliAliases.get(command);
@@ -2292,6 +2311,8 @@ TAGS
 
 TIMELINE
   timeline [<slug>]                  View timeline
+  timeline repair [--content]        Dry-run timeline projection repair
+        [--apply] [--json]           Apply explicitly; JSON for automation
   timeline-add <slug> <date> <text>  Add timeline entry
 
 TOOLS

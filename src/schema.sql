@@ -536,6 +536,10 @@ CREATE TABLE IF NOT EXISTS timeline_entries (
   source   TEXT    NOT NULL DEFAULT '',
   summary  TEXT    NOT NULL,
   detail   TEXT    NOT NULL DEFAULT '',
+  -- Page-content extraction owns only rows carrying this explicit provenance.
+  -- NULL remains the safe default for manual/meeting/enrichment writers.
+  managed_by TEXT,
+  origin_key TEXT,
   -- v0.42.x (Life Chronicle #2390): when this row is the date-index projection
   -- of a `type:event` page, event_page_id points at that event page; page_id
   -- stays the depth/meeting page. NULL for ordinary timeline entries. Reads
@@ -552,6 +556,9 @@ CREATE INDEX IF NOT EXISTS idx_timeline_date ON timeline_entries(date);
 -- include `source` so distinct meeting provenance survives. Legacy rows
 -- have source='' (schema default) so legacy dedup behavior is preserved.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_timeline_dedup ON timeline_entries(page_id, date, summary, source);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_timeline_managed_origin
+  ON timeline_entries(page_id, managed_by, origin_key)
+  WHERE managed_by IS NOT NULL AND origin_key IS NOT NULL;
 -- v0.42.x (Life Chronicle): event-projection lookup + dedup. Partial
 -- (event_page_id IS NOT NULL) so ordinary timeline rows are unaffected.
 CREATE INDEX IF NOT EXISTS idx_timeline_event_page ON timeline_entries(event_page_id) WHERE event_page_id IS NOT NULL;

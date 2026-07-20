@@ -18,6 +18,7 @@ import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import type { ChunkInput, SearchResult } from '../../src/core/types.ts';
 import type { BrainEngine } from '../../src/core/engine.ts';
 import { hasDatabase, setupDB, teardownDB, getEngine } from './helpers.ts';
+import { PAGE_TIMELINE_MANAGED_BY } from '../../src/core/timeline-reconcile.ts';
 
 const SKIP_PG = !hasDatabase();
 const describeBoth = SKIP_PG ? describe.skip : describe;
@@ -193,6 +194,70 @@ describeBoth('Engine parity — Postgres vs PGLite', () => {
     });
     expect(pgOptIn.map((r: SearchResult) => r.slug)).toContain('test/parity-fixture');
     expect(pgliteOptIn.map((r: SearchResult) => r.slug)).toContain('test/parity-fixture');
+  });
+
+  test('timeline parser reconciliation has identical Postgres/PGLite semantics', async () => {
+    const slug = 'wiki/timeline-reconcile-parity';
+    const reconcile = async (eng: BrainEngine) => {
+      await eng.putPage(slug, {
+        type: 'note', title: 'Timeline Reconcile Parity', compiled_truth: 'body', timeline: '',
+      });
+      await eng.addTimelineEntry(slug, {
+        date: '2026-07-01', source: 'manual', summary: 'Protected operator note', detail: 'keep',
+      });
+      await eng.reconcileTimelineEntriesForPage('default', slug, PAGE_TIMELINE_MANAGED_BY, [{
+        date: '2026-07-02', source: 'Board', summary: 'Approved plan', detail: 'old detail',
+      }]);
+      const detailEdit = await eng.reconcileTimelineEntriesForPage('default', slug, PAGE_TIMELINE_MANAGED_BY, [{
+        date: '2026-07-02', source: 'Board', summary: 'Approved plan', detail: 'new detail',
+      }]);
+      const reword = await eng.reconcileTimelineEntriesForPage('default', slug, PAGE_TIMELINE_MANAGED_BY, [{
+        date: '2026-07-02', source: 'Board', summary: 'Approved revised plan', detail: 'new detail',
+      }]);
+      const rows = await eng.executeRaw<{
+        date: string; source: string; summary: string; detail: string;
+        managed_by: string | null; has_origin: boolean;
+      }>(
+        `SELECT te.date::text AS date, te.source, te.summary, te.detail, te.managed_by,
+                (te.origin_key IS NOT NULL) AS has_origin
+           FROM timeline_entries te
+           JOIN pages p ON p.id = te.page_id
+          WHERE p.source_id = 'default' AND p.slug = $1
+          ORDER BY te.date, te.source, te.summary`,
+        [slug],
+      );
+      const empty = await eng.reconcileTimelineEntriesForPage(
+        'default', slug, PAGE_TIMELINE_MANAGED_BY, [],
+      );
+      const finalRows = await eng.executeRaw<{ source: string; summary: string; managed_by: string | null }>(
+        `SELECT te.source, te.summary, te.managed_by
+           FROM timeline_entries te
+           JOIN pages p ON p.id = te.page_id
+          WHERE p.source_id = 'default' AND p.slug = $1`,
+        [slug],
+      );
+      return { detailEdit, reword, rows, empty, finalRows };
+    };
+
+    const pg = await reconcile(pgEngine);
+    const pglite = await reconcile(pgliteEngine);
+    expect(pglite).toEqual(pg);
+    expect(pg.detailEdit).toMatchObject({ created: 0, updated: 1, deleted: 0 });
+    expect(pg.reword).toMatchObject({ created: 1, deleted: 1 });
+    expect(pg.rows).toEqual([
+      {
+        date: '2026-07-01', source: 'manual', summary: 'Protected operator note', detail: 'keep',
+        managed_by: null, has_origin: false,
+      },
+      {
+        date: '2026-07-02', source: 'Board', summary: 'Approved revised plan', detail: 'new detail',
+        managed_by: PAGE_TIMELINE_MANAGED_BY, has_origin: true,
+      },
+    ]);
+    expect(pg.empty.deleted).toBe(1);
+    expect(pg.finalRows).toEqual([
+      { source: 'manual', summary: 'Protected operator note', managed_by: null },
+    ]);
   });
 
   test('detail=high produces a different ranking than default on at least one engine', async () => {

@@ -171,6 +171,10 @@ const REQUIRED_BOOTSTRAP_COVERAGE: ForwardReference[] = [
   // v121 — referenced by the timeline event lookup and dedup indexes before
   // the numbered migration can add the column on an existing brain.
   { kind: 'column', table: 'timeline_entries', column: 'event_page_id' },
+  // v124 — forward-referenced by idx_timeline_managed_origin in both static
+  // schema blobs before the numbered migration runs on legacy brains.
+  { kind: 'column', table: 'timeline_entries', column: 'managed_by' },
+  { kind: 'column', table: 'timeline_entries', column: 'origin_key' },
 ];
 
 test('applyForwardReferenceBootstrap covers every forward reference declared in REQUIRED_BOOTSTRAP_COVERAGE', async () => {
@@ -243,6 +247,10 @@ test('applyForwardReferenceBootstrap covers every forward reference declared in 
       DROP INDEX IF EXISTS idx_oauth_clients_federated_read;
       ALTER TABLE oauth_clients DROP COLUMN IF EXISTS source_id;
       ALTER TABLE oauth_clients DROP COLUMN IF EXISTS federated_read;
+
+      DROP INDEX IF EXISTS idx_timeline_managed_origin;
+      ALTER TABLE timeline_entries DROP COLUMN IF EXISTS managed_by;
+      ALTER TABLE timeline_entries DROP COLUMN IF EXISTS origin_key;
 
       -- v0.40.3.0 v90 + v91 column strips so applyForwardReferenceBootstrap
       -- has work to do. Only strip pages columns + the trigger; sources
@@ -328,6 +336,10 @@ test('after bootstrap, PGLITE_SCHEMA_SQL replays without crashing on missing for
       ALTER TABLE pages DROP COLUMN IF EXISTS import_filename;
       ALTER TABLE pages DROP COLUMN IF EXISTS salience_touched_at;
       ALTER TABLE pages DROP COLUMN IF EXISTS emotional_weight;
+
+      DROP INDEX IF EXISTS idx_timeline_managed_origin;
+      ALTER TABLE timeline_entries DROP COLUMN IF EXISTS managed_by;
+      ALTER TABLE timeline_entries DROP COLUMN IF EXISTS origin_key;
     `);
 
     // Bootstrap, then schema replay. Either step crashing fails the test.

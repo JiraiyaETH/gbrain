@@ -6,7 +6,7 @@ import type {
   BrainEngine,
   GetHealthOpts,
   BatchOpts,
-  LinkBatchInput, TimelineBatchInput,
+  LinkBatchInput, TimelineBatchInput, TimelineReconcileCandidate, TimelineReconcileResult,
   ReservedConnection,
   DreamVerdict, DreamVerdictInput,
   FileSpec, FileRow,
@@ -52,6 +52,7 @@ import { deriveResolutionTuple, finalizeScorecard } from './takes-resolution.ts'
 import { normalizeWeightForStorage } from './takes-fence.ts';
 import { executeRawJsonb } from './sql-query.ts';
 import { sanitizeForJsonb, buildLinkRows, buildTimelineRows, buildTakeRows } from './batch-rows.ts';
+import { reconcileTimelineEntriesForPageImpl } from './timeline-reconcile.ts';
 import { GBrainError, PAGE_SORT_SQL, ENRICH_ORDER_SQL } from './types.ts';
 import { finalizeLastSeen } from './chronicle/last-seen.ts';
 import { computeAnomaliesFromBuckets } from './cycle/anomaly.ts';
@@ -554,7 +555,11 @@ export class PGLiteEngine implements BrainEngine {
         EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema='public' AND table_name='timeline_entries') AS timeline_entries_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
-                WHERE table_schema='public' AND table_name='timeline_entries' AND column_name='event_page_id') AS timeline_event_page_id_exists
+                WHERE table_schema='public' AND table_name='timeline_entries' AND column_name='event_page_id') AS timeline_event_page_id_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='timeline_entries' AND column_name='managed_by') AS timeline_managed_by_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='timeline_entries' AND column_name='origin_key') AS timeline_origin_key_exists
     `);
     const probe = rows[0] as {
       pages_exists: boolean;
@@ -599,6 +604,8 @@ export class PGLiteEngine implements BrainEngine {
       pages_links_extracted_at_exists: boolean;
       timeline_entries_exists: boolean;
       timeline_event_page_id_exists: boolean;
+      timeline_managed_by_exists: boolean;
+      timeline_origin_key_exists: boolean;
     };
 
     const needsPagesBootstrap = probe.pages_exists && !probe.source_id_exists;
@@ -677,6 +684,10 @@ export class PGLiteEngine implements BrainEngine {
     const needsPagesLinksExtractedAt = probe.pages_exists && !probe.pages_links_extracted_at_exists;
     // v121: schema-blob indexes reference event_page_id before migrations run.
     const needsTimelineEventPageId = probe.timeline_entries_exists && !probe.timeline_event_page_id_exists;
+    // v124: schema-blob partial unique index references both provenance
+    // columns before the numbered migration can add them on legacy brains.
+    const needsTimelineParserProvenance = probe.timeline_entries_exists
+      && (!probe.timeline_managed_by_exists || !probe.timeline_origin_key_exists);
 
     // Fresh installs (no tables yet) and modern brains both no-op.
     if (!needsPagesBootstrap && !needsLinksBootstrap && !needsChunksBootstrap
@@ -689,7 +700,8 @@ export class PGLiteEngine implements BrainEngine {
         && !needsContextualRetrievalColumns && !needsPagesGeneration
         && !needsPagesEmbeddingSignature
         && !needsPagesLinksExtractedAt
-        && !needsTimelineEventPageId) return;
+        && !needsTimelineEventPageId
+        && !needsTimelineParserProvenance) return;
 
     process.stderr.write('  Pre-v0.21 brain detected, applying forward-reference bootstrap\n');
 
@@ -942,6 +954,15 @@ export class PGLiteEngine implements BrainEngine {
       // source of truth for the FK and indexes and runs idempotently afterward.
       await this.db.exec(`
         ALTER TABLE timeline_entries ADD COLUMN IF NOT EXISTS event_page_id INTEGER;
+      `);
+    }
+
+    if (needsTimelineParserProvenance) {
+      // Add only the forward-referenced columns. Migration v124 remains the
+      // source of truth for the partial unique index.
+      await this.db.exec(`
+        ALTER TABLE timeline_entries ADD COLUMN IF NOT EXISTS managed_by TEXT;
+        ALTER TABLE timeline_entries ADD COLUMN IF NOT EXISTS origin_key TEXT;
       `);
     }
   }
@@ -3437,6 +3458,21 @@ export class PGLiteEngine implements BrainEngine {
       [{ rows }],
     );
     return result.length;
+  }
+
+  async reconcileTimelineEntriesForPage(
+    sourceId: string,
+    slug: string,
+    managedBy: string,
+    candidates: TimelineReconcileCandidate[],
+    opts?: BatchOpts,
+  ): Promise<TimelineReconcileResult> {
+    return this.batchRetry(
+      opts?.auditSite ?? 'reconcileTimelineEntriesForPage',
+      opts?.signal,
+      () => reconcileTimelineEntriesForPageImpl(this, sourceId, slug, managedBy, candidates),
+      candidates.length,
+    );
   }
 
   async getTimeline(slug: string, opts?: TimelineOpts): Promise<TimelineEntry[]> {

@@ -5596,6 +5596,33 @@ export const MIGRATIONS: Migration[] = [
       console.log(`  v123: trigger functions recreated with language='${lang}' + backfilled existing rows`);
     },
   },
+  {
+    version: 124,
+    name: 'timeline_entries_parser_provenance',
+    // Page-derived timeline rows are a projection of mutable page content.
+    // Nullable provenance keeps every legacy/manual/enrichment writer outside
+    // parser reconciliation. The partial unique key gives each parser one
+    // stable row per normalized source line while allowing NULL legacy rows.
+    idempotent: true,
+    sql: `
+      ALTER TABLE timeline_entries ADD COLUMN IF NOT EXISTS managed_by TEXT;
+      ALTER TABLE timeline_entries ADD COLUMN IF NOT EXISTS origin_key TEXT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_timeline_managed_origin
+        ON timeline_entries(page_id, managed_by, origin_key)
+        WHERE managed_by IS NOT NULL AND origin_key IS NOT NULL;
+    `,
+    sqlFor: {
+      pglite: `
+        ALTER TABLE timeline_entries ADD COLUMN IF NOT EXISTS managed_by TEXT;
+        ALTER TABLE timeline_entries ADD COLUMN IF NOT EXISTS origin_key TEXT;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_timeline_managed_origin
+          ON timeline_entries(page_id, managed_by, origin_key)
+          WHERE managed_by IS NOT NULL AND origin_key IS NOT NULL;
+      `,
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

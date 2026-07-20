@@ -131,21 +131,21 @@ describe('runExtractCore — incremental cycle path (#417)', () => {
     expect(result.timeline_entries_created).toBe(0);
   });
 
-  test('6. dryRun: true does not invoke addLinksBatch / addTimelineEntriesBatch', async () => {
+  test('6. dryRun: true does not invoke addLinksBatch / timeline reconciliation', async () => {
     await seedPage('people/alice-example', '# alice\n\n[bob](people/bob-example)');
     await seedPage('people/bob-example', '# bob');
 
     let linksBatchCalled = false;
     let timelineBatchCalled = false;
     const originalAddLinks = engine.addLinksBatch.bind(engine);
-    const originalAddTimeline = engine.addTimelineEntriesBatch.bind(engine);
+    const originalReconcileTimeline = engine.reconcileTimelineEntriesForPage.bind(engine);
     (engine as unknown as { addLinksBatch: typeof originalAddLinks }).addLinksBatch = async (...args) => {
       linksBatchCalled = true;
       return originalAddLinks(...args);
     };
-    (engine as unknown as { addTimelineEntriesBatch: typeof originalAddTimeline }).addTimelineEntriesBatch = async (...args) => {
+    (engine as unknown as { reconcileTimelineEntriesForPage: typeof originalReconcileTimeline }).reconcileTimelineEntriesForPage = async (...args) => {
       timelineBatchCalled = true;
-      return originalAddTimeline(...args);
+      return originalReconcileTimeline(...args);
     };
 
     await runExtractCore(engine as unknown as BrainEngine, {

@@ -18,6 +18,7 @@ import { dedupResults } from './search/dedup.ts';
 import { captureEvalCandidate, isEvalCaptureEnabled, isEvalScrubEnabled } from './eval-capture.ts';
 import type { HybridSearchMeta } from './types.ts';
 import { extractPageLinks, frontmatterMappingsFromPack, isAutoLinkEnabled, isAutoTimelineEnabled, isGlobalBasenameEnabled, resolveLinkInferenceMode, parseTimelineEntries, makeResolver, type UnresolvedFrontmatterRef } from './link-extraction.ts';
+import { PAGE_TIMELINE_MANAGED_BY } from './timeline-reconcile.ts';
 import { loadActivePackBestEffort } from './schema-pack/best-effort.ts';
 import { isFactsBackstopEligible } from './facts/eligibility.ts';
 import { stripTakesFence } from './takes-fence.ts';
@@ -1188,30 +1189,23 @@ const put_page: Operation = {
         autoLinks = { error: e instanceof Error ? e.message : String(e) };
       }
       // Timeline extraction mirrors auto-link: runs post-write, best-effort,
-      // never blocks the write. ON CONFLICT DO NOTHING in
-      // addTimelineEntriesBatch keeps it idempotent across re-writes, so a
-      // page that's edited and re-written won't duplicate its own timeline.
+      // never blocks the write. Reconciliation owns only page-parser rows, so
+      // edits and removals converge without touching manual/meeting rows.
       try {
         const enabled = await isAutoTimelineEnabled(ctx.engine);
         if (enabled) {
           const fullContent = result.parsedPage.compiled_truth + '\n' + result.parsedPage.timeline;
           const entries = parseTimelineEntries(fullContent);
-          if (entries.length > 0) {
-            const batch = entries.map(e => ({
-              slug,
-              date: e.date,
-              summary: e.summary,
-              detail: e.detail || '',
-              ...(ctx.sourceId ? { source_id: ctx.sourceId } : {}),
-            }));
-            // v0.41.18.0: engine self-retries on Supavisor circuit-breaker
-            // recovery. auditSite label routes the audit JSONL emission so
-            // operators can attribute losses to the agent-write path.
-            const created = await ctx.engine.addTimelineEntriesBatch(batch, { auditSite: 'mcp.put_page.autolink' });
-            autoTimeline = { created };
-          } else {
-            autoTimeline = { created: 0 };
-          }
+          // Empty candidates are intentional: they remove prior page-parser
+          // rows after the Timeline section is deleted.
+          const reconciled = await ctx.engine.reconcileTimelineEntriesForPage(
+            ctx.sourceId ?? 'default',
+            slug,
+            PAGE_TIMELINE_MANAGED_BY,
+            entries,
+            { auditSite: 'mcp.put_page.autolink' },
+          );
+          autoTimeline = { created: reconciled.created };
         }
       } catch (e) {
         autoTimeline = { error: e instanceof Error ? e.message : String(e) };

@@ -2243,3 +2243,53 @@ describe('v117 — context_volunteer_events_table', () => {
     expect(left.map(r => r.slug)).toEqual(['people/alice-example']);
   });
 });
+
+// Timeline page-parser provenance: nullable by design so every pre-existing
+// manual/enrichment/meeting writer stays outside content reconciliation.
+describe('v124 — timeline_entries_parser_provenance', () => {
+  let engine: PGLiteEngine;
+
+  beforeAll(async () => {
+    engine = new PGLiteEngine();
+    await engine.connect({});
+    await engine.initSchema();
+  }, 60_000);
+
+  afterAll(async () => { if (engine) await engine.disconnect(); }, 60_000);
+
+  test('migration is idempotent and lockstep for Postgres/PGLite', () => {
+    const migration = MIGRATIONS.find(m => m.version === 124);
+    expect(migration).toBeDefined();
+    expect(migration!.name).toBe('timeline_entries_parser_provenance');
+    expect(migration!.idempotent).toBe(true);
+    for (const sql of [migration!.sql, migration!.sqlFor?.pglite]) {
+      expect(sql).toContain('managed_by TEXT');
+      expect(sql).toContain('origin_key TEXT');
+      expect(sql).toContain('idx_timeline_managed_origin');
+      expect(sql).toContain('WHERE managed_by IS NOT NULL AND origin_key IS NOT NULL');
+    }
+  });
+
+  test('columns are nullable and the partial unique index exists', async () => {
+    const columns = await engine.executeRaw<{ column_name: string; is_nullable: string }>(
+      `SELECT column_name, is_nullable
+         FROM information_schema.columns
+        WHERE table_name = 'timeline_entries'
+          AND column_name IN ('managed_by', 'origin_key')
+        ORDER BY column_name`,
+    );
+    expect(columns).toEqual([
+      { column_name: 'managed_by', is_nullable: 'YES' },
+      { column_name: 'origin_key', is_nullable: 'YES' },
+    ]);
+    const indexes = await engine.executeRaw<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes
+        WHERE tablename = 'timeline_entries'
+          AND indexname = 'idx_timeline_managed_origin'`,
+    );
+    expect(indexes).toHaveLength(1);
+    expect(indexes[0].indexdef).toContain('(page_id, managed_by, origin_key)');
+    expect(indexes[0].indexdef).toContain('managed_by IS NOT NULL');
+    expect(indexes[0].indexdef).toContain('origin_key IS NOT NULL');
+  });
+});

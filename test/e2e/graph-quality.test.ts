@@ -217,6 +217,90 @@ title: Eve
     expect(entries.length).toBe(1);
   });
 
+  test('auto-timeline reconciles rewords/deletions, updates detail in place, and preserves manual rows', async () => {
+    const putOp = operationsByName['put_page'];
+    const frontmatter = `---
+type: person
+title: Timeline Reconcile
+---`;
+    await putOp.handler(makeContext(), {
+      slug: 'people/timeline-reconcile',
+      content: `${frontmatter}
+
+## Timeline
+
+- **2026-03-15** | Shipped
+  Initial detail
+`,
+    });
+    await engine.addTimelineEntry('people/timeline-reconcile', {
+      date: '2026-03-16', source: 'manual', summary: 'Operator note', detail: 'keep',
+    });
+    const before = await engine.executeRaw<{ id: string }>(
+      `SELECT te.id::text AS id FROM timeline_entries te
+        JOIN pages p ON p.id = te.page_id
+       WHERE p.slug = 'people/timeline-reconcile' AND te.managed_by = 'page-parser'`,
+    );
+
+    await putOp.handler(makeContext(), {
+      slug: 'people/timeline-reconcile',
+      content: `${frontmatter}
+
+## Timeline
+
+- **2026-03-15** | Shipped
+  Revised detail
+`,
+    });
+    const detailEdited = await engine.executeRaw<{
+      id: string; detail: string; managed_by: string | null; origin_key: string | null;
+    }>(
+      `SELECT te.id::text AS id, te.detail, te.managed_by, te.origin_key
+         FROM timeline_entries te JOIN pages p ON p.id = te.page_id
+        WHERE p.slug = 'people/timeline-reconcile' AND te.managed_by = 'page-parser'`,
+    );
+    expect(detailEdited).toHaveLength(1);
+    expect(detailEdited[0].id).toBe(before[0].id);
+    expect(detailEdited[0].detail).toBe('Revised detail');
+    expect(detailEdited[0].origin_key).toBeTruthy();
+
+    await putOp.handler(makeContext(), {
+      slug: 'people/timeline-reconcile',
+      content: `${frontmatter}
+
+## Timeline
+
+- **2026-03-15** | Shipped revised release
+`,
+    });
+    let rows = await engine.executeRaw<{
+      summary: string; source: string; managed_by: string | null;
+    }>(
+      `SELECT te.summary, te.source, te.managed_by
+         FROM timeline_entries te JOIN pages p ON p.id = te.page_id
+        WHERE p.slug = 'people/timeline-reconcile' ORDER BY te.date`,
+    );
+    expect(rows).toEqual([
+      { summary: 'Shipped revised release', source: '', managed_by: 'page-parser' },
+      { summary: 'Operator note', source: 'manual', managed_by: null },
+    ]);
+
+    await putOp.handler(makeContext(), {
+      slug: 'people/timeline-reconcile',
+      content: `${frontmatter}\n\nNo timeline remains.\n`,
+    });
+    rows = await engine.executeRaw<{
+      summary: string; source: string; managed_by: string | null;
+    }>(
+      `SELECT te.summary, te.source, te.managed_by
+         FROM timeline_entries te JOIN pages p ON p.id = te.page_id
+        WHERE p.slug = 'people/timeline-reconcile'`,
+    );
+    expect(rows).toEqual([
+      { summary: 'Operator note', source: 'manual', managed_by: null },
+    ]);
+  });
+
   test('auto-timeline respects auto_timeline=false config', async () => {
     await engine.setConfig('auto_timeline', 'false');
     try {
