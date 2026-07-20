@@ -1,5 +1,34 @@
 # TODOS
 
+## housecleaning follow-ups (filed v0.42.62.1)
+
+- [ ] **P1 — Meeting-agent output contract.** The meeting-completion Claude child
+  runs fully sandboxed (canary passes, denials enforced) but returned no
+  parseable JSON envelope and wrote nothing for a real captured meeting; the
+  audit correctly failed closed and the retry ledger keeps the meeting
+  eligible. Debug with a preserved sandbox/transcript (add a keep-sandbox
+  flag), then verify one meeting completes end to end.
+- [ ] **P1 — Regenerate the 2026-07-13 graph goldsets.** graph-topical/lineage/
+  relational expectations were derived from the pre-consolidation typed-edge
+  graph; after the ideas-shelf consolidation the topology changed (canonical
+  pages carry the edges) and the families fail honestly post-retarget. All
+  three are DB-derived by design — regenerate expected sets from the live
+  graph and watch the next nightly eval before treating any failure as a
+  ranking bug.
+- [ ] **P2 — 20260715 goldset failures (pre-existing).** aggregation/negative/
+  relational (+observation variants) have failed since before this wave.
+  Classify stale-expectation vs ranking per query.
+- [ ] **P2 — Hermes exporter source hashes.** Manifest rows for Hermes sessions
+  record the hash of the live profile state DB, which mutates constantly, so
+  settled-drift is meaningless there. Record per-session content hashes.
+- [ ] **P3 — Ambiguous legacy timeline residue.** ~360 near-duplicate groups of
+  source-less rows remain by design (no positive parser evidence; deleting
+  risks manual entries). Consider an operator-reviewed interactive cleanup.
+- [ ] **P3 — `com.gbrain.health-monitor`** log has not advanced since June 25;
+  review or retire the lane.
+- [ ] **P3 — Dream synthesize model A/B.** Compare Sonnet vs Opus for nightly
+  writers after a stable week; keep Opus only if meaningfully better.
+
 ## community fix-wave follow-ups (filed v0.42.60.0)
 
 - [ ] **P1 — take-writes source scoping fails open when source resolution errors (#2684 residual).**
