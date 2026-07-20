@@ -46,6 +46,20 @@ describe('dream CLI flag wiring', () => {
     expect(dreamSrc).toContain('synthDate');
     expect(dreamSrc).toContain('synthFrom');
     expect(dreamSrc).toContain('synthTo');
+    expect(dreamSrc).toContain('synthNightId');
+  });
+
+  test('scheduled --night-id is distinct from manual ranges', () => {
+    expect(dreamSrc).toContain("'--night-id'");
+    expect(dreamSrc).toContain('--night-id cannot be combined with --date / --from / --to');
+    expect(dreamSrc).toMatch(/synthNightId:\s*opts\.nightId/);
+  });
+
+  test('close-backlog requires a cutoff and calls the tombstone helper', () => {
+    expect(dreamSrc).toContain("args[0] === 'close-backlog'");
+    expect(dreamSrc).toContain('close-backlog requires --before YYYY-MM-DD');
+    expect(dreamSrc).toContain('closeDreamBacklog');
+    expect(dreamSrc).toContain('markers_written=');
   });
 
   test('totals line includes synth + patterns counters', () => {

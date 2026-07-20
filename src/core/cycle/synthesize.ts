@@ -24,7 +24,6 @@
  *
  * NOT in v1:
  *   - git auto-commit / push (deferred to v1.1, codex finding #5).
- *   - Daily token budget cap (cooldown bounds spend at v1 scale).
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
@@ -48,6 +47,7 @@ import { parseMarkdown, serializeMarkdown, serializePageToMarkdown } from '../ma
 import type { Page, PageType } from '../types.ts';
 import { validateSourceId } from '../utils.ts';
 import { safeSplitIndex } from '../text-safe.ts';
+import { createHash } from 'node:crypto';
 
 // Slug regex from validatePageSlug — kept in sync.
 // Used for the orchestrator-written summary index slug.
@@ -132,6 +132,7 @@ const HEADROOM_RATIO = 0.9;
 const MIN_PROMPT_TOKENS = 100_000;
 /** Default chunk-count cap; operator-configurable via dream.synthesize.max_chunks_per_transcript. */
 const DEFAULT_MAX_CHUNKS = 24;
+const DEFAULT_MAX_PAID_CHILDREN_PER_RUN = 10;
 /** Conservative default budget when model is unknown (200K × HEADROOM_RATIO). */
 const UNKNOWN_MODEL_BUDGET_TOKENS = 180_000;
 const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60 * 1000;
@@ -302,6 +303,8 @@ export interface SynthesizePhaseOpts {
   date?: string;
   from?: string;
   to?: string;
+  /** Scheduled exact-night scope. Activates the paid-child run cap. */
+  nightId?: string;
   /**
    * Disable the self-consumption guard. Wired from the
    * `--unsafe-bypass-dream-guard` CLI flag. NOT auto-applied for `--input`
@@ -367,10 +370,10 @@ export async function runPhaseSynthesize(
     // Pin one cycle date for every child DB write, reverse-write repair, and
     // summary receipt. Scheduled bounded scans use --to so cross-midnight
     // sessions are stamped with the intended settlement night.
-    const summaryDate = opts.date ?? opts.to ?? today();
+    const summaryDate = opts.nightId ?? opts.date ?? opts.to ?? today();
 
     // Cooldown check (skipped for explicit --input / --date / --from / --to runs).
-    const explicitTarget = opts.inputFile || opts.date || opts.from || opts.to;
+    const explicitTarget = opts.inputFile || opts.nightId || opts.date || opts.from || opts.to;
     if (!explicitTarget) {
       const cooldown = await checkCooldown(engine, config.cooldownHours);
       if (cooldown.active) {
@@ -412,6 +415,7 @@ export async function runPhaseSynthesize(
           date: opts.date,
           from: opts.from,
           to: opts.to,
+          nightId: opts.nightId,
           bypassGuard: opts.bypassDreamGuard,
         });
 
@@ -432,6 +436,13 @@ export async function runPhaseSynthesize(
     const pendingTranscripts: DiscoveredTranscript[] = [];
     const resumableTranscripts = new Map<string, SynthesizeLineageRow[]>();
     for (const transcript of transcripts) {
+      if (await engine.getConfig(synthesizeOperatorDiscardKey(transcript))) {
+        lineageSkips.push({
+          filePath: transcript.filePath,
+          reason: 'operator_discarded',
+        });
+        continue;
+      }
       const completion = await transcriptCompletionState(engine, transcript);
       if (completion.via === 'marker') {
         lineageSkips.push({
@@ -572,6 +583,9 @@ export async function runPhaseSynthesize(
       reusedCompletedChildren: number;
     }
     const transcriptPlans: TranscriptPlan[] = [];
+    let paidChildrenDispatched = 0;
+    let paidChildrenOverflow = 0;
+    let transcriptsCapped = 0;
 
     const maxCharsPerChunk = computeChunkCharBudget(config.model, config.maxPromptTokens);
 
@@ -632,12 +646,31 @@ export async function runPhaseSynthesize(
         : config.model.toLowerCase().startsWith('claude-')
           ? `anthropic:${config.model}`
           : config.model;
+      const completedChunks: Array<SynthesizeLineageRow | null> = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkIdentity = isChunked ? { index: i, total: chunks.length } : undefined;
+        completedChunks.push(await findRequiredChunkCompletion(engine, t, chunkIdentity));
+      }
+      const missingChildren = completedChunks.filter(row => row === null).length;
+      if (
+        opts.nightId
+        && paidChildrenDispatched + missingChildren > config.maxPaidChildrenPerRun
+      ) {
+        const remaining = Math.max(0, config.maxPaidChildrenPerRun - paidChildrenDispatched);
+        paidChildrenOverflow += missingChildren;
+        transcriptsCapped += 1;
+        skipReports.push({
+          filePath: t.filePath,
+          reason: `paid_child_cap: required=${missingChildren}, remaining=${remaining}, cap=${config.maxPaidChildrenPerRun}`,
+        });
+        continue;
+      }
       for (let i = 0; i < chunks.length; i++) {
         const chunkIdentity = isChunked ? { index: i, total: chunks.length } : undefined;
         // Recognize both stable and legacy completed chunks. Partial legacy
         // runs retry only their missing chunks; a complete legacy set was
         // already suppressed before the paid verdict.
-        const completedChunk = await findRequiredChunkCompletion(engine, t, chunkIdentity);
+        const completedChunk = completedChunks[i];
         if (completedChunk) {
           assertPersistedCompletedJobReceipt(completedChunk);
           plan.reusedCompletedChildren += 1;
@@ -684,6 +717,7 @@ export async function runPhaseSynthesize(
           { allowProtectedSubmit: true },
           { rearmCompleted: false },
         );
+        paidChildrenDispatched += 1;
         childIdSet.add(child.id);
         if (child.status === 'completed') {
           const completedRow = lineageRowFromJob(child);
@@ -713,15 +747,23 @@ export async function runPhaseSynthesize(
 
     const childIds = Array.from(childIdSet);
     if (childIds.length === 0) {
-      return ok('no new synthesis children required', {
+      const details = {
         transcripts_discovered: transcripts.length,
         transcripts_processed: 0,
         pages_written: 0,
         children_submitted: 0,
         children_resumed: 0,
+        capped: transcriptsCapped > 0,
+        paid_children_cap: opts.nightId ? config.maxPaidChildrenPerRun : null,
+        paid_children_dispatched: paidChildrenDispatched,
+        paid_children_overflow: paidChildrenOverflow,
+        transcripts_capped: transcriptsCapped,
         skips: skipReports,
         verdicts,
-      });
+      };
+      return transcriptsCapped > 0
+        ? warned('paid synthesis child cap reached; overflow remains pending', details)
+        : ok('no new synthesis children required', details);
     }
 
     // Wait for every child to reach a terminal state. Tick yieldDuringPhase
@@ -822,6 +864,11 @@ export async function runPhaseSynthesize(
       children_submitted: submittedChildIdSet.size,
       children_resumed: resumedChildIdSet.size,
       reused_completed_children: reusedCompletedChildren,
+      capped: transcriptsCapped > 0,
+      paid_children_cap: opts.nightId ? config.maxPaidChildrenPerRun : null,
+      paid_children_dispatched: paidChildrenDispatched,
+      paid_children_overflow: paidChildrenOverflow,
+      transcripts_capped: transcriptsCapped,
       skips: skipReports,
       verdicts,
     };
@@ -862,15 +909,23 @@ export async function runPhaseSynthesize(
       for (const transcript of transcriptsReadyForDurableCompletion) {
         await markLogicalTranscriptComplete(tx, transcript, completionTimestamp);
       }
-      await tx.setConfig(synthesizeCompletionKey(), completionTimestamp);
+      if (transcriptsCapped === 0) {
+        await tx.setConfig(synthesizeCompletionKey(), completionTimestamp);
+      }
     });
 
     const ms = Date.now() - start;
-    return ok(`${completedTranscripts} transcript(s) synthesized in ${(ms / 1000).toFixed(1)}s`, {
+    const successDetails = {
       ...commonDetails,
       summary_slug: summarySlug,
-      cooldown_written: true,
-    });
+      cooldown_written: transcriptsCapped === 0,
+    };
+    return transcriptsCapped > 0
+      ? warned(
+          `${completedTranscripts} transcript(s) synthesized; paid child cap left ${transcriptsCapped} transcript(s) pending`,
+          successDetails,
+        )
+      : ok(`${completedTranscripts} transcript(s) synthesized in ${(ms / 1000).toFixed(1)}s`, successDetails);
   } catch (e) {
     return failed(makeError('InternalError', 'SYNTH_PHASE_FAIL',
       e instanceof Error ? (e.message || 'synthesize phase threw') : String(e)));
@@ -901,6 +956,8 @@ interface SynthConfig {
    * `dream.synthesize.max_chunks_per_transcript`.
    */
   maxChunksPerTranscript: number;
+  /** Scheduled paid synthesis fan-out cap. Zero/unset/invalid means 10. */
+  maxPaidChildrenPerRun: number;
   /**
    * #2415: top-level namespace for synthesized output (reflections, originals,
    * patterns). Config key `dream.synthesize.output_root`; default 'wiki' —
@@ -951,6 +1008,7 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
   const cooldownHoursStr = await engine.getConfig('dream.synthesize.cooldown_hours');
   const maxPromptTokensStr = await engine.getConfig('dream.synthesize.max_prompt_tokens');
   const maxChunksStr = await engine.getConfig('dream.synthesize.max_chunks_per_transcript');
+  const maxPaidChildrenStr = await engine.getConfig('dream.synthesize.max_paid_children_per_run');
   const subagentTimeoutMs = await getNumberConfig(
     engine,
     'dream.synthesize.subagent_timeout_ms',
@@ -987,6 +1045,11 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
       maxChunksPerTranscript = parsed;
     }
   }
+  let maxPaidChildrenPerRun = DEFAULT_MAX_PAID_CHILDREN_PER_RUN;
+  if (maxPaidChildrenStr) {
+    const parsed = parseInt(maxPaidChildrenStr, 10);
+    if (Number.isFinite(parsed) && parsed > 0) maxPaidChildrenPerRun = parsed;
+  }
 
   return {
     corpusDir: corpusDir ?? null,
@@ -998,6 +1061,7 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
     cooldownHours: cooldownHoursStr ? Math.max(0, parseInt(cooldownHoursStr, 10) || 12) : 12,
     maxPromptTokens,
     maxChunksPerTranscript,
+    maxPaidChildrenPerRun,
     outputRoot: await loadOutputRoot(engine),
     subagentTimeoutMs,
     subagentWaitTimeoutMs,
@@ -1056,6 +1120,140 @@ export function synthesizeLogicalCompletionKey(
   identity: Pick<TranscriptLogicalIdentity, 'logicalTranscriptId'>,
 ): string {
   return `dream.synthesize.logical_completion.v1.${identity.logicalTranscriptId}`;
+}
+
+export function synthesizeOperatorDiscardKey(transcript: DiscoveredTranscript): string {
+  if (transcript.logicalIdentity) {
+    return `dream.synthesize.operator_discarded.v1.logical.${transcript.logicalIdentity.logicalTranscriptId}`;
+  }
+  const pathHash = createHash('sha256').update(resolve(transcript.filePath), 'utf8').digest('hex');
+  return `dream.synthesize.operator_discarded.v1.path.${pathHash}`;
+}
+
+export interface CloseDreamBacklogOpts {
+  before: string;
+  dryRun: boolean;
+  reason?: string;
+  now?: string;
+}
+
+export interface CloseDreamBacklogItem {
+  file_path: string;
+  content_sha256: string;
+  logical_transcript_id: string | null;
+  settled_date: string;
+  settled_date_source: 'exporter_settled_at' | 'filename_fallback';
+  marker_key: string;
+  partial_lineage_rows: number;
+}
+
+export interface CloseDreamBacklogResult {
+  schema: 'gbrain-dream-close-backlog/v1';
+  before: string;
+  dry_run: boolean;
+  reason: string;
+  transcripts_discovered: number;
+  candidates: number;
+  markers_written: number;
+  already_discarded: number;
+  completed_lineage: number;
+  not_before_cutoff: number;
+  undated: number;
+  items: CloseDreamBacklogItem[];
+}
+
+/**
+ * Permanently retire historical transcript backlog without modifying evidence
+ * files. Partial child rows do not count as completion: the operator discard
+ * marker intentionally closes those transcripts too.
+ */
+export async function closeDreamBacklog(
+  engine: BrainEngine,
+  opts: CloseDreamBacklogOpts,
+): Promise<CloseDreamBacklogResult> {
+  const config = await loadSynthConfig(engine);
+  if (!config.corpusDir) {
+    throw new Error('dream.synthesize.session_corpus_dir is unset');
+  }
+  const transcripts = discoverTranscripts({
+    corpusDir: config.corpusDir,
+    meetingTranscriptsDir: config.meetingTranscriptsDir ?? undefined,
+    minChars: config.minChars,
+    excludePatterns: config.excludePatterns,
+  });
+  const reason = opts.reason ?? 'operator_discarded_before_cutoff';
+  const items: CloseDreamBacklogItem[] = [];
+  let alreadyDiscarded = 0;
+  let completedLineageCount = 0;
+  let notBeforeCutoff = 0;
+  let undated = 0;
+
+  for (const transcript of transcripts) {
+    const settledDate = transcript.settledDate ?? transcript.inferredDate;
+    if (!settledDate) {
+      undated += 1;
+      continue;
+    }
+    if (settledDate >= opts.before) {
+      notBeforeCutoff += 1;
+      continue;
+    }
+    const markerKey = synthesizeOperatorDiscardKey(transcript);
+    if (await engine.getConfig(markerKey)) {
+      alreadyDiscarded += 1;
+      continue;
+    }
+    const completion = await transcriptCompletionState(engine, transcript);
+    if (completion.via !== null) {
+      completedLineageCount += 1;
+      continue;
+    }
+    items.push({
+      file_path: transcript.filePath,
+      content_sha256: transcript.contentHash,
+      logical_transcript_id: transcript.logicalIdentity?.logicalTranscriptId ?? null,
+      settled_date: settledDate,
+      settled_date_source: transcript.settledDate ? 'exporter_settled_at' : 'filename_fallback',
+      marker_key: markerKey,
+      partial_lineage_rows: completion.rows.length,
+    });
+  }
+
+  if (!opts.dryRun && items.length > 0) {
+    const discardedAt = opts.now ?? new Date().toISOString();
+    await engine.transaction(async tx => {
+      for (const item of items) {
+        await tx.setConfig(item.marker_key, JSON.stringify({
+          schema: 'gbrain-dream-operator-discard/v1',
+          status: 'operator_discarded',
+          reason,
+          discarded_at: discardedAt,
+          before: opts.before,
+          file_path: item.file_path,
+          content_sha256: item.content_sha256,
+          logical_transcript_id: item.logical_transcript_id,
+          settled_date: item.settled_date,
+          settled_date_source: item.settled_date_source,
+          partial_lineage_rows: item.partial_lineage_rows,
+        }));
+      }
+    });
+  }
+
+  return {
+    schema: 'gbrain-dream-close-backlog/v1',
+    before: opts.before,
+    dry_run: opts.dryRun,
+    reason,
+    transcripts_discovered: transcripts.length,
+    candidates: items.length,
+    markers_written: opts.dryRun ? 0 : items.length,
+    already_discarded: alreadyDiscarded,
+    completed_lineage: completedLineageCount,
+    not_before_cutoff: notBeforeCutoff,
+    undated,
+    items,
+  };
 }
 
 // ── Allow-list source of truth ───────────────────────────────────────
@@ -2139,6 +2337,10 @@ function today(): string {
 
 function ok(summary: string, details: Record<string, unknown> = {}): PhaseResult {
   return { phase: 'synthesize', status: 'ok', duration_ms: 0, summary, details };
+}
+
+function warned(summary: string, details: Record<string, unknown> = {}): PhaseResult {
+  return { phase: 'synthesize', status: 'warn', duration_ms: 0, summary, details };
 }
 
 function skipped(reason: string, summary: string): PhaseResult {

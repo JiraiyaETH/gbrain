@@ -42,6 +42,8 @@ export interface DiscoveredTranscript {
   basename: string;
   /** Inferred date if the basename matches `YYYY-MM-DD...` (or null). */
   inferredDate: string | null;
+  /** Bangkok calendar date on which the exporter says the session settled. */
+  settledDate?: string | null;
   /**
    * Stable exporter identity. Null only for legacy/ad-hoc transcript files
    * that predate the identity-bearing frontmatter contract.
@@ -64,6 +66,11 @@ export interface DiscoverOpts {
   from?: string;
   /** Inclusive range end (YYYY-MM-DD). */
   to?: string;
+  /**
+   * Scheduled-only scope: require exporter settlement on this exact Bangkok
+   * night. Unlike `to`, this never admits older history.
+   */
+  nightId?: string;
   /**
    * Disable the self-consumption guard. Caller must opt in explicitly via
    * `--unsafe-bypass-dream-guard`; never auto-applied for `--input` because
@@ -88,6 +95,7 @@ type TranscriptMetadata = Record<string, unknown>;
 interface MetadataCheck {
   identity: TranscriptLogicalIdentity | null;
   rejectionReason: string | null;
+  settledDate?: string | null;
 }
 
 interface ManifestIndexLoad {
@@ -133,6 +141,17 @@ function metadataBoolean(meta: TranscriptMetadata, key: string): boolean | null 
     if (/^(?:false|0|no)$/i.test(value.trim())) return false;
   }
   return null;
+}
+
+function settlementNight(meta: TranscriptMetadata): string | null {
+  const raw = metadataString(meta, 'settled_at');
+  if (!raw) return null;
+  const timestamp = Date.parse(raw);
+  if (!Number.isFinite(timestamp)) return null;
+  // Bangkok has no daylight-saving transitions. Shift the instant by UTC+7
+  // before taking its ISO calendar date so a UTC late-afternoon settlement
+  // is attributed to the operator's closed night.
+  return new Date(timestamp + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 function isNonNullMetadataValue(value: unknown): boolean {
@@ -624,7 +643,20 @@ function inspectOwnedTranscriptMetadata(
   );
   if (tombstoneReason) return { identity: null, rejectionReason: tombstoneReason };
 
-  return inspectTranscriptMetadata(frontmatter, manifests);
+  const checked = inspectTranscriptMetadata(frontmatter, manifests);
+  if (checked.rejectionReason) return checked;
+
+  const settlementDates = [frontmatter, ...manifests]
+    .map(settlementNight)
+    .filter((date): date is string => date !== null);
+  const uniqueSettlementDates = [...new Set(settlementDates)];
+  if (uniqueSettlementDates.length > 1) {
+    return { identity: null, rejectionReason: 'frontmatter_manifest_settlement_conflict' };
+  }
+  return {
+    ...checked,
+    settledDate: uniqueSettlementDates[0] ?? null,
+  };
 }
 
 /**
@@ -728,6 +760,11 @@ function isInDateRange(date: string | null, opts: DiscoverOpts): boolean {
   return true;
 }
 
+function isInScheduledNight(settledDate: string | null, opts: DiscoverOpts): boolean {
+  if (!opts.nightId) return true;
+  return settledDate === opts.nightId;
+}
+
 function matchesAnyExclude(text: string, patterns: RegExp[]): boolean {
   for (const re of patterns) {
     if (re.test(text)) return true;
@@ -801,7 +838,7 @@ export function discoverTranscripts(opts: DiscoverOpts): DiscoveredTranscript[] 
       const baseName = basename(filePath, ext);
       const dateMatch = DATE_RE.exec(baseName);
       const inferredDate = dateMatch ? dateMatch[1] : null;
-      if (!isInDateRange(inferredDate, opts)) continue;
+      if (!opts.nightId && !isInDateRange(inferredDate, opts)) continue;
 
       let content: string;
       try {
@@ -824,6 +861,7 @@ export function discoverTranscripts(opts: DiscoverOpts): DiscoveredTranscript[] 
         process.stderr.write(`[dream] skipped ${baseName}: provenance guard (${metadataCheck.rejectionReason})\n`);
         continue;
       }
+      if (!isInScheduledNight(metadataCheck.settledDate ?? null, opts)) continue;
       if (matchesAnyExclude(content, excludeRes)) continue;
 
       results.push({
@@ -832,6 +870,7 @@ export function discoverTranscripts(opts: DiscoverOpts): DiscoveredTranscript[] 
         content,
         basename: baseName,
         inferredDate,
+        settledDate: metadataCheck.settledDate ?? null,
         logicalIdentity: metadataCheck.identity,
       });
     }
@@ -898,6 +937,7 @@ export function readSingleTranscript(
     content,
     basename: baseName,
     inferredDate: dateMatch ? dateMatch[1] : null,
+    settledDate: metadataCheck.settledDate ?? null,
     logicalIdentity: metadataCheck.identity,
   };
 }

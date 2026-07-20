@@ -480,7 +480,8 @@ export interface CycleOpts {
   /**
    * Synthesize phase scope overrides (v0.23). Forwarded to runPhaseSynthesize.
    * - `synthInputFile`: ad-hoc transcript path (`gbrain dream --input <file>`).
-   * - `synthDate` / `synthFrom` / `synthTo`: date filters for corpus scan.
+   * - `synthDate` / `synthFrom` / `synthTo`: manual date filters for corpus scan.
+   * - `synthNightId`: scheduled exact exporter-settlement night.
    * Mutually exclusive with each other in CLI parsing; runner trusts the
    * caller (CLI wrapper validates).
    */
@@ -488,6 +489,7 @@ export interface CycleOpts {
   synthDate?: string;
   synthFrom?: string;
   synthTo?: string;
+  synthNightId?: string;
   /**
    * v0.23.2: explicit opt-in to disable the synthesize self-consumption guard.
    * Wired from `gbrain dream --unsafe-bypass-dream-guard`. Never auto-applied
@@ -1758,6 +1760,7 @@ export async function runCycle(
             date: opts.synthDate,
             from: opts.synthFrom,
             to: opts.synthTo,
+            nightId: opts.synthNightId,
             bypassDreamGuard: opts.synthBypassDreamGuard,
           });
         });
@@ -2389,6 +2392,9 @@ export async function runCycle(
   // work it never actually did. Treat an aborted signal as a non-success run:
   // skip the freshness stamp and report status 'partial' with reason 'aborted'.
   const aborted = opts.signal?.aborted === true;
+  const scheduledSynthesisCapped = phaseResults.some(
+    phase => phase.phase === 'synthesize' && phase.details.capped === true,
+  );
 
   // #1972 (Decision 7A gating): attribute force-evicts. The minion worker
   // force-evicts a job 30s after abort and logs "handler ignored abort signal";
@@ -2416,11 +2422,15 @@ export async function runCycle(
   //   - engine is null (no-DB path)
   //   - status is 'failed' or 'skipped' (don't mark a non-run as fresh)
   //   - dryRun (writes are out of scope)
+  //   - scheduled synthesis hit its paid-child cap (overflow is still pending)
   //
   // Best-effort: a write failure does NOT change the CycleReport status.
   // The cost of writing the wrong timestamp post-failure is higher than
   // the cost of missing a successful write (next cycle will redo work).
-  if (opts.sourceId && engine && !dryRun && !aborted && (status === 'ok' || status === 'clean' || status === 'partial')) {
+  if (
+    opts.sourceId && engine && !dryRun && !aborted && !scheduledSynthesisCapped
+    && (status === 'ok' || status === 'clean' || status === 'partial')
+  ) {
     try {
       const nowIso = new Date().toISOString();
       // #2194 fix #3 (the cycle split): `last_source_cycle_at` is the NEW gate

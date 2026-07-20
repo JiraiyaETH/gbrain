@@ -1,0 +1,425 @@
+{
+  "build_candidate": "/Users/jarvis/.gbrain/runtimes/incident-recovery-20260716T202543Z-9f9af4e6a3c8-a334d3251984-r3.partial",
+  "directory_modes": {
+    ".": "0555",
+    "meeting-ingestion": "0555",
+    "meeting-ingestion/references": "0555",
+    "meeting-ingestion/scripts": "0555",
+    "skills": "0555",
+    "skills/brain-taxonomist": "0555",
+    "skills/conventions": "0555",
+    "skills/enrich": "0555",
+    "vendor": "0555",
+    "vendor/yaml": "0555"
+  },
+  "file_count": 50,
+  "files": [
+    {
+      "bytes": 3368,
+      "mode": "0555",
+      "path": "autopilot-run.sh",
+      "sha256": "6d6d5fd255ee410367c31581e1173d9022dac7abf7dd6dcf54ad7edf504d097a",
+      "source": "staging/r3-deployment/autopilot-run.sh",
+      "source_sha256": "6d6d5fd255ee410367c31581e1173d9022dac7abf7dd6dcf54ad7edf504d097a"
+    },
+    {
+      "bytes": 1386,
+      "mode": "0555",
+      "path": "brain-autocommit-run.sh",
+      "sha256": "4cf6ec43bc18097db8ff971df850e7c4e25458c2ce232e7ccd73cd4ef981dcaa",
+      "source": "staging/r3-deployment/brain-autocommit-run.sh",
+      "source_sha256": "4cf6ec43bc18097db8ff971df850e7c4e25458c2ce232e7ccd73cd4ef981dcaa"
+    },
+    {
+      "bytes": 2714,
+      "mode": "0555",
+      "path": "brain-commit-push-pinned.sh",
+      "sha256": "df24cab7b473154ac01d86a4f6db8b782e51ca117dab2915293cf3db717e083c",
+      "source": "staging/r3-deployment/brain-commit-push-pinned.sh",
+      "source_sha256": "df24cab7b473154ac01d86a4f6db8b782e51ca117dab2915293cf3db717e083c"
+    },
+    {
+      "bytes": 1459,
+      "mode": "0555",
+      "path": "brain-pull-run.sh",
+      "sha256": "5ff8494f63ee6daa18a495a82e07d78a1640cd93f0f4a07d941e834ba0b1619c",
+      "source": "staging/r3-deployment/brain-pull-run.sh",
+      "source_sha256": "5ff8494f63ee6daa18a495a82e07d78a1640cd93f0f4a07d941e834ba0b1619c"
+    },
+    {
+      "bytes": 3448,
+      "mode": "0444",
+      "path": "brain_type_resolver.py",
+      "sha256": "df26188415474b5d095d628648bf396688d2001ca43dc236e2677df2b50d106b",
+      "source": "staging/runtime-lanes/brain_type_resolver.py",
+      "source_sha256": "df26188415474b5d095d628648bf396688d2001ca43dc236e2677df2b50d106b"
+    },
+    {
+      "bytes": 3423,
+      "mode": "0555",
+      "path": "claude-session-export-run.sh",
+      "sha256": "cf1b35c334b4e5c063e62885255e68e787e81f0126e3818c34b67ea7c78e855f",
+      "source": "staging/scheduled-gate/claude-session-export-run.sh",
+      "source_sha256": "cf1b35c334b4e5c063e62885255e68e787e81f0126e3818c34b67ea7c78e855f"
+    },
+    {
+      "bytes": 8869,
+      "mode": "0555",
+      "path": "dream-daily-run.sh",
+      "sha256": "9a2e39d0c8f6ee9c337d96d92bf71b50157cc07e339dd86598d6902e2e0e51e3",
+      "source": "staging/scheduled-gate/dream-daily-run.sh",
+      "source_sha256": "9a2e39d0c8f6ee9c337d96d92bf71b50157cc07e339dd86598d6902e2e0e51e3"
+    },
+    {
+      "bytes": 1540,
+      "mode": "0444",
+      "path": "dream-db-pin.sh",
+      "sha256": "8ef8386d283763a23652482050cf0e6901521109cb71d9575859855460a7722b",
+      "source": "staging/runtime-lanes/dream-db-pin.sh",
+      "source_sha256": "8ef8386d283763a23652482050cf0e6901521109cb71d9575859855460a7722b"
+    },
+    {
+      "bytes": 18448,
+      "mode": "0444",
+      "path": "enrich-thin-postcondition.py",
+      "sha256": "d2880169b39e34344f6e53f495a97ffabd35a187c33d754c86b0c87fca86ee0f",
+      "source": "staging/runtime-lanes/enrich-thin-postcondition.py",
+      "source_sha256": "d2880169b39e34344f6e53f495a97ffabd35a187c33d754c86b0c87fca86ee0f"
+    },
+    {
+      "bytes": 17413,
+      "mode": "0555",
+      "path": "enrich-thin-run.sh",
+      "sha256": "4d42f00cc53651316f780f77cab9b0e0e60f92597c59cb93086946e9c20a60e2",
+      "source": "staging/runtime-lanes/enrich-thin-run.sh",
+      "source_sha256": "4d42f00cc53651316f780f77cab9b0e0e60f92597c59cb93086946e9c20a60e2"
+    },
+    {
+      "bytes": 82932,
+      "mode": "0444",
+      "path": "export-claude-session-corpus.py",
+      "sha256": "a15cd72d42fabd11e823922cf588a7ecaf4b0b1be59070e1c51e06f6d6ad0a46",
+      "source": "staging/scheduled-gate/export-claude-session-corpus.py",
+      "source_sha256": "a15cd72d42fabd11e823922cf588a7ecaf4b0b1be59070e1c51e06f6d6ad0a46"
+    },
+    {
+      "bytes": 59386,
+      "mode": "0444",
+      "path": "export-gbrain-session-corpus.py",
+      "sha256": "7d2028dc8ca3a0cbab93636d2f9f997fb385c3d92f5604739cbd5c23a1b5d74a",
+      "source": "staging/scheduled-gate/export-gbrain-session-corpus.py",
+      "source_sha256": "7d2028dc8ca3a0cbab93636d2f9f997fb385c3d92f5604739cbd5c23a1b5d74a"
+    },
+    {
+      "bytes": 16370,
+      "mode": "0444",
+      "path": "export-receipt.py",
+      "sha256": "01418a0508221c915ebd6ea41f3b0e1354c86ad014ba2a11e40e0bc0deccce83",
+      "source": "staging/scheduled-gate/export-receipt.py",
+      "source_sha256": "01418a0508221c915ebd6ea41f3b0e1354c86ad014ba2a11e40e0bc0deccce83"
+    },
+    {
+      "bytes": 62598,
+      "mode": "0444",
+      "path": "fireflies_webhook_receiver.py",
+      "sha256": "425edfeedcc2f3d79360505df0571a07429bffcdb408bfbe3453ecc6835eba55",
+      "source": "staging/runtime-lanes/fireflies_webhook_receiver.py",
+      "source_sha256": "425edfeedcc2f3d79360505df0571a07429bffcdb408bfbe3453ecc6835eba55"
+    },
+    {
+      "bytes": 124954144,
+      "mode": "0555",
+      "path": "gbrain",
+      "sha256": "1299e30da9a5caa3071fbccae62e01b6c1312e4d2843a3abd4db959a8c7206bd",
+      "source": "BUILD:gbrain",
+      "source_sha256": null
+    },
+    {
+      "bytes": 13317,
+      "mode": "0555",
+      "path": "get-secret.sh",
+      "sha256": "25ea9ec73aa5f00bcca6ba483940e44851d84a5e6ab34192517a348e195652ba",
+      "source": "staging/runtime-lanes/get-secret.sh",
+      "source_sha256": "25ea9ec73aa5f00bcca6ba483940e44851d84a5e6ab34192517a348e195652ba"
+    },
+    {
+      "bytes": 7629,
+      "mode": "0555",
+      "path": "meeting-complete-run.sh",
+      "sha256": "d1e7abc4d3dbe526be6ebfafa64ca85c2921db1eedb2217277e66d37a45f7577",
+      "source": "staging/meeting/meeting-complete-run.sh",
+      "source_sha256": "d1e7abc4d3dbe526be6ebfafa64ca85c2921db1eedb2217277e66d37a45f7577"
+    },
+    {
+      "bytes": 90009,
+      "mode": "0444",
+      "path": "meeting-complete.py",
+      "sha256": "4b081b15e3c60a0c4eb70502fbd1c7c67697617b52c2c7de7aed5f8372974efb",
+      "source": "staging/meeting/meeting-complete.py",
+      "source_sha256": "4b081b15e3c60a0c4eb70502fbd1c7c67697617b52c2c7de7aed5f8372974efb"
+    },
+    {
+      "bytes": 17434,
+      "mode": "0444",
+      "path": "meeting-ingestion/SKILL.md",
+      "sha256": "137fcdef9d84840d8639a11150b07bc0f8281aa18df9595748fee0c1efccf31c",
+      "source": "staging/meeting/meeting-ingestion/SKILL.md",
+      "source_sha256": "137fcdef9d84840d8639a11150b07bc0f8281aa18df9595748fee0c1efccf31c"
+    },
+    {
+      "bytes": 3748,
+      "mode": "0444",
+      "path": "meeting-ingestion/references/doctrine.md",
+      "sha256": "d16ebf724d906b76036810732394eaf0361b9fe4c8a6297f9f3a6452e6d4b397",
+      "source": "staging/meeting/meeting-ingestion/references/doctrine.md",
+      "source_sha256": "d16ebf724d906b76036810732394eaf0361b9fe4c8a6297f9f3a6452e6d4b397"
+    },
+    {
+      "bytes": 7948,
+      "mode": "0444",
+      "path": "meeting-ingestion/scripts/qa-meeting.sh",
+      "sha256": "cdd9b74ee70fa41ca017358e6e01db7b889441d3dc05b2f3e3a296106f6d38eb",
+      "source": "staging/meeting/meeting-ingestion/scripts/qa-meeting.sh",
+      "source_sha256": "cdd9b74ee70fa41ca017358e6e01db7b889441d3dc05b2f3e3a296106f6d38eb"
+    },
+    {
+      "bytes": 2677,
+      "mode": "0444",
+      "path": "qa-gbrain-adapter.py",
+      "sha256": "bbd429fca521c4823af26dd94a4aa176efc3250f0fc3ad6b311e616ff5d4ab1e",
+      "source": "staging/meeting/qa-gbrain-adapter.py",
+      "source_sha256": "bbd429fca521c4823af26dd94a4aa176efc3250f0fc3ad6b311e616ff5d4ab1e"
+    },
+    {
+      "bytes": 12234,
+      "mode": "0444",
+      "path": "run-lock.py",
+      "sha256": "5592258b3d417a67bbe5c188c441947a1919ef3881224b94a1f4eb1d4b1b1f82",
+      "source": "staging/scheduled-gate/run-lock.py",
+      "source_sha256": "5592258b3d417a67bbe5c188c441947a1919ef3881224b94a1f4eb1d4b1b1f82"
+    },
+    {
+      "bytes": 5252,
+      "mode": "0555",
+      "path": "session-export-run.sh",
+      "sha256": "daf21abf161f2195a4a61edabd0b99e15ed858802f4f7c8fbc7f9f6f5511d726",
+      "source": "staging/scheduled-gate/session-export-run.sh",
+      "source_sha256": "daf21abf161f2195a4a61edabd0b99e15ed858802f4f7c8fbc7f9f6f5511d726"
+    },
+    {
+      "bytes": 12197,
+      "mode": "0444",
+      "path": "skills/_brain-filing-rules.json",
+      "sha256": "eda2aeee58f6836ea50d031730960fb294be4c6ee6af5b7cd210f082c4233469",
+      "source": "staging/scheduled-gate/skills/_brain-filing-rules.json",
+      "source_sha256": "eda2aeee58f6836ea50d031730960fb294be4c6ee6af5b7cd210f082c4233469"
+    },
+    {
+      "bytes": 8449,
+      "mode": "0444",
+      "path": "skills/_brain-filing-rules.md",
+      "sha256": "f92957ad839f7dc6ffcd6776850729c4da85856aeb243047ae2a4dac60a6ef41",
+      "source": "staging/runtime-lanes/skills/_brain-filing-rules.md",
+      "source_sha256": "f92957ad839f7dc6ffcd6776850729c4da85856aeb243047ae2a4dac60a6ef41"
+    },
+    {
+      "bytes": 14283,
+      "mode": "0444",
+      "path": "skills/brain-taxonomist/SKILL.md",
+      "sha256": "b276c2f5e20fef3f55a2edcd1fca3862649ed37a5ee7c6e2ff07195c936c0365",
+      "source": "staging/runtime-lanes/skills/brain-taxonomist/SKILL.md",
+      "source_sha256": "b276c2f5e20fef3f55a2edcd1fca3862649ed37a5ee7c6e2ff07195c936c0365"
+    },
+    {
+      "bytes": 4794,
+      "mode": "0444",
+      "path": "skills/conventions/post-run-retrieval-gate.md",
+      "sha256": "06205b69d55620c7987d470ef83f14184db103044beeae4a9ef1160aee5889d2",
+      "source": "staging/runtime-lanes/skills/conventions/post-run-retrieval-gate.md",
+      "source_sha256": "06205b69d55620c7987d470ef83f14184db103044beeae4a9ef1160aee5889d2"
+    },
+    {
+      "bytes": 3244,
+      "mode": "0444",
+      "path": "skills/conventions/quality.md",
+      "sha256": "3119afbb795b594ca1f5aae1e7fdb5e24866b87c408734e1fd3c976aa32b4468",
+      "source": "staging/runtime-lanes/skills/conventions/quality.md",
+      "source_sha256": "3119afbb795b594ca1f5aae1e7fdb5e24866b87c408734e1fd3c976aa32b4468"
+    },
+    {
+      "bytes": 17989,
+      "mode": "0444",
+      "path": "skills/enrich/SKILL.md",
+      "sha256": "e0453edcb8e2819dba433cf89352ac0abcc57eddb8949daf5d14fb3226005903",
+      "source": "staging/runtime-lanes/skills/enrich/SKILL.md",
+      "source_sha256": "e0453edcb8e2819dba433cf89352ac0abcc57eddb8949daf5d14fb3226005903"
+    },
+    {
+      "bytes": 12311,
+      "mode": "0444",
+      "path": "vendor/yaml/__init__.py",
+      "sha256": "b19dfcc333d6a75dfd73073901164507252f271b41d3b5f7d85510033a0547a7",
+      "source": "staging/meeting/vendor/yaml/__init__.py",
+      "source_sha256": "b19dfcc333d6a75dfd73073901164507252f271b41d3b5f7d85510033a0547a7"
+    },
+    {
+      "bytes": 4883,
+      "mode": "0444",
+      "path": "vendor/yaml/composer.py",
+      "sha256": "fcaa37d16afa783594794a5ab94193dcb720f503c19ce3d59539c8311189f453",
+      "source": "staging/meeting/vendor/yaml/composer.py",
+      "source_sha256": "fcaa37d16afa783594794a5ab94193dcb720f503c19ce3d59539c8311189f453"
+    },
+    {
+      "bytes": 28639,
+      "mode": "0444",
+      "path": "vendor/yaml/constructor.py",
+      "sha256": "90d8247da78b524c10618fd0e857f54f3d97570fe91b5c5513d024ef3faf88b0",
+      "source": "staging/meeting/vendor/yaml/constructor.py",
+      "source_sha256": "90d8247da78b524c10618fd0e857f54f3d97570fe91b5c5513d024ef3faf88b0"
+    },
+    {
+      "bytes": 3851,
+      "mode": "0444",
+      "path": "vendor/yaml/cyaml.py",
+      "sha256": "e99ac01bd7c062f7557b614aff0d21997a06ed962ca185306a91bc0a20bbd87d",
+      "source": "staging/meeting/vendor/yaml/cyaml.py",
+      "source_sha256": "e99ac01bd7c062f7557b614aff0d21997a06ed962ca185306a91bc0a20bbd87d"
+    },
+    {
+      "bytes": 2837,
+      "mode": "0444",
+      "path": "vendor/yaml/dumper.py",
+      "sha256": "3cb72d66563064ba7b5e679477046ebf89d8399d940670c8532f3e94a7cb17ea",
+      "source": "staging/meeting/vendor/yaml/dumper.py",
+      "source_sha256": "3cb72d66563064ba7b5e679477046ebf89d8399d940670c8532f3e94a7cb17ea"
+    },
+    {
+      "bytes": 43006,
+      "mode": "0444",
+      "path": "vendor/yaml/emitter.py",
+      "sha256": "8e086d694ede170837d5b1b407b45979aff6f40762f422a65eafd08e04290a44",
+      "source": "staging/meeting/vendor/yaml/emitter.py",
+      "source_sha256": "8e086d694ede170837d5b1b407b45979aff6f40762f422a65eafd08e04290a44"
+    },
+    {
+      "bytes": 2533,
+      "mode": "0444",
+      "path": "vendor/yaml/error.py",
+      "sha256": "021f73fada072546c4f63f8cf18a7181244ce4280b09cc15cc980b2d1176171a",
+      "source": "staging/meeting/vendor/yaml/error.py",
+      "source_sha256": "021f73fada072546c4f63f8cf18a7181244ce4280b09cc15cc980b2d1176171a"
+    },
+    {
+      "bytes": 2445,
+      "mode": "0444",
+      "path": "vendor/yaml/events.py",
+      "sha256": "e74fd392c810884e2ea7e94aa3f57e9c1cbeb402319083d0c58e6a0e1282787c",
+      "source": "staging/meeting/vendor/yaml/events.py",
+      "source_sha256": "e74fd392c810884e2ea7e94aa3f57e9c1cbeb402319083d0c58e6a0e1282787c"
+    },
+    {
+      "bytes": 2061,
+      "mode": "0444",
+      "path": "vendor/yaml/loader.py",
+      "sha256": "5156becc8aa6905482218abf3e04869b835226db4763645fff3438fdbd5f1cdd",
+      "source": "staging/meeting/vendor/yaml/loader.py",
+      "source_sha256": "5156becc8aa6905482218abf3e04869b835226db4763645fff3438fdbd5f1cdd"
+    },
+    {
+      "bytes": 1440,
+      "mode": "0444",
+      "path": "vendor/yaml/nodes.py",
+      "sha256": "80f28d8fca4a09d87677882bde021820d9cf39a3b11a12405226211919cf13ce",
+      "source": "staging/meeting/vendor/yaml/nodes.py",
+      "source_sha256": "80f28d8fca4a09d87677882bde021820d9cf39a3b11a12405226211919cf13ce"
+    },
+    {
+      "bytes": 25495,
+      "mode": "0444",
+      "path": "vendor/yaml/parser.py",
+      "sha256": "8a55a9e6fbe0a07146cef3990c8b45a068c3e83e369e1959ad9ca30306b4a09a",
+      "source": "staging/meeting/vendor/yaml/parser.py",
+      "source_sha256": "8a55a9e6fbe0a07146cef3990c8b45a068c3e83e369e1959ad9ca30306b4a09a"
+    },
+    {
+      "bytes": 6794,
+      "mode": "0444",
+      "path": "vendor/yaml/reader.py",
+      "sha256": "d1d9b38ab3a20c6e17a38d519ee412ecaf6b918df18c78956ac7c330d4ea08dc",
+      "source": "staging/meeting/vendor/yaml/reader.py",
+      "source_sha256": "d1d9b38ab3a20c6e17a38d519ee412ecaf6b918df18c78956ac7c330d4ea08dc"
+    },
+    {
+      "bytes": 14190,
+      "mode": "0444",
+      "path": "vendor/yaml/representer.py",
+      "sha256": "22e58ff9c016f6c1ca1274b4802a926bcf78935060e1c813c5a0f021c6d143e6",
+      "source": "staging/meeting/vendor/yaml/representer.py",
+      "source_sha256": "22e58ff9c016f6c1ca1274b4802a926bcf78935060e1c813c5a0f021c6d143e6"
+    },
+    {
+      "bytes": 9004,
+      "mode": "0444",
+      "path": "vendor/yaml/resolver.py",
+      "sha256": "f4bf9561f9b89961f1503d558385fbae30d12bfed565de9bf76c33abb63620a6",
+      "source": "staging/meeting/vendor/yaml/resolver.py",
+      "source_sha256": "f4bf9561f9b89961f1503d558385fbae30d12bfed565de9bf76c33abb63620a6"
+    },
+    {
+      "bytes": 51279,
+      "mode": "0444",
+      "path": "vendor/yaml/scanner.py",
+      "sha256": "60433788b652690c17710460da5d91e0c753d3318fd85f5e1e42862a71f25906",
+      "source": "staging/meeting/vendor/yaml/scanner.py",
+      "source_sha256": "60433788b652690c17710460da5d91e0c753d3318fd85f5e1e42862a71f25906"
+    },
+    {
+      "bytes": 4165,
+      "mode": "0444",
+      "path": "vendor/yaml/serializer.py",
+      "sha256": "0a1b85826854d35863e31808f0668abfabdf33606e8f06bd8bb7761401e3edc0",
+      "source": "staging/meeting/vendor/yaml/serializer.py",
+      "source_sha256": "0a1b85826854d35863e31808f0668abfabdf33606e8f06bd8bb7761401e3edc0"
+    },
+    {
+      "bytes": 2573,
+      "mode": "0444",
+      "path": "vendor/yaml/tokens.py",
+      "sha256": "953408cd2570f0c83dc2fe39f7e4e388e41eeb05738aa69196a5f6ffcf6ba79e",
+      "source": "staging/meeting/vendor/yaml/tokens.py",
+      "source_sha256": "953408cd2570f0c83dc2fe39f7e4e388e41eeb05738aa69196a5f6ffcf6ba79e"
+    },
+    {
+      "bytes": 20194,
+      "mode": "0444",
+      "path": "verify-export-receipts.py",
+      "sha256": "51bdc2a291650384704740b115ed777622fa8ed884d376326c061a857f896de9",
+      "source": "staging/scheduled-gate/verify-export-receipts.py",
+      "source_sha256": "51bdc2a291650384704740b115ed777622fa8ed884d376326c061a857f896de9"
+    },
+    {
+      "bytes": 7339,
+      "mode": "0444",
+      "path": "write-enrich-thin-receipt.py",
+      "sha256": "7352bea375bed7bea4b19212eeb5f6bb93763aa75306a33d8689009234a85d6d",
+      "source": "staging/runtime-lanes/write-enrich-thin-receipt.py",
+      "source_sha256": "7352bea375bed7bea4b19212eeb5f6bb93763aa75306a33d8689009234a85d6d"
+    },
+    {
+      "bytes": 7373,
+      "mode": "0444",
+      "path": "write-scheduled-dream-receipt.py",
+      "sha256": "a7fa316d8ce5732e46f64d2ef507cc99c284a10ca837035ebe47ac214ba5aca9",
+      "source": "staging/scheduled-gate/write-scheduled-dream-receipt.py",
+      "source_sha256": "a7fa316d8ce5732e46f64d2ef507cc99c284a10ca837035ebe47ac214ba5aca9"
+    }
+  ],
+  "generated_at": "2026-07-16T20:25:43+00:00",
+  "git_diff_sha256": "a334d3251984e5fba13f94be6483502746af9fd00facd5dd16f9395be77f021f",
+  "git_head": "9f9af4e6a3c82709dc98bf23f285aeb4471eab48",
+  "runtime": "/Users/jarvis/.gbrain/runtimes/incident-recovery-20260716T202543Z-9f9af4e6a3c8-a334d3251984-r3",
+  "schema": "gbrain-incident-recovery-runtime-manifest/v1",
+  "symlink_count": 0,
+  "writable_payload_files": []
+}

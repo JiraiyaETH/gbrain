@@ -50,6 +50,12 @@ interface DreamArgs {
   from: string | null;
   /** v0.21: backfill range end (YYYY-MM-DD). */
   to: string | null;
+  /** Scheduled exact settlement night. Unlike --to, never selects history. */
+  nightId: string | null;
+  /** Historical transcript closeout subcommand. */
+  closeBacklog: boolean;
+  /** Exclusive cutoff for close-backlog. */
+  before: string | null;
   /**
    * v0.23.2: disable the synthesize phase's self-consumption guard.
    * Long-form flag name to discourage casual use; loud stderr warning fires when set.
@@ -116,6 +122,8 @@ function collectFlagValues(args: string[], flag: string): string[] | null {
 }
 
 function parseArgs(args: string[]): DreamArgs {
+  const closeBacklog = args[0] === 'close-backlog';
+  const help = args.includes('--help') || args.includes('-h');
   const phaseIdx = args.indexOf('--phase');
   const rawPhase = phaseIdx !== -1 ? args[phaseIdx + 1] : null;
   let phase = rawPhase && (ALL_PHASES as string[]).includes(rawPhase)
@@ -157,13 +165,34 @@ function parseArgs(args: string[]): DreamArgs {
     process.exit(2);
   }
 
-  // --input + --date / --from / --to is incoherent: --input is a single
-  // file, the date filters scan a directory.
-  if (inputFile && (date || from || to)) {
-    console.error('--input cannot be combined with --date / --from / --to');
+  const nightIdIdx = args.indexOf('--night-id');
+  const nightId = nightIdIdx !== -1 ? args[nightIdIdx + 1] ?? null : null;
+  if (nightIdIdx !== -1 && (!nightId || !ISO_DATE_RE.test(nightId))) {
+    console.error(`--night-id must be YYYY-MM-DD; got "${nightId}"`);
     process.exit(2);
   }
 
+  const beforeIdx = args.indexOf('--before');
+  const before = beforeIdx !== -1 ? args[beforeIdx + 1] ?? null : null;
+  if (closeBacklog && !help && (!before || !ISO_DATE_RE.test(before))) {
+    console.error('gbrain dream close-backlog requires --before YYYY-MM-DD');
+    process.exit(2);
+  }
+  if (!closeBacklog && beforeIdx !== -1) {
+    console.error('--before is valid only with gbrain dream close-backlog');
+    process.exit(2);
+  }
+
+  // --input + --date / --from / --to is incoherent: --input is a single
+  // file, the date filters scan a directory.
+  if (inputFile && (date || from || to || nightId)) {
+    console.error('--input cannot be combined with --date / --from / --to / --night-id');
+    process.exit(2);
+  }
+  if (nightId && (date || from || to)) {
+    console.error('--night-id cannot be combined with --date / --from / --to');
+    process.exit(2);
+  }
   // --input implies --phase synthesize.
   if (inputFile && !phase) phase = 'synthesize';
 
@@ -225,6 +254,10 @@ function parseArgs(args: string[]): DreamArgs {
       process.exit(2);
     }
   }
+  if (closeBacklog && (phase || inputFile || date || from || to || nightId || drain)) {
+    console.error('close-backlog cannot be combined with phase, input, date-range, night-id, or drain options');
+    process.exit(2);
+  }
 
   return {
     json: args.includes('--json'),
@@ -232,11 +265,14 @@ function parseArgs(args: string[]): DreamArgs {
     pull: args.includes('--pull'),
     phase,
     dir,
-    help: args.includes('--help') || args.includes('-h'),
+    help,
     inputFile,
     date,
     from,
     to,
+    nightId,
+    closeBacklog,
+    before,
     bypassDreamGuard: args.includes('--unsafe-bypass-dream-guard'),
     source,
     drain,
@@ -342,6 +378,14 @@ Options:
   --date YYYY-MM-DD   Synthesize transcripts dated for one specific day.
   --from YYYY-MM-DD   Backfill range start (use with --to).
   --to   YYYY-MM-DD   Backfill range end.
+  --night-id YYYY-MM-DD
+                      Scheduled exact settlement night. Strict equality on
+                      exporter settled_at; never use this for a range backfill.
+
+  close-backlog --before YYYY-MM-DD [--dry-run]
+                      Permanently mark incomplete transcripts before the
+                      cutoff as operator-discarded. Evidence files are not
+                      changed. Dry-run prints the exact candidate list.
 
   --drain             Bounded backlog drain for --phase extract_atoms
                       (the default phase when --drain is set). Holds the
@@ -367,6 +411,7 @@ Examples:
   gbrain dream --phase lint
   gbrain dream --phase synthesize --input ~/transcripts/2026-04-25.txt
   gbrain dream --phase synthesize --from 2026-04-01 --to 2026-04-25
+  gbrain dream close-backlog --before 2026-07-16 --dry-run
   0 2 * * * gbrain dream --json         # nightly via cron
 
 Configure synthesize:
@@ -572,6 +617,33 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     }
   }
 
+  if (opts.closeBacklog) {
+    if (engine === null) {
+      console.error('gbrain dream close-backlog requires a connected brain (no engine available)');
+      process.exit(1);
+    }
+    const { closeDreamBacklog } = await import('../core/cycle/synthesize.ts');
+    const result = await closeDreamBacklog(engine, {
+      before: opts.before!,
+      dryRun: opts.dryRun,
+    });
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(
+        `[dream close-backlog] ${result.dry_run ? 'would discard' : 'discarded'} ` +
+        `${result.candidates} transcript(s) settled before ${result.before}; ` +
+        `markers_written=${result.markers_written}`,
+      );
+      for (const item of result.items) {
+        console.log(
+          `${item.settled_date}\t${item.content_sha256}\t${item.marker_key}\t${item.file_path}`,
+        );
+      }
+    }
+    return;
+  }
+
   const brainDir = await resolveBrainDir(engine, opts.dir, resolvedSourceId);
   // Both-null is the only hard error: no local checkout AND no DB connection
   // means neither filesystem phases nor DB phases can run. With an engine but
@@ -605,6 +677,7 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     synthDate: opts.date ?? undefined,
     synthFrom: opts.from ?? undefined,
     synthTo: opts.to ?? undefined,
+    synthNightId: opts.nightId ?? undefined,
     synthBypassDreamGuard: opts.bypassDreamGuard,
   });
 

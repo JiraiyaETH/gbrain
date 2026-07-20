@@ -33,6 +33,7 @@ describe('KNOWN_CONFIG_KEYS', () => {
   test('contains the dream synthesize timeout keys (#1594)', () => {
     expect(KNOWN_CONFIG_KEYS).toContain('dream.synthesize.subagent_timeout_ms');
     expect(KNOWN_CONFIG_KEYS).toContain('dream.synthesize.subagent_wait_timeout_ms');
+    expect(KNOWN_CONFIG_KEYS).toContain('dream.synthesize.max_paid_children_per_run');
   });
 
   test('contains the spend-control keys (v0.42.42.0, #2139) — no --force archaeology', () => {

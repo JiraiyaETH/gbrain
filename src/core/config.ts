@@ -946,6 +946,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'dream.synthesize.verdict_model',
   'dream.synthesize.max_prompt_tokens',
   'dream.synthesize.max_chunks_per_transcript',
+  'dream.synthesize.max_paid_children_per_run',
   // #2415: top-level namespace for synthesize/patterns output (default 'wiki').
   'dream.synthesize.output_root',
   'dream.synthesize.subagent_timeout_ms',

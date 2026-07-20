@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -12,12 +12,14 @@ import {
 import {
   allSynthesizeChildrenCompleted,
   classifySynthesizeChildOutcome,
+  closeDreamBacklog,
   countSynthesizeChildOutcomes,
   runPhaseSynthesize,
   synthesizeCompletionKey,
   synthesizeIdempotencyKey,
   synthesizeLogicalCompletionKey,
   synthesizeLogicalIdempotencyKey,
+  synthesizeOperatorDiscardKey,
 } from '../src/core/cycle/synthesize.ts';
 import { MinionQueue } from '../src/core/minions/queue.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
@@ -99,6 +101,33 @@ function sha256Tuple(parts: Array<string | number>): string {
 }
 
 describe('corrective Dream transcript identity + provenance gate', () => {
+  test('scheduled night selection is strict on Bangkok settlement while manual ranges retain history', () => {
+    const dir = tempDir('gbrain-dream-exact-night-');
+    const olderPath = join(dir, '2026-07-13__claude-code__settled-n-minus-2.md');
+    const targetPath = join(dir, '2026-07-13__claude-code__settled-night-n.md');
+    writeFileSync(olderPath, renderTranscript(exporterMeta({
+      session_id: 'settled-n-minus-2',
+      export_date: '2026-07-13',
+      settled_at: '2026-07-13T23:30:00+07:00',
+    }), 'older settlement'));
+    writeFileSync(targetPath, renderTranscript(exporterMeta({
+      session_id: 'settled-night-n',
+      export_date: '2026-07-13',
+      settled_at: '2026-07-15T00:30:00+07:00',
+    }), 'target settlement'));
+
+    const scheduled = discoverTranscripts({
+      corpusDir: dir,
+      minChars: 100,
+      nightId: '2026-07-15',
+    });
+    expect(scheduled.map(item => item.filePath)).toEqual([targetPath]);
+    expect(scheduled[0].settledDate).toBe('2026-07-15');
+
+    const manual = discoverTranscripts({ corpusDir: dir, minChars: 100, to: '2026-07-15' });
+    expect(manual.map(item => item.filePath)).toEqual([olderPath, targetPath]);
+  });
+
   test('identity is content-independent, uses exact v1 hash contract, and changed bytes retain one key', () => {
     const dir = tempDir('gbrain-dream-identity-');
     const path = join(dir, '2026-07-15__claude-code__session-stable-1.md');
@@ -503,6 +532,162 @@ describe('corrective Dream transcript identity + provenance gate', () => {
     })}\n`);
     expect(discoverTranscripts({ corpusDir: dir, minChars: 100 })).toEqual([]);
   });
+});
+
+describe('corrective Dream scheduled spend cap + backlog closeout', () => {
+  test('zero config defaults to 10 paid children; the 11th keeps no completion or cooldown', async () => {
+    const corpusDir = tempDir('gbrain-dream-paid-cap-corpus-');
+    const brainDir = tempDir('gbrain-dream-paid-cap-brain-');
+    await engine.setConfig('dream.synthesize.enabled', 'true');
+    await engine.setConfig('dream.synthesize.session_corpus_dir', corpusDir);
+    await engine.setConfig('dream.synthesize.max_paid_children_per_run', '0');
+
+    for (let index = 1; index <= 11; index++) {
+      const id = `paid-cap-${String(index).padStart(2, '0')}`;
+      const path = join(corpusDir, `2026-07-13__claude-code__${id}.md`);
+      writeFileSync(path, renderTranscript(exporterMeta({
+        session_id: id,
+        export_date: '2026-07-13',
+        settled_at: '2026-07-15T01:00:00+07:00',
+      }), id));
+    }
+    const transcripts = discoverTranscripts({
+      corpusDir,
+      minChars: 100,
+      nightId: '2026-07-15',
+    });
+    expect(transcripts).toHaveLength(11);
+    for (const transcript of transcripts) {
+      await engine.putDreamVerdict(transcript.filePath, transcript.contentHash, {
+        worth_processing: true,
+        reasons: ['fixture worth processing'],
+      });
+    }
+
+    const result = await runPhaseSynthesize(engine, {
+      brainDir,
+      dryRun: false,
+      sourceId: 'default',
+      nightId: '2026-07-15',
+      waitForChildForTestOnly: async (queue, jobId) => {
+        await engine.executeRaw(
+          `UPDATE minion_jobs
+              SET status='completed', result=$2::text::jsonb, finished_at=now()
+            WHERE id=$1`,
+          [jobId, JSON.stringify({ result: 'fixture complete', stop_reason: 'end_turn' })],
+        );
+        return (await queue.getJob(jobId))!;
+      },
+    });
+
+    expect(result.status).toBe('warn');
+    expect(result.details.capped).toBe(true);
+    expect(result.details.paid_children_cap).toBe(10);
+    expect(result.details.paid_children_dispatched).toBe(10);
+    expect(result.details.paid_children_overflow).toBe(1);
+    expect(result.details.children_submitted).toBe(10);
+    expect(result.details.cooldown_written).toBe(false);
+    expect(await engine.getConfig(synthesizeCompletionKey())).toBeNull();
+
+    const tenthKey = synthesizeLogicalIdempotencyKey(transcripts[9].logicalIdentity!);
+    const eleventhKey = synthesizeLogicalIdempotencyKey(transcripts[10].logicalIdentity!);
+    const rows = await engine.executeRaw<{ idempotency_key: string }>(
+      `SELECT idempotency_key FROM minion_jobs WHERE idempotency_key = $1 OR idempotency_key = $2`,
+      [tenthKey, eleventhKey],
+    );
+    expect(rows.map(row => row.idempotency_key)).toContain(tenthKey);
+    expect(rows.map(row => row.idempotency_key)).not.toContain(eleventhKey);
+    expect(await engine.getConfig(synthesizeLogicalCompletionKey(transcripts[9].logicalIdentity!)))
+      .not.toBeNull();
+    expect(await engine.getConfig(synthesizeLogicalCompletionKey(transcripts[10].logicalIdentity!)))
+      .toBeNull();
+  }, 30_000);
+
+  test('close-backlog dry-run is inert; apply tombstones incomplete and partial fixtures only', async () => {
+    const corpusDir = tempDir('gbrain-dream-close-backlog-');
+    await engine.setConfig('dream.synthesize.enabled', 'true');
+    await engine.setConfig('dream.synthesize.session_corpus_dir', corpusDir);
+    const fixtures = [
+      ['old-incomplete', '2026-07-13T01:00:00+07:00'],
+      ['old-partial', '2026-07-14T01:00:00+07:00'],
+      ['old-complete', '2026-07-14T02:00:00+07:00'],
+      ['new-incomplete', '2026-07-16T01:00:00+07:00'],
+    ] as const;
+    for (const [id, settledAt] of fixtures) {
+      writeFileSync(join(corpusDir, `2026-07-13__claude-code__${id}.md`), renderTranscript(exporterMeta({
+        session_id: id,
+        export_date: '2026-07-13',
+        settled_at: settledAt,
+      }), id));
+    }
+    const transcripts = discoverTranscripts({ corpusDir, minChars: 100 });
+    const bySession = new Map(transcripts.map(item => [item.logicalIdentity!.sessionId, item]));
+    await engine.executeRaw(
+      `INSERT INTO minion_jobs (name, queue, status, idempotency_key)
+       VALUES ('subagent', 'default', 'failed', $1)`,
+      [synthesizeLogicalIdempotencyKey(bySession.get('old-partial')!.logicalIdentity!)],
+    );
+    await engine.executeRaw(
+      `INSERT INTO minion_jobs (name, queue, status, idempotency_key, result, finished_at)
+       VALUES ('subagent', 'default', 'completed', $1, $2::text::jsonb, now())`,
+      [
+        synthesizeLogicalIdempotencyKey(bySession.get('old-complete')!.logicalIdentity!),
+        JSON.stringify({ result: 'complete', stop_reason: 'end_turn' }),
+      ],
+    );
+    const evidenceBefore = new Map(transcripts.map(item => [item.filePath, readFileSync(item.filePath, 'utf8')]));
+
+    const preview = await closeDreamBacklog(engine, {
+      before: '2026-07-16',
+      dryRun: true,
+      now: '2026-07-20T00:00:00Z',
+    });
+    expect(preview.candidates).toBe(2);
+    expect(preview.markers_written).toBe(0);
+    expect(preview.completed_lineage).toBe(1);
+    expect(preview.not_before_cutoff).toBe(1);
+    expect(preview.items.map(item => item.logical_transcript_id)).toEqual([
+      bySession.get('old-incomplete')!.logicalIdentity!.logicalTranscriptId,
+      bySession.get('old-partial')!.logicalIdentity!.logicalTranscriptId,
+    ]);
+    expect(preview.items.find(item => item.file_path.includes('old-partial'))?.partial_lineage_rows).toBe(1);
+    for (const item of preview.items) expect(await engine.getConfig(item.marker_key)).toBeNull();
+
+    const applied = await closeDreamBacklog(engine, {
+      before: '2026-07-16',
+      dryRun: false,
+      now: '2026-07-20T00:00:00Z',
+    });
+    expect(applied.candidates).toBe(2);
+    expect(applied.markers_written).toBe(2);
+    for (const item of applied.items) {
+      const marker = JSON.parse((await engine.getConfig(item.marker_key))!);
+      expect(marker.status).toBe('operator_discarded');
+      expect(marker.reason).toBe('operator_discarded_before_cutoff');
+    }
+    expect(await engine.getConfig(synthesizeOperatorDiscardKey(bySession.get('old-complete')!))).toBeNull();
+    expect(await engine.getConfig(synthesizeOperatorDiscardKey(bySession.get('new-incomplete')!))).toBeNull();
+    for (const [path, content] of evidenceBefore) expect(readFileSync(path, 'utf8')).toBe(content);
+
+    await engine.putDreamVerdict(
+      bySession.get('new-incomplete')!.filePath,
+      bySession.get('new-incomplete')!.contentHash,
+      { worth_processing: false, reasons: ['fixture not worth processing'] },
+    );
+    const miningPreview = await runPhaseSynthesize(engine, {
+      brainDir: tempDir('gbrain-dream-close-backlog-brain-'),
+      dryRun: true,
+      sourceId: 'default',
+      date: '2026-07-13',
+    });
+    expect((miningPreview.details.skips as Array<{ reason: string }>).filter(
+      item => item.reason === 'operator_discarded',
+    )).toHaveLength(2);
+
+    const rerun = await closeDreamBacklog(engine, { before: '2026-07-16', dryRun: false });
+    expect(rerun.candidates).toBe(0);
+    expect(rerun.already_discarded).toBe(2);
+  }, 30_000);
 });
 
 describe('corrective Dream terminal outcome + scheduled exit policy', () => {
