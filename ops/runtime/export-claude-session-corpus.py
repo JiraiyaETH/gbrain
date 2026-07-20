@@ -1824,8 +1824,11 @@ def main() -> int:
                 )
             if status == "withdraw_unsettled":
                 unsettled_prior_ids.add(str(result["session_id"]))
-            if result.get("settlement_date"):
-                selected_settlement_dates.add(result["settlement_date"].isoformat())
+            # Observed-but-not-selected sessions (already_settled, settled_drift,
+            # skipped_*) must NOT contribute to selected_settlement_dates: a
+            # drifted settled session touched after the night would inject a
+            # future date and make the receipt writer refuse a valid night.
+            # Only the rendered/migration selection branch records dates.
             if status == "legacy_migration_failed":
                 print(
                     f"error: safe legacy migration refused for logical session "
