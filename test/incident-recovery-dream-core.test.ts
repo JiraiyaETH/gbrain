@@ -725,6 +725,32 @@ describe('corrective Dream terminal outcome + scheduled exit policy', () => {
     expect(shouldDreamExitNonZero('failed', undefined)).toBe(true);
     expect(shouldDreamExitNonZero('ok', '1')).toBe(false);
   });
+
+  test('strict partial is scoped to synthesis-critical phases when phases are provided', () => {
+    const phase = (name: string, status: 'ok' | 'warn' | 'fail') =>
+      ({ phase: name, status, duration_ms: 0, summary: '' }) as never;
+    const chronicWarns = [
+      phase('extract_facts', 'warn'),
+      phase('orphans', 'warn'),
+      phase('propose_takes', 'warn'),
+      phase('synthesize', 'ok'),
+    ];
+    // Chronic maintenance warns must not fail a strict scheduled run.
+    expect(shouldDreamExitNonZero('partial', '1', chronicWarns)).toBe(false);
+    // A synthesis-critical warn or fail still propagates.
+    expect(
+      shouldDreamExitNonZero('partial', '1', [...chronicWarns, phase('synthesize', 'warn')]),
+    ).toBe(true);
+    expect(
+      shouldDreamExitNonZero('partial', '1', [phase('patterns', 'fail')]),
+    ).toBe(true);
+    // failed always propagates regardless of phase detail.
+    expect(shouldDreamExitNonZero('failed', '0', chronicWarns)).toBe(true);
+    // Manual (non-strict) partial stays zero even with critical warns.
+    expect(
+      shouldDreamExitNonZero('partial', '0', [phase('synthesize', 'warn')]),
+    ).toBe(false);
+  });
 });
 
 describe('corrective Dream stable/legacy completion migration', () => {

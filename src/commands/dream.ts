@@ -90,15 +90,39 @@ const DEFAULT_DRAIN_WINDOW_SECONDS = 300;
 const EXIT_DRAIN_INCOMPLETE = 3;
 
 /**
+ * Phases whose warn/fail must fail a strict scheduled run. Chronic
+ * maintenance warns (orphans count, propose_takes info, legacy fence
+ * backfill) mark the cycle 'partial' every night on a lived-in brain;
+ * strict mode exists to catch SYNTHESIS integrity problems, not to turn
+ * routine housekeeping into nightly failure receipts.
+ */
+const STRICT_CRITICAL_PHASES = new Set([
+  'synthesize',
+  'patterns',
+  'extract_atoms',
+  'synthesize_concepts',
+]);
+
+/**
  * Scheduled wrappers opt into fail-closed partial handling without changing
- * the long-standing interactive/manual CLI contract.
+ * the long-standing interactive/manual CLI contract. When `phases` is
+ * provided, a strict partial only propagates if a synthesis-critical phase
+ * warned or failed; without `phases` the historical any-partial contract is
+ * preserved (pinned by the incident-recovery tests).
  */
 export function shouldDreamExitNonZero(
   status: CycleReport['status'],
   strictValue = process.env.GBRAIN_DREAM_STRICT,
+  phases?: CycleReport['phases'],
 ): boolean {
   const strict = strictValue === '1' || strictValue?.toLowerCase() === 'true';
-  return status === 'failed' || (strict && status === 'partial');
+  if (status === 'failed') return true;
+  if (!strict || status !== 'partial') return false;
+  if (!phases) return true;
+  return phases.some(
+    p => STRICT_CRITICAL_PHASES.has(p.phase)
+      && (p.status === 'fail' || p.status === 'warn'),
+  );
 }
 
 /**
@@ -690,7 +714,8 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
   // Interactive/manual runs preserve the historical partial=0 contract.
   // Scheduled wrappers set GBRAIN_DREAM_STRICT=1 so a failed synthesize child
   // (which makes the overall cycle partial when other phases ran) propagates.
-  if (shouldDreamExitNonZero(report.status)) {
+  // Chronic maintenance warns don't fail strict runs — see STRICT_CRITICAL_PHASES.
+  if (shouldDreamExitNonZero(report.status, undefined, report.phases)) {
     process.exit(1);
   }
 
