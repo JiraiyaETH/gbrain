@@ -478,17 +478,21 @@ export async function extractLinksFromFile(
 
 /** Extract timeline entries from markdown content */
 export function extractTimelineFromContent(content: string, slug: string): ExtractedTimelineEntry[] {
-  const entries: ExtractedTimelineEntry[] = [];
-
-  // Format 1: Bullet — - **YYYY-MM-DD** | Source — Summary
-  const bulletPattern = /^-\s+\*\*(\d{4}-\d{2}-\d{2})\*\*\s*\|\s*(.+?)\s*[—–-]\s*(.+)$/gm;
-  let match;
-  while ((match = bulletPattern.exec(content)) !== null) {
-    entries.push({ slug, date: match[1], source: match[2].trim(), summary: match[3].trim() });
-  }
+  // Format 1 (dated bullets) and inline citations use the same canonical
+  // parser as DB extraction and put_page. Keep source empty: citation
+  // provenance is carried in detail, and the complete bullet text is the
+  // stable summary instead of being split at an arbitrary dash.
+  const entries: ExtractedTimelineEntry[] = parseTimelineEntries(content).map(candidate => ({
+    slug,
+    date: candidate.date,
+    source: '',
+    summary: candidate.summary,
+    detail: candidate.detail || undefined,
+  }));
 
   // Format 2: Header — ### YYYY-MM-DD — Title
   const headerPattern = /^###\s+(\d{4}-\d{2}-\d{2})\s*[—–-]\s*(.+)$/gm;
+  let match;
   while ((match = headerPattern.exec(content)) !== null) {
     const afterIdx = match.index + match[0].length;
     const nextHeader = content.indexOf('\n### ', afterIdx);
@@ -499,38 +503,6 @@ export function extractTimelineFromContent(content: string, slug: string): Extra
     );
     const detail = content.slice(afterIdx, endIdx).trim();
     entries.push({ slug, date: match[1], source: 'markdown', summary: match[2].trim(), detail: detail || undefined });
-  }
-
-  // Format 3: Inline citation — [Source: <source>, YYYY-MM-DD]
-  //
-  // This is the citation convention gbrain's own quality rules require on
-  // every brain write (skills/conventions/quality.md), so dated evidence is
-  // pervasive in curated pages — but until now the extractor could not see
-  // it, and a page whose dates all live in citations scored zero timeline
-  // coverage. The entry's summary is the sentence the citation annotates
-  // (the surrounding line with citation markers stripped).
-  //
-  // Lines already captured by Format 1 are skipped: a timeline bullet often
-  // carries its own [Source: ...] citation, and re-extracting it would file
-  // a duplicate entry under a different (source, summary) shape that the
-  // DB-level uniqueness cannot collapse.
-  const citationPattern = /\[Source:\s*([^\]]+?),\s*(\d{4}-\d{2}-\d{2})\s*\]/g;
-  const bulletLinePattern = /^-\s+\*\*\d{4}-\d{2}-\d{2}\*\*\s*\|/;
-  for (const line of content.split(/\r?\n/)) {
-    if (bulletLinePattern.test(line)) continue;
-    const lineMatches = [...line.matchAll(citationPattern)];
-    if (lineMatches.length === 0) continue;
-    // Strip every citation marker from the line to leave the annotated text.
-    const summary = line
-      .replace(/\[Source:[^\]]*\]/g, '')
-      .replace(/^[-*>#\s]+/, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 300);
-    if (!summary) continue; // a bare citation with no surrounding text is not an event
-    for (const m of lineMatches) {
-      entries.push({ slug, date: m[2], source: m[1].trim().slice(0, 200), summary });
-    }
   }
 
   return entries;

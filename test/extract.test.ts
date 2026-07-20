@@ -126,8 +126,8 @@ describe('extractTimelineFromContent', () => {
     const entries = extractTimelineFromContent(content, 'people/test');
     expect(entries).toHaveLength(1);
     expect(entries[0].date).toBe('2025-03-18');
-    expect(entries[0].source).toBe('Meeting');
-    expect(entries[0].summary).toBe('Discussed partnership');
+    expect(entries[0].source).toBe('');
+    expect(entries[0].summary).toBe('Meeting — Discussed partnership');
   });
 
   it('extracts header format entries', () => {
@@ -156,13 +156,26 @@ describe('extractTimelineFromContent', () => {
     expect(entries).toHaveLength(1);
   });
 
+  it('does not split Format-1 summaries at hyphens inside slugs', () => {
+    const content = `- **2025-03-18** | [[board-notes]] → Approved partnership`;
+    const entries = extractTimelineFromContent(content, 'test');
+    expect(entries).toEqual([{
+      slug: 'test',
+      date: '2025-03-18',
+      source: '',
+      summary: '[[board-notes]] → Approved partnership',
+      detail: undefined,
+    }]);
+  });
+
   it('extracts inline citation format entries', () => {
     const content = `Closed the seed round with fund-a leading. [Source: board meeting notes, 2025-04-02]`;
     const entries = extractTimelineFromContent(content, 'deals/acme-seed');
     expect(entries).toHaveLength(1);
     expect(entries[0].date).toBe('2025-04-02');
-    expect(entries[0].source).toBe('board meeting notes');
+    expect(entries[0].source).toBe('');
     expect(entries[0].summary).toBe('Closed the seed round with fund-a leading.');
+    expect(entries[0].detail).toBe('Source: board meeting notes');
   });
 
   it('keeps commas inside the citation source', () => {
@@ -170,7 +183,8 @@ describe('extractTimelineFromContent', () => {
     const entries = extractTimelineFromContent(content, 'people/alice-example');
     expect(entries).toHaveLength(1);
     expect(entries[0].date).toBe('2025-05-10');
-    expect(entries[0].source).toBe('email from alice-example re: offer, signed');
+    expect(entries[0].source).toBe('');
+    expect(entries[0].detail).toBe('Source: email from alice-example re: offer, signed');
   });
 
   it('extracts one entry per citation when a line carries several', () => {
@@ -186,7 +200,8 @@ describe('extractTimelineFromContent', () => {
     const content = `- **2025-03-18** | Meeting — Discussed partnership [Source: meeting notes, 2025-03-18]`;
     const entries = extractTimelineFromContent(content, 'test');
     expect(entries).toHaveLength(1); // Format 1 only
-    expect(entries[0].source).toBe('Meeting');
+    expect(entries[0].source).toBe('');
+    expect(entries[0].summary).toBe('Meeting — Discussed partnership [Source: meeting notes, 2025-03-18]');
   });
 
   it('skips a bare citation with no surrounding text', () => {

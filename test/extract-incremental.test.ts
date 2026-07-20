@@ -240,7 +240,7 @@ describe('runExtractCore — incremental cycle path (#417)', () => {
     );
     expect(timelineRows).toHaveLength(1);
     expect(timelineRows[0].source_id).toBe('robotics');
-    expect(timelineRows[0].summary).toBe('Started actuator calibration');
+    expect(timelineRows[0].summary).toBe('lab — Started actuator calibration');
   });
 
   test('10. omitted sourceId keeps filesystem extract rows on default source', async () => {
@@ -275,6 +275,6 @@ describe('runExtractCore — incremental cycle path (#417)', () => {
          FROM timeline_entries t
          JOIN pages p ON p.id = t.page_id`,
     );
-    expect(timelineRows).toEqual([{ source_id: 'default', summary: 'Default-source milestone' }]);
+    expect(timelineRows).toEqual([{ source_id: 'default', summary: 'lab — Default-source milestone' }]);
   });
 });

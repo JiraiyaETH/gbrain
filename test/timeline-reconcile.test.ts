@@ -129,17 +129,24 @@ describe('timeline page-parser reconciliation', () => {
       writeFileSync(path, content);
 
       await runExtract(engine, ['timeline', '--source', 'fs', '--dir', dir]);
-      expect(await stored(slug)).toHaveLength(1);
-      expect((await stored(slug))[0].summary).toBe('Approved plan');
+      const afterFs = await stored(slug);
+      expect(afterFs).toHaveLength(1);
+      expect(afterFs[0]).toMatchObject({ summary: 'Board — Approved plan', source: '' });
 
       await runExtract(engine, ['timeline', '--source', 'db']);
-      expect(await stored(slug)).toHaveLength(1);
-      expect((await stored(slug))[0].summary).toBe('Board — Approved plan');
+      const afterDb = await stored(slug);
+      expect(afterDb).toHaveLength(1);
+      expect(afterDb[0].id).toBe(afterFs[0].id);
 
       await extractTimelineForSlugs(engine, dir, [slug], { sourceId: 'default' });
       const finalRows = await stored(slug);
       expect(finalRows).toHaveLength(1);
-      expect(finalRows[0]).toMatchObject({ summary: 'Approved plan', source: 'Board', managed_by: PAGE_TIMELINE_MANAGED_BY });
+      expect(finalRows[0]).toMatchObject({
+        id: afterFs[0].id,
+        summary: 'Board — Approved plan',
+        source: '',
+        managed_by: PAGE_TIMELINE_MANAGED_BY,
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
