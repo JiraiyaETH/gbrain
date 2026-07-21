@@ -251,6 +251,13 @@ internal-team attendees who recur across most meetings.
 
 ### Phase 4: Entity propagation (MANDATORY)
 
+> **Propagation scope (operator ruling 2026-07-21; personal/taste/architecture-ledger):** propagation
+> means TIMELINE entries (and page creation/State facts) only. **Open Threads NEVER propagate** — a
+> follow-up item is filed ONCE, on the page of the entity that owns the relationship (per the
+> ownership rules in skills/enrich Open Threads block), framed from the operator's perspective, and
+> only when the operator/Tailored actually holds or awaits the ball. Counterparty-internal tasks are
+> State/Timeline facts, not threads.
+
 For each materially discussed company, project, or concept:
 1. Check brain for existing page (reconcile — never clobber a richer existing page;
    for an already-rich page, insert ONE timeline line via a surgical file edit).
