@@ -78,6 +78,35 @@ for relative_path in "${payloads[@]}"; do
   install -m 0444 "$repo_root/$relative_path" "$stage/$relative_path"
 done
 
+# Guard: every PINNED_*_SHA256 in meeting-complete.py must match the repo payload
+# it pins, or the sealed runtime fails closed on every meeting-complete run
+# (assert_runtime_helpers raises before any work). A skill edit without its pin
+# bump must fail HERE, at build time, not at 05:00 in the lane.
+verify_pin() {
+  local const_name="$1" rel_path="$2"
+  local pinned actual
+  pinned="$(sed -n "s/^${const_name} = \"\([0-9a-f]\{64\}\)\"$/\1/p" "$repo_root/ops/runtime/meeting-complete.py")"
+  actual="$(shasum -a 256 "$repo_root/$rel_path" | awk '{print $1}')"
+  if [[ -z "$pinned" ]]; then
+    echo "PIN GUARD FAIL: ${const_name} not found in meeting-complete.py" >&2; exit 1
+  fi
+  if [[ "$pinned" != "$actual" ]]; then
+    echo "PIN GUARD FAIL: ${const_name} pins ${pinned} but $rel_path hashes to ${actual}." >&2
+    echo "Update the pin in ops/runtime/meeting-complete.py in the same commit as the payload edit." >&2
+    exit 1
+  fi
+}
+verify_pin PINNED_RESOLVER_SHA256 "ops/runtime/brain_type_resolver.py"
+verify_pin PINNED_SKILL_SHA256 "skills/meeting-ingestion/SKILL.md"
+verify_pin PINNED_QA_SHA256 "skills/meeting-ingestion/scripts/qa-meeting.sh"
+verify_pin PINNED_QA_ADAPTER_SHA256 "ops/runtime/qa-gbrain-adapter.py"
+verify_pin PINNED_DOCTRINE_SHA256 "skills/meeting-ingestion/references/doctrine.md"
+verify_pin PINNED_TAXONOMIST_SHA256 "skills/brain-taxonomist/SKILL.md"
+verify_pin PINNED_FILING_RULES_SHA256 "skills/_brain-filing-rules.md"
+verify_pin PINNED_FILING_RULES_JSON_SHA256 "skills/_brain-filing-rules.json"
+verify_pin PINNED_QUALITY_SHA256 "skills/conventions/quality.md"
+verify_pin PINNED_RETRIEVAL_GATE_SHA256 "skills/conventions/post-run-retrieval-gate.md"
+
 # Rebuild the pinned PyYAML payload instead of checking vendor/ into git.
 yaml_build="$(mktemp -d "$destination_parent/.gbrain-pyyaml-build.XXXXXX")"
 "$python_bin" -m pip install \
