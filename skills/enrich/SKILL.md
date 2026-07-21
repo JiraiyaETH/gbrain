@@ -290,6 +290,18 @@ Key connections, mutual contacts, organizational relationships.
 ## Open Threads
 Active conversations, pending items, things to follow up on.
 
+> **Lifecycle rules (operator ruling 2026-07-21; personal/taste/architecture-ledger):**
+> 1. Every thread bullet MUST carry an as-of date (the date of the evidence that opened it).
+> 2. Do NOT create a thread from source material whose newest evidence is >6 months old at ingest time — what was "pending" inside an old conversation is history; record it in the Timeline instead.
+> 3. A thread EXPIRES when its evidence (or the page's last real activity) passes 6 months without update — strike it, don't carry it forward.
+> 4. Agent data-gaps (missing handle/email/audience size) are NOT operator action items; keep them out of Open Threads unless the operator must actually act.
+>
+> **Ownership + filing rules (operator ruling 2026-07-21, second batch; same ledger):**
+> 5. A thread lives on EXACTLY ONE page — the entity that owns the relationship the item belongs to (usually the direct counterparty: the person we'd message, or the company whose deal it is). Never mirror the same thread onto both the person and their company page; if a second page needs visibility, it gets a plain pointer line, not a copy. (Failure mode: identical David/USD.ai, Dave/Dexu, Claire/Orderly threads on both pages.)
+> 6. File under the SUBJECT of the action, not an adjacent entity from the same meeting. A Decibel decision goes on companies/decibel, not companies/aptos; a Nutoro task goes on people/nutoro, not companies/defillama; a Sophon question goes on companies/sophon, not the CEO's person page. Entity propagation (meeting-ingestion Phase 4/5) applies to TIMELINE entries only — Open Threads never propagate.
+> 7. Frame every thread from the operator's perspective and only when the operator (or Tailored) actually holds the ball or is waiting on it: "Send X to Y", "Waiting on Y for Z since <date>", "Y owes us X". A counterparty's INTERNAL task or aspiration (their LP survey, their product direction, their hobby project) is not an open thread — it is a State/Timeline fact. Never invent commitments the operator did not make.
+> 8. The gold standard for a thread (operator-designated): "Debt-repayment follow-up/check-in with Jedi; no record of payment" — a dated reminder of something genuinely unclosed that the operator wants in headspace.
+
 ---
 
 ## Timeline
