@@ -33,7 +33,7 @@ import type { BrainEngine } from '../core/engine.ts';
 import type { EnrichCandidate, PageType } from '../core/types.ts';
 import { operations } from '../core/operations.ts';
 import type { OperationContext } from '../core/operations.ts';
-import { isAvailable, chat, getChatModel, withBudgetTracker } from '../core/ai/gateway.ts';
+import { configureGatewayIfUninitialized, isAvailable, chat, getChatModel, withBudgetTracker } from '../core/ai/gateway.ts';
 import { BudgetTracker, BudgetExhausted } from '../core/budget/budget-tracker.ts';
 import { hybridSearch } from '../core/search/hybrid.ts';
 import { normalizeAliasList } from '../core/search/alias-normalize.ts';
@@ -886,7 +886,10 @@ export async function runEnrich(engine: BrainEngine, args: string[]): Promise<vo
     process.exit(1);
   }
 
-  // Chat gateway required for non-dry-run.
+  // Chat gateway required for non-dry-run. Recover a cold singleton before
+  // reporting an availability error (#2590); keep the fork's model-aware
+  // availability check + message.
+  if (!parsed.dryRun && !isAvailable('chat', parsed.model)) configureGatewayIfUninitialized();
   if (!parsed.dryRun && !isAvailable('chat', parsed.model)) {
     console.error(formatChatUnavailableMessage(parsed.model));
     process.exit(1);

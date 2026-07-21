@@ -2,6 +2,40 @@
 
 All notable changes to GBrain will be documented in this file.
 
+## [0.42.63.1] - 2026-07-21
+
+### Changed
+- Upstream sync: merged garrytan/gbrain v0.42.63.0 (28 commits) into the fork.
+  Includes the search title-candidate arm + cache telemetry fixes, oversized-page
+  search-vector fix, cycle deadline budgeting, jobs retry-reset, per-source
+  queue backpressure scoping, takes fail-closed hardening, and provider/gateway
+  fixes. Upstream's page_search_vector migration renumbered v124 -> v125 to
+  clear the collision with this fork's v124 (timeline_entries_parser_provenance),
+  which the live schema had already recorded.
+
+## [0.42.63.0] - 2026-07-20
+
+**Schema commands now open the local brain you actually configured.**
+
+If your PGLite brain lives at a custom path, commands such as `gbrain schema stats` previously ignored that path and could inspect the default brain instead. That made a healthy configured brain look empty or report the wrong schema counts. Schema commands now use the same complete database configuration as the rest of GBrain. PostgreSQL behavior is unchanged, and no migration is required.
+
+### How to use it
+
+Upgrade, then run the schema command normally:
+
+```bash
+gbrain upgrade
+gbrain schema stats --json
+```
+
+The reported page and type counts now come from the `database_path` in `~/.gbrain/config.json` when the engine is PGLite.
+
+### Itemized changes
+
+#### Fixed
+- **Schema CLI commands preserve configured PGLite paths.** Engine construction and connection now receive the canonical complete engine configuration, including both `database_path` and `database_url` where applicable.
+- **CLI tests are isolated from ambient database URLs.** Schema subprocess tests explicitly clear inherited PostgreSQL URL variables, and a persistent-PGLite regression test proves `schema stats` reads the configured database rather than the default brain.
+
 ## [0.42.62.1] - 2026-07-20
 
 Operational hardening release: the dream pipeline gets hard spend bounds, the
@@ -50,7 +84,6 @@ To take advantage of v0.42.62.1: rebuild and repoint your sealed runtime with
 `ops/runtime/build-runtime.sh <dest>`; migration v124 applies on the next
 `gbrain init --migrate-only` (or automatically on connect); then review legacy
 timeline cleanup with `gbrain timeline repair --content` before `--apply`.
-
 ## [0.42.62.0] - 2026-07-17
 
 **If your brain holds more than one source, everything now lands in the right one. Link extraction, timeline extraction, background cycles, and webhook captures used to quietly file some of their output under the default source; all of those paths now carry the correct source identity. Background agent jobs got tougher too: a failed database reconnect can no longer wedge the engine, and workers recover from dropped connections instead of crash-looping. If you run the admin dashboard behind a reverse proxy, the live activity panel finally connects. Long agent conversations cost less because repeated context is reused between turns on Anthropic calls. Local LiteLLM proxies work out of the box. Nested sources scan correctly again instead of reporting zero files. And the project's automated checks now include dependency vulnerability scanning, static code-security analysis, and signed provenance for release builds. Thirty merged changes in all, the largest batch to date, each one reviewed and verified against the live codebase before landing.**

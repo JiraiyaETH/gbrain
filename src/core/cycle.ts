@@ -523,6 +523,16 @@ export interface CycleOpts {
    * Validated via `assertValidSourceId` in `cycleLockIdFor` (defense-in-depth).
    */
   sourceId?: string;
+  /**
+   * Absolute wall-clock deadline (epoch ms) of the enclosing minion job,
+   * from `MinionJobContext.deadlineAtMs` (the claim-time `timeout_at`
+   * stamp). Phases that spawn bounded sub-work (patterns' subagent) clamp
+   * their own timeouts to the REMAINING time so one phase's fixed
+   * worst-case can't blow past the job budget and dead-letter the whole
+   * cycle mid-phase (#2781). Unset for direct callers (`gbrain dream`) —
+   * phases then use their configured timeouts unchanged.
+   */
+  deadlineAtMs?: number | null;
 }
 
 // ─── Lock primitives ───────────────────────────────────────────────
@@ -1978,6 +1988,7 @@ export async function runCycle(
             dryRun,
             sourceId: cycleSourceId,
             yieldDuringPhase: opts.yieldDuringPhase,
+            deadlineAtMs: opts.deadlineAtMs ?? null, // #2781: budget subagent from remaining job time
           });
         });
         result.duration_ms = duration_ms;

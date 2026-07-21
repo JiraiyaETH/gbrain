@@ -30,6 +30,7 @@ function makeCtx(data: Record<string, unknown>): MinionJobContext {
     name: 'shell-subagent',
     data,
     attempts_made: 0,
+    deadlineAtMs: null,
     signal: new AbortController().signal,
     shutdownSignal: new AbortController().signal,
     updateProgress: async () => {},

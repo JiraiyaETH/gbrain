@@ -132,8 +132,22 @@ function formatJobDetail(job: MinionJob): string {
   return lines.join('\n');
 }
 
-export async function runJobs(engine: BrainEngine, args: string[]): Promise<void> {
+export async function runJobs(engineOrNull: BrainEngine | null, args: string[]): Promise<void> {
   const sub = args[0];
+
+  // Thin-client dispatch (cli.ts) passes engine=null for the subcommands
+  // with remote MCP routing (`list`, `get`) so no scratch local engine is
+  // ever built. Any other subcommand arriving with a null engine is a
+  // routing bug upstream of this function — refuse instead of crashing
+  // inside MinionQueue.
+  if (!engineOrNull && sub !== 'list' && sub !== 'get') {
+    console.error(`\`gbrain jobs ${sub ?? ''}\` needs a local engine and cannot run on a thin client.`);
+    process.exit(1);
+  }
+  // Null only ever reaches the MCP-routed `list`/`get` branches, which
+  // never touch the engine — narrowed once here so the host-only cases
+  // below typecheck unchanged.
+  const engine = engineOrNull as BrainEngine;
 
   if (!sub || sub === '--help' || sub === '-h') {
     console.log(`gbrain jobs — Minions job queue
@@ -217,6 +231,8 @@ HANDLER TYPES (built in)
     return;
   }
 
+  // The constructor just stores the reference; on the null (thin-client
+  // list/get) paths no queue method is ever reached.
   const queue = new MinionQueue(engine);
 
   switch (sub) {
@@ -1487,7 +1503,7 @@ export async function registerBuiltinHandlers(
     }
     const types = Array.isArray(job.data.types)
       ? (job.data.types as string[]).filter((t) =>
-          ['conversation', 'meeting', 'slack', 'email'].includes(t),
+          ['conversation', 'meeting', 'slack', 'email', 'imessage', 'imessage-daily'].includes(t),
         )
       : undefined;
     const result = await runExtractConversationFactsCore(engine, {
@@ -1811,6 +1827,7 @@ export async function registerBuiltinHandlers(
       brainDir: effectiveBrainDir,
       pull,
       signal: job.signal, // propagate abort so cycle bails on timeout/cancel
+      deadlineAtMs: job.deadlineAtMs, // #2781: phases budget sub-work from remaining time
       ...(sourceId ? { sourceId } : {}),
       phases: requestedPhases,
       yieldBetweenPhases: async () => {
@@ -1862,6 +1879,7 @@ export async function registerBuiltinHandlers(
       brainDir: repoPath,
       pull: false, // brain-wide DB/maintenance work never git-pulls
       signal: job.signal,
+      deadlineAtMs: job.deadlineAtMs, // #2781: phases budget sub-work from remaining time
       phases,
       yieldBetweenPhases: async () => { await new Promise<void>((r) => setImmediate(r)); },
     });
@@ -2011,6 +2029,7 @@ export async function registerBuiltinHandlers(
       phases: [phase as any],
       signal: job.signal,
       ...(typeof jobSourceId === 'string' ? { sourceId: jobSourceId } : {}),
+      deadlineAtMs: job.deadlineAtMs, // #2781: phases budget sub-work from remaining time
     });
     return { phase, status: report.status, report };
   };
