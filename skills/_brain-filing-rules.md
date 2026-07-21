@@ -177,6 +177,12 @@ with active schema shelves. It should not point at stale `wiki/*` or
 `originals/*` paths unless the active schema pack explicitly restores those
 shelves.
 
+Machine-generated dream "originals" route to `ideas/dream/` (2026-07-21 operator
+ruling), mirroring upstream's deliberate `wiki/originals/ideas/` separation:
+the `ideas/` root stays human theses only ("raw possibilities nobody is building
+yet"); provenance is visible in the slug at retrieval time. Same `idea` type via
+prefix match — no pack change. Do not route dream output to the `ideas/` root.
+
 ## Takes attribution
 
 When writing a `<!--- gbrain:takes:begin -->` fence, the **holder** column says
