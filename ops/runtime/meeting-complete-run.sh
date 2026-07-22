@@ -27,7 +27,11 @@ LOCK_DIR="${MEETING_COMPLETE_LOCK_DIR:-$STATE_DIR/meeting-complete.lock}"
 LOCK_TOKEN="$STATE_DIR/.meeting-complete-lock-token.$$"
 LOCK_WAIT="${MEETING_COMPLETE_LOCK_WAIT_SECONDS:-0}"
 PY="${MEETING_COMPLETE_PYTHON:-$(command -v python3.12 || command -v python3 || true)}"
-SCRIPT="${MEETING_COMPLETE_SCRIPT:-$SCRIPT_DIR/meeting-complete.py}"
+# 2026-07-22 operator ruling: thin runner per Garry's recipes/meeting-sync.md
+# shape (webhook -> materialize -> run the skill -> check the page is good).
+# The 2026-07-16 sandbox controller (meeting-complete.py) is retired — its
+# isolation layer caused three of four meeting outages in its first week.
+SCRIPT="${MEETING_COMPLETE_SCRIPT:-$SCRIPT_DIR/meeting-run.py}"
 GB="${GBRAIN_BIN:-$SCRIPT_DIR/gbrain}"
 CLAUDE="${CLAUDE_BIN:-claude}"
 DB_PIN="$SCRIPT_DIR/dream-db-pin.sh"
