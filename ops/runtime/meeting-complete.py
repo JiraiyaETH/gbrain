@@ -968,6 +968,23 @@ def sandbox_profile_text(
         ("literal", HOME / ".netrc"),
         ("literal", HOME / ".npmrc"),
         ("subpath", HOME / "Library"),
+        # Private-content homes (2026-07-22, cross-model review finding): the
+        # agent's inputs are its disposable corpus copy + bundled skills +
+        # runtime only. A prompt-injected transcript must not be able to read
+        # personal documents/repos/exports into a promoted page.
+        ("subpath", HOME / "Documents"),
+        ("subpath", HOME / "Downloads"),
+        ("subpath", HOME / "Desktop"),
+        ("subpath", HOME / "Movies"),
+        ("subpath", HOME / "Pictures"),
+        ("subpath", HOME / "Music"),
+        ("subpath", HOME / "Projects"),
+        ("subpath", HOME / "workspace"),
+        ("subpath", HOME / "worktrees"),
+        ("subpath", HOME / "data"),
+        ("subpath", HOME / "brain-repos"),
+        ("subpath", HOME / "brain-intake"),
+        ("subpath", HOME / "tailored-shared"),
     ]
     denied_clause = "\n".join(
         f"(deny file-read* {_sandbox_filter(kind, path)})"
@@ -1700,6 +1717,29 @@ def verify_audited_hashes(resume: dict[str, Any], brain_dir: Path | None = None)
             )
 
 
+def refresh_audited_hashes(resume: dict[str, Any], brain_dir: Path | None = None) -> list[str]:
+    """Re-snapshot audited hashes after first-party post-promote enrichment.
+
+    The import + edge-materialization stages legitimately rewrite promoted
+    pages (auto_timeline/link reverse-writes land as `gbrain: write-through`
+    commits). The anti-tamper gate is the verify_audited_hashes call that runs
+    IMMEDIATELY after promotion; re-verifying the same pre-enrichment hashes
+    after extract raced our own machinery and failed every meeting once the
+    extract stage was fixed (2026-07-22). Returns the slugs whose bytes moved.
+    """
+    root = brain_dir or BRAIN_DIR
+    drifted: list[str] = []
+    for slug in sorted((resume.get("hashes") or {}).keys()):
+        path = root / f"{slug}.md"
+        if not path.exists():
+            raise PipelineFailure("hash-gate", f"audited page disappeared during enrichment: {slug}")
+        actual = sha256_bytes(path.read_bytes())
+        if actual != resume["hashes"][slug]:
+            drifted.append(slug)
+            resume["hashes"][slug] = actual
+    return drifted
+
+
 def stamp_meeting_ingested(
     meeting_path: Path,
     model: str,
@@ -2058,8 +2098,12 @@ def process_meeting(
             verify_audited_hashes(checkpoint, BRAIN_DIR)
             result["stages"]["promoted_import"] = narrow_import_pages(checkpoint["written"])
             result["stages"]["preflight_edges"] = materialize_edges()
-            verify_audited_hashes(checkpoint, BRAIN_DIR)
-            result["stages"]["hash_gate"] = {"passed": True, "hashes": checkpoint["hashes"]}
+            enrichment_drift = refresh_audited_hashes(checkpoint, BRAIN_DIR)
+            result["stages"]["hash_gate"] = {
+                "passed": True,
+                "hashes": checkpoint["hashes"],
+                "refreshed_after_enrichment": enrichment_drift,
+            }
             set_journal_state(journal_dir, "stamping")
             stamp = stamp_meeting_ingested(
                 live_path,

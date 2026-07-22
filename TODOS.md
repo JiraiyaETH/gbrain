@@ -1,13 +1,39 @@
 # TODOS
 
+## behavioral-review follow-ups (filed v0.42.63.1, cross-model review 2026-07-22)
+
+- [ ] **P1 — synthesize: thread deadlineAtMs + cancel timed-out children.**
+  patterns.ts got the #2781 clamp/cancel in the upstream merge; synthesize.ts
+  still waits a fixed timeout, does NOT cancel the child, and can stamp
+  completed-child refs before the all-success check. A parent-timed-out child
+  that keeps running and completes later relies solely on idempotency to avoid
+  double subscription work the next night; a child killed WITHOUT a persisted
+  receipt can duplicate pages across nights. Mirror the patterns.ts treatment
+  (clampSubagentBudgets + cancelJob on wait-timeout) and only stamp/reverse-
+  write refs for children with persisted completed receipts. Observed live:
+  night 2026-07-21 ran 1/9 non-success with the child completing at 3103s.
+- [ ] **P2 — reindex-search-vector chunks phase needs batching.** The pages
+  phase streams in batches (10,617 done clean), but the chunks backfill is a
+  single bulk statement that exceeds statement_timeout on a ~17k-chunk brain
+  (two consecutive timeouts 2026-07-22). Benign short-term (page vectors carry
+  the v125 semantics; chunk vectors converge on rewrite) but the command
+  should keyset-batch the chunk phase like the pages phase. Upstream-PR
+  candidate.
+- [ ] **P2 — takes/extract path-excludes for machine shelves.** takes.page_types
+  includes `idea` and `personal`; dream output lives at ideas/dream/ +
+  personal/reflections/ and is only protected by the $0.01 budget pause +
+  dream_generated frontmatter. Before D17 re-enables takes, add explicit path
+  excludes for ideas/dream/, personal/reflections/, personal/patterns/ so
+  machine pages can never seed takes regardless of budget.
+
 ## housecleaning follow-ups (filed v0.42.62.1)
 
-- [ ] **P1 — Meeting-agent output contract.** The meeting-completion Claude child
-  runs fully sandboxed (canary passes, denials enforced) but returned no
-  parseable JSON envelope and wrote nothing for a real captured meeting; the
-  audit correctly failed closed and the retry ledger keeps the meeting
-  eligible. Debug with a preserved sandbox/transcript (add a keep-sandbox
-  flag), then verify one meeting completes end to end.
+- [x] **P1 — Meeting-agent output contract.** RESOLVED v0.42.63.1 (2026-07-22):
+  root cause was the sandbox profile, not the agent — a Claude CLI update
+  reads paths outside the old read-allowlist and spawns /usr/bin/security;
+  EPERM killed the CLI before any stdout. Fixed by flipping reads to
+  denylist-sensitive + allowing the security exec (keychain stays mach-denied);
+  verified end-to-end (canary pass, receipt parsed, entity pages written).
 - [ ] **P1 — Regenerate the 2026-07-13 graph goldsets.** graph-topical/lineage/
   relational expectations were derived from the pre-consolidation typed-edge
   graph; after the ideas-shelf consolidation the topology changed (canonical
