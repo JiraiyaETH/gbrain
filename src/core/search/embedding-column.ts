@@ -357,10 +357,9 @@ export function getEmbeddingColumnRegistry(
  * Resolves the effective column descriptor for one query.
  *
  * Resolution chain:
- *   1. opts.embeddingColumn        (per-call override, e.g. from MCP query op)
- *   2. opts.sourceEmbeddingColumn  (single-source `sources.config` default)
- *   3. cfg.search_embedding_column (DB-plane default)
- *   4. DEFAULT_COLUMN_NAME ('embedding')
+ *   1. opts.embeddingColumn  (per-call override, e.g. from MCP query op)
+ *   2. cfg.search_embedding_column  (DB-plane default)
+ *   3. DEFAULT_COLUMN_NAME ('embedding')
  *
  * The resolved name is looked up in the merged registry; unknown names
  * throw EmbeddingColumnNotRegisteredError with a paste-ready hint.
@@ -371,7 +370,7 @@ export function getEmbeddingColumnRegistry(
  * to multiple engine calls without redoing the work.
  */
 export function resolveEmbeddingColumn(
-  opts: Pick<SearchOpts, 'embeddingColumn' | 'sourceEmbeddingColumn'> | undefined,
+  opts: Pick<SearchOpts, 'embeddingColumn'> | undefined,
   cfg: GBrainConfig,
 ): ResolvedColumn {
   // Fast path: already resolved (engine-internal). Re-validate the
@@ -408,9 +407,6 @@ export function resolveEmbeddingColumn(
   // String chain.
   const requestedName =
     (typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined) ??
-    (typeof opts?.sourceEmbeddingColumn === 'string' && opts.sourceEmbeddingColumn.length > 0
-      ? opts.sourceEmbeddingColumn
-      : undefined) ??
     (typeof cfg.search_embedding_column === 'string' && cfg.search_embedding_column.length > 0
       ? cfg.search_embedding_column
       : undefined) ??

@@ -132,7 +132,8 @@ describe('autopilot health scope', () => {
     expect(src).toContain('healthOptsForAutopilotUniverse(sourceUniverse)');
     expect(src).toContain('engine.getHealth(healthOptsForTick)');
     expect(src).toContain('sourceId: recommendationSourceId');
-    expect(src).toContain('if (!healthOptsForTick)');
+    expect(src).toContain('runAllOnboardChecks(engine)');
+    expect(src).toContain('filterAutopilotPlanSteps(unfilteredPlan)');
     expect(src).toContain('sourceUniverse,');
   });
 });

@@ -13,6 +13,9 @@ import {
   KNOWN_LINK_TYPES,
   type RelationVocab,
 } from '../src/core/search/relational-intent.ts';
+import { loadOperatorRelationVocab } from '../src/core/search/relational-vocab-loader.ts';
+
+const operatorVocab = loadOperatorRelationVocab();
 
 describe('parseRelationalQuery — archetypes', () => {
   test('who_rel: who invested in widget-co', () => {
@@ -69,7 +72,7 @@ describe('parseRelationalQuery — archetypes', () => {
   });
 
   test('local creator intersection: which creators worked with both X and Y', () => {
-    const r = parseRelationalQuery('Which creators worked with both INFINIT and Silo Finance?');
+    const r = parseRelationalQuery('Which creators worked with both INFINIT and Silo Finance?', operatorVocab);
     expect(r!.kind).toBe('connects');
     expect(r!.seeds).toEqual(['INFINIT', 'Silo Finance']);
     expect(r!.linkTypes).toEqual(['creator_for']);
@@ -77,7 +80,7 @@ describe('parseRelationalQuery — archetypes', () => {
   });
 
   test('local creator intersection: worked on X as well as Y', () => {
-    const r = parseRelationalQuery('Which KOLs worked on Nillion as well as INFINIT?');
+    const r = parseRelationalQuery('Which KOLs worked on Nillion as well as INFINIT?', operatorVocab);
     expect(r!.kind).toBe('connects');
     expect(r!.seeds).toEqual(['Nillion', 'INFINIT']);
     expect(r!.linkTypes).toEqual(['creator_for']);
@@ -85,7 +88,7 @@ describe('parseRelationalQuery — archetypes', () => {
   });
 
   test('local TAP intersection appends Tailored seed', () => {
-    const r = parseRelationalQuery('Which io.net creators also signed Tailored TAP associate agreements?');
+    const r = parseRelationalQuery('Which io.net creators also signed Tailored TAP associate agreements?', operatorVocab);
     expect(r!.kind).toBe('connects');
     expect(r!.seeds).toEqual(['io.net', 'Tailored']);
     expect(r!.linkTypes).toEqual(['creator_for', 'associate_of']);
@@ -93,17 +96,17 @@ describe('parseRelationalQuery — archetypes', () => {
   });
 
   test('local vendor and contract verbs', () => {
-    expect(parseRelationalQuery('who provides services to Tailored')!.linkTypes).toEqual(['service_provider_for']);
-    expect(parseRelationalQuery('who signed contracts/tap/arndxt-873cd435')!.linkTypes).toEqual(['signed']);
+    expect(parseRelationalQuery('who provides services to Tailored', operatorVocab)!.linkTypes).toEqual(['service_provider_for']);
+    expect(parseRelationalQuery('who signed contracts/tap/arndxt-873cd435', operatorVocab)!.linkTypes).toEqual(['signed']);
   });
 
   test('signed aggregate phrasings isolate the entity seed', () => {
-    const tap = parseRelationalQuery('who signed the TAP contract');
+    const tap = parseRelationalQuery('who signed the TAP contract', operatorVocab);
     expect(tap?.seeds).toEqual(['TAP']);
     expect(tap?.linkTypes).toEqual(['signed', 'mentions']);
     expect(tap?.direction).toBe('both');
 
-    const silo = parseRelationalQuery('who are all the KOLs signed to Silo');
+    const silo = parseRelationalQuery('who are all the KOLs signed to Silo', operatorVocab);
     expect(silo?.seeds).toEqual(['Silo']);
     expect(silo?.linkTypes).toEqual(['creator_for', 'signed']);
     expect(silo?.direction).toBe('both');
@@ -163,10 +166,6 @@ describe('default bank emits only known link types (no drift)', () => {
       'who advises bob-example',
       'who works at acme',
       'who at acme leads payments',
-      'which creators worked with both infinit and ionet',
-      'which io.net creators also signed Tailored TAP associate agreements',
-      'who provides services to tailored',
-      'who signed contracts/tap/example',
       'what did alice invest in',
       'where does alice work',
     ];

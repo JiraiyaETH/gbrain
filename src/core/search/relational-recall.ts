@@ -29,6 +29,7 @@ import type { SearchResult, PageType, RelationalFanoutRow } from '../types.ts';
 import { createAuditWriter } from '../audit/audit-writer.ts';
 import { resolveEntitySlugWithSource } from '../entities/resolve.ts';
 import { parseRelationalQuery, type RelationalQuery, type RelationVocab } from './relational-intent.ts';
+import { loadOperatorRelationVocab } from './relational-vocab-loader.ts';
 
 export interface RelationalArmOpts {
   sourceId?: string;
@@ -229,7 +230,7 @@ export async function buildRelationalArm(
     return list;
   };
 
-  const parsed = parseRelationalQuery(query, opts.vocab);
+  const parsed = parseRelationalQuery(query, opts.vocab ?? loadOperatorRelationVocab());
   if (!parsed) return finish([]);
   meta.kind = parsed.kind;
 

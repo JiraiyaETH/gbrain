@@ -72,34 +72,6 @@ describe('resolveEmbeddingColumn — resolution chain', () => {
     expect(r.name).toBe('embedding_voyage');
   });
 
-  test('sourceEmbeddingColumn wins over cfg.search_embedding_column', () => {
-    const r = resolveEmbeddingColumn(
-      { sourceEmbeddingColumn: 'embedding_code' },
-      cfg({
-        search_embedding_column: 'embedding_zeroentropy',
-        embedding_columns: {
-          embedding_code: { provider: 'voyage:voyage-code-3', dimensions: 1024, type: 'vector' },
-          embedding_zeroentropy: { provider: 'zeroentropyai:zembed-1', dimensions: 2560, type: 'halfvec' },
-        },
-      }),
-    );
-    expect(r.name).toBe('embedding_code');
-    expect(r.embeddingModel).toBe('voyage:voyage-code-3');
-  });
-
-  test('opts.embeddingColumn wins over sourceEmbeddingColumn', () => {
-    const r = resolveEmbeddingColumn(
-      { embeddingColumn: 'embedding_voyage', sourceEmbeddingColumn: 'embedding_code' },
-      cfg({
-        embedding_columns: {
-          embedding_code: { provider: 'voyage:voyage-code-3', dimensions: 1024, type: 'vector' },
-          embedding_voyage: { provider: 'voyage:voyage-3-large', dimensions: 1024, type: 'vector' },
-        },
-      }),
-    );
-    expect(r.name).toBe('embedding_voyage');
-  });
-
   test('unknown name throws EmbeddingColumnNotRegisteredError with hint', () => {
     let err: EmbeddingColumnNotRegisteredError | null = null;
     try {

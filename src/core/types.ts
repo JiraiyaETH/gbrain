@@ -1012,13 +1012,6 @@ export interface SearchOpts {
    */
   embeddingColumn?: 'embedding' | 'embedding_image' | 'embedding_multimodal' | string | ResolvedColumn;
   /**
-   * Source-level default embedding column, resolved from
-   * `sources.config.embedding_column` when a query is scoped to exactly one
-   * source. Explicit `embeddingColumn` still wins. Cross-source queries do not
-   * use this field because vector spaces cannot be mixed in one ranking.
-   */
-  sourceEmbeddingColumn?: string;
-  /**
    * @deprecated v0.29.1: use `since` instead. Removed in v0.30.
    * v0.27.0: filter results to pages updated/created after this date. ISO-8601 string.
    */

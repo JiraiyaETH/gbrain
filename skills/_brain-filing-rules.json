@@ -9,6 +9,88 @@
     "version": "0.4.1"
   },
   "schema_version": 1,
+  "relational_vocab": {
+    "extra_link_types": [
+      "creator_for",
+      "signed",
+      "service_provider_for",
+      "uses_vendor",
+      "associate_of",
+      "same_day_log",
+      "sourced_from",
+      "derived_from",
+      "supersedes",
+      "redirects_to",
+      "represents",
+      "built_on",
+      "collaborated_with"
+    ],
+    "extra_verbs": [
+      {
+        "verb": "created for|creates for|worked on|worked with|was a creator for|were creators for",
+        "linkTypes": ["creator_for"],
+        "direction": "in"
+      },
+      {
+        "verb": "signed|signed with|was a signer on|were signers on",
+        "linkTypes": ["signed"],
+        "direction": "in"
+      },
+      {
+        "verb": "provides services to|provided services to|is a service provider for|was a service provider for",
+        "linkTypes": ["service_provider_for"],
+        "direction": "in"
+      },
+      {
+        "verb": "uses as vendor|used as vendor|uses vendor|used vendor",
+        "linkTypes": ["uses_vendor"],
+        "direction": "out"
+      },
+      {
+        "verb": "is an associate of|are associates of|associated with",
+        "linkTypes": ["associate_of"],
+        "direction": "in"
+      }
+    ],
+    "extra_patterns": [
+      {
+        "pattern": "\\bwhich\\s+(?:creators?|kols?)\\s+(?:worked|work|created|create)\\s+(?:on|with|for)\\s+both\\s+(.{1,80}?)\\s+(?:and|&)\\s+(.{1,80}?)\\s*\\??$",
+        "kind": "connects",
+        "linkTypes": ["creator_for"],
+        "direction": "in",
+        "seedGroups": 2
+      },
+      {
+        "pattern": "\\bwhich\\s+(?:creators?|kols?)\\s+(?:worked|work|created|create)\\s+(?:on|with|for)\\s+(.{1,80}?)\\s+(?:as well as|and|&)\\s+(.{1,80}?)\\s*\\??$",
+        "kind": "connects",
+        "linkTypes": ["creator_for"],
+        "direction": "in",
+        "seedGroups": 2
+      },
+      {
+        "pattern": "\\bwhich\\s+(.{1,80}?)\\s+(?:creators?|kols?)\\s+also\\s+signed\\s+tailored\\s+tap\\s+associate\\s+agreements?\\s*\\??$",
+        "kind": "connects",
+        "linkTypes": ["creator_for", "associate_of"],
+        "direction": "in",
+        "seedGroups": 1,
+        "extraSeeds": ["Tailored"]
+      },
+      {
+        "pattern": "\\bwho\\s+(?:signed|was a signer on|were signers on)\\s+(?:the\\s+)?(.{1,80}?)\\s+(?:contracts?|agreements?)\\s*\\??$",
+        "kind": "who_rel",
+        "linkTypes": ["signed", "mentions"],
+        "direction": "both",
+        "seedGroups": 1
+      },
+      {
+        "pattern": "\\bwho\\s+(?:are|were)\\s+(?:all\\s+)?(?:the\\s+)?(?:creators?|kols?|people|associates?)\\s+(?:signed|contracted)\\s+(?:to|with|for)\\s+(.{1,80}?)\\s*\\??$",
+        "kind": "who_rel",
+        "linkTypes": ["creator_for", "signed"],
+        "direction": "both",
+        "seedGroups": 1
+      }
+    ]
+  },
   "rules": [
     {
       "kind": "person",

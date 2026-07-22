@@ -34,7 +34,7 @@ describe('incident recovery wiring (dependency-free)', () => {
 
   test('inline and targeted Autopilot paths are guarded', () => {
     expect(autopilotSource).toContain('phases: AUTOPILOT_PHASES');
-    expect(autopilotSource).toContain('filterAutopilotPlanSteps(plan)');
+    expect(autopilotSource).toContain('filterAutopilotPlanSteps(unfilteredPlan)');
     expect(autopilotSource).not.toContain("queue.add(\n                      'extract-atoms-drain'");
   });
 

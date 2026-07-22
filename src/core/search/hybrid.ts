@@ -26,6 +26,7 @@ import {
 import { applyAutocut, type AutocutDecision } from './autocut.ts';
 import { buildRelationalArm } from './relational-recall.ts';
 import { parseRelationalQuery } from './relational-intent.ts';
+import { loadOperatorRelationVocab } from './relational-vocab-loader.ts';
 import { loadConfigWithEngine } from '../config.ts';
 import { dedupResults } from './dedup.ts';
 import { applyReranker } from './rerank.ts';
@@ -50,36 +51,6 @@ import {
 export const RRF_K = 60;
 const COMPILED_TRUTH_BOOST = 2.0;
 const pendingCacheWrites = new Set<Promise<unknown>>();
-
-function singleScopedSourceId(opts?: Pick<SearchOpts, 'sourceId' | 'sourceIds'>): string | null {
-  if (!opts) return null;
-  if (opts.sourceIds) return opts.sourceIds.length === 1 ? opts.sourceIds[0]! : null;
-  if (opts.sourceId && opts.sourceId !== '__all__') return opts.sourceId;
-  return null;
-}
-
-async function sourceDefaultEmbeddingColumn(
-  engine: BrainEngine,
-  opts?: Pick<SearchOpts, 'embeddingColumn' | 'sourceId' | 'sourceIds'>,
-): Promise<string | undefined> {
-  if (opts?.embeddingColumn !== undefined) return undefined;
-  const sourceId = singleScopedSourceId(opts);
-  if (!sourceId) return undefined;
-  try {
-    const rows = await engine.executeRaw<{ config: Record<string, unknown> | string | null }>(
-      `SELECT config FROM sources WHERE id = $1 LIMIT 1`,
-      [sourceId],
-    );
-    const raw = rows[0]?.config;
-    const cfg = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
-    const value = cfg && typeof cfg === 'object' && !Array.isArray(cfg)
-      ? (cfg as Record<string, unknown>).embedding_column
-      : undefined;
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * v0.42 (issue #1699) agent-warning channel. Stamps `SearchResult.content_flag`
@@ -982,13 +953,9 @@ export async function hybridSearch(
   // misses DB-plane overrides.
   const mergedCfg = await loadConfigWithEngine(engine).catch(() => null);
   const cfgForColumn = mergedCfg ?? ((await import('../config.ts')).loadConfig()) ?? null;
-  const sourceEmbeddingColumn = await sourceDefaultEmbeddingColumn(engine, opts);
-  const columnOpts = sourceEmbeddingColumn
-    ? { ...opts, sourceEmbeddingColumn }
-    : opts;
   const resolvedCol = cfgForColumn
-    ? resolveEmbeddingColumn(columnOpts, cfgForColumn)
-    : resolveEmbeddingColumn(columnOpts, { engine: 'pglite' });
+    ? resolveEmbeddingColumn(opts, cfgForColumn)
+    : resolveEmbeddingColumn(opts, { engine: 'pglite' });
 
   const limit = opts?.limit || resolvedMode.searchLimit;
   const offset = opts?.offset || 0;
@@ -1632,7 +1599,7 @@ export async function hybridSearch(
     ? await applyReranker(query, deduped, rerankerOpts as any)
     : deduped;
   const relationalIntent = resolvedMode.relationalRetrieval
-    ? parseRelationalQuery(query)
+    ? parseRelationalQuery(query, loadOperatorRelationVocab())
     : null;
   const relationBalanced = relationalList.length > 0
     && relationalIntent?.linkTypes?.includes('signed')

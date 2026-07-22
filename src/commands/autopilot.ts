@@ -837,22 +837,18 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
         // Per A19 fail-open: any throw in the onboard path falls through
         // to legacy doctor-only plan (no crash).
         let extraRemediations: ReturnType<typeof computeRecommendations> = [];
-        // Onboard checks are intentionally brain-wide aggregates
-        // (src/core/onboard/checks.ts). When this tick's score is scoped to
-        // the serviced source universe, including their remediations would
-        // make the plan disagree with the score's universe.
-        if (!healthOptsForTick) {
-          try {
-            const { runAllOnboardChecks } = await import('../core/onboard/checks.ts');
-            const onboardResults = await runAllOnboardChecks(engine);
-            extraRemediations = onboardResults.flatMap((r) => r.remediations);
-          } catch (err) {
-            process.stderr.write(
-              `[autopilot] onboard checks failed (fail-open per A19): ${err instanceof Error ? err.message : String(err)}\n`,
-            );
-          }
+        try {
+          const { runAllOnboardChecks } = await import('../core/onboard/checks.ts');
+          const onboardResults = await runAllOnboardChecks(engine);
+          extraRemediations = onboardResults.flatMap((r) => r.remediations);
+        } catch (err) {
+          process.stderr.write(
+            `[autopilot] onboard checks failed (fail-open per A19): ${err instanceof Error ? err.message : String(err)}\n`,
+          );
         }
-        const plan = computeRecommendations(health, ctx, extraRemediations).filter((r) => r.status === 'remediable');
+        const { filterAutopilotPlanSteps } = await import('../core/cycle.ts');
+        const unfilteredPlan = computeRecommendations(health, ctx, extraRemediations).filter((r) => r.status === 'remediable');
+        const plan = filterAutopilotPlanSteps(unfilteredPlan);
         const estTotal = plan.reduce((s, r) => s + r.est_seconds, 0);
 
         // Track time since last full cycle for the 60-min floor.
@@ -941,11 +937,8 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
           // D9 content-hash idempotency keys (from computeRecommendations).
           // maxWaiting:1 per submit per codex #17 (closes the backpressure
           // gap the prior implementation had for targeted submits).
-          const {
-            filterAutopilotPlanSteps,
-            isAutopilotExcludedPhase,
-          } = await import('../core/cycle.ts');
-          for (const step of plan) {
+          const { isAutopilotExcludedPhase } = await import('../core/cycle.ts');
+          for (const step of unfilteredPlan) {
             if (!isAutopilotExcludedPhase(step.job)) continue;
             if (jsonMode) {
               process.stderr.write(JSON.stringify({
@@ -958,7 +951,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
               console.log(`[skip] ${step.job} is explicit/manual-only; Autopilot did not dispatch it`);
             }
           }
-          for (const step of filterAutopilotPlanSteps(plan)) {
+          for (const step of plan) {
             try {
               const isProtected = !!step.protected;
               const submitOpts = {

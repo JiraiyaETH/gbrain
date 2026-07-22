@@ -12,13 +12,14 @@
   (clampSubagentBudgets + cancelJob on wait-timeout) and only stamp/reverse-
   write refs for children with persisted completed receipts. Observed live:
   night 2026-07-21 ran 1/9 non-success with the child completing at 3103s.
-- [ ] **P2 — reindex-search-vector chunks phase needs batching.** The pages
-  phase streams in batches (10,617 done clean), but the chunks backfill is a
-  single bulk statement that exceeds statement_timeout on a ~17k-chunk brain
-  (two consecutive timeouts 2026-07-22). Benign short-term (page vectors carry
-  the v125 semantics; chunk vectors converge on rewrite) but the command
-  should keyset-batch the chunk phase like the pages phase. Upstream-PR
-  candidate.
+- [ ] **P2 — reindex-search-vector: BACKFILL_BATCH_SIZE too large for big-chunk
+  corpora.** Both phases ARE keyset-batched, but at 5,000 rows per UPDATE the
+  chunks phase computes 3 tsvectors per row over chunk_text up to ~500KB (code
+  sources) — one batch exceeds the 2-min statement_timeout (three consecutive
+  failures 2026-07-22, including on an idle DB). Completed operationally via
+  the same SET clause at batch=200. Upstream PR: make the batch size
+  size-aware (or env-tunable), e.g. cap by sum(length(chunk_text)) per batch
+  rather than row count.
 - [ ] **P2 — takes/extract path-excludes for machine shelves.** takes.page_types
   includes `idea` and `personal`; dream output lives at ideas/dream/ +
   personal/reflections/ and is only protected by the $0.01 budget pause +

@@ -18,10 +18,11 @@
  * "who invested in <seed>" pattern.
  *
  * Vocabulary (D2): the default bank covers the common archetypes; a schema
- * pack can extend it with `extraVerbs`. Every emitted link_type is validated
- * against KNOWN_LINK_TYPES so the query side can't drift from what ingest
- * actually produces (see link-extraction.ts:inferLinkType). intro/connects
- * traverse type-agnostically (linkTypes = null) because gbrain has no
+ * pack can extend it with `extraVerbs`, `extraLinkTypes`, and
+ * `extraPatterns`. Every emitted link_type is validated against the effective
+ * known-link-type set so the query side can't drift from what ingest actually
+ * produces (see link-extraction.ts:inferLinkType). intro/connects traverse
+ * type-agnostically (linkTypes = null) because gbrain has no
  * `introduced`/`knows` edge — any edge touching the seed is the signal.
  *
  * ReDoS: seed captures are length-bounded (`.{1,80}?`) and every pattern is
@@ -50,14 +51,28 @@ export interface RelationalQuery {
 export interface RelationVerbSpec {
   /** A regex-source alternation of phrasings, e.g. `acquired|bought`. */
   verb: string;
-  /** Edges this verb maps to. MUST be a subset of KNOWN_LINK_TYPES. */
+  /** Edges this verb maps to. Must be a subset of the effective known-link-type set. */
   linkTypes: string[];
   /** Direction from the seed entity named after the verb. */
   direction: RelationDirection;
 }
 
+export interface RelationPatternSpec {
+  /** Full regex source. Capture groups 1..seedGroups are treated as seeds. */
+  pattern: string;
+  kind: RelationalKind;
+  /** Typed edges to traverse, or null/undefined for type-agnostic traversal. */
+  linkTypes?: string[] | null;
+  direction: RelationDirection;
+  seedGroups: 1 | 2;
+  /** Static seed phrases appended after captured seeds. */
+  extraSeeds?: string[];
+}
+
 export interface RelationVocab {
+  extraLinkTypes?: string[];
   extraVerbs?: RelationVerbSpec[];
+  extraPatterns?: RelationPatternSpec[];
 }
 
 /**
@@ -72,19 +87,6 @@ export const KNOWN_LINK_TYPES: ReadonlySet<string> = new Set([
   'advises',
   'works_at',
   'attended',
-  'creator_for',
-  'signed',
-  'service_provider_for',
-  'uses_vendor',
-  'associate_of',
-  'same_day_log',
-  'sourced_from',
-  'derived_from',
-  'supersedes',
-  'redirects_to',
-  'represents',
-  'built_on',
-  'collaborated_with',
   'yc_partner',
   'led_round',
   'mentions',
@@ -126,11 +128,6 @@ const WHO_REL_VERBS: Array<{ verb: string; linkTypes: string[]; direction: Relat
   { verb: 'advises|advised', linkTypes: ['advises'], direction: 'in' },
   { verb: 'works at|worked at|works for', linkTypes: ['works_at'], direction: 'in' },
   { verb: 'attended', linkTypes: ['attended'], direction: 'in' },
-  { verb: 'created for|creates for|worked on|worked with|was a creator for|were creators for', linkTypes: ['creator_for'], direction: 'in' },
-  { verb: 'signed|signed with|was a signer on|were signers on', linkTypes: ['signed'], direction: 'in' },
-  { verb: 'provides services to|provided services to|is a service provider for|was a service provider for', linkTypes: ['service_provider_for'], direction: 'in' },
-  { verb: 'uses as vendor|used as vendor|uses vendor|used vendor', linkTypes: ['uses_vendor'], direction: 'out' },
-  { verb: 'is an associate of|are associates of|associated with', linkTypes: ['associate_of'], direction: 'in' },
 ];
 
 function buildPatterns(vocab?: RelationVocab): CompiledPattern[] {
@@ -151,27 +148,17 @@ function buildPatterns(vocab?: RelationVocab): CompiledPattern[] {
     ),
     kind: 'connects', linkTypes: null, direction: 'both', seedGroups: 2,
   });
-  patterns.push({
-    re: new RegExp(
-      `\\bwhich\\s+(?:creators?|kols?)\\s+(?:worked|work|created|create)\\s+(?:on|with|for)\\s+both\\s+${SEED}\\s+(?:and|&)\\s+${SEED}\\s*\\??$`,
-      'i',
-    ),
-    kind: 'connects', linkTypes: ['creator_for'], direction: 'in', seedGroups: 2,
-  });
-  patterns.push({
-    re: new RegExp(
-      `\\bwhich\\s+(?:creators?|kols?)\\s+(?:worked|work|created|create)\\s+(?:on|with|for)\\s+${SEED}\\s+(?:as well as|and|&)\\s+${SEED}\\s*\\??$`,
-      'i',
-    ),
-    kind: 'connects', linkTypes: ['creator_for'], direction: 'in', seedGroups: 2,
-  });
-  patterns.push({
-    re: new RegExp(
-      `\\bwhich\\s+${SEED}\\s+(?:creators?|kols?)\\s+also\\s+signed\\s+tailored\\s+tap\\s+associate\\s+agreements?\\s*\\??$`,
-      'i',
-    ),
-    kind: 'connects', linkTypes: ['creator_for', 'associate_of'], direction: 'in', seedGroups: 1, extraSeeds: ['Tailored'],
-  });
+
+  for (const p of vocab?.extraPatterns ?? []) {
+    patterns.push({
+      re: new RegExp(p.pattern, 'i'),
+      kind: p.kind,
+      linkTypes: p.linkTypes ?? null,
+      direction: p.direction,
+      seedGroups: p.seedGroups,
+      extraSeeds: p.extraSeeds,
+    });
+  }
 
   // intro — type-agnostic walk around the named person (no `introduced` edge).
   patterns.push({
@@ -192,24 +179,6 @@ function buildPatterns(vocab?: RelationVocab): CompiledPattern[] {
   });
 
   // who_rel — "who <verb> <seed>".
-  // Signed aggregate phrasings need two small precision-preserving repairs:
-  // (1) "the TAP contract" names TAP, not an entity called "TAP contract";
-  // (2) "who are the KOLs signed to Silo" asks for the creator/signature
-  // neighborhood around Silo.  Both remain seed-gated by the resolver.
-  patterns.push({
-    re: new RegExp(
-      `\\bwho\\s+(?:signed|was a signer on|were signers on)\\s+(?:the\\s+)?${SEED}\\s+(?:contracts?|agreements?)\\s*\\??$`,
-      'i',
-    ),
-    kind: 'who_rel', linkTypes: ['signed', 'mentions'], direction: 'both', seedGroups: 1,
-  });
-  patterns.push({
-    re: new RegExp(
-      `\\bwho\\s+(?:are|were)\\s+(?:all\\s+)?(?:the\\s+)?(?:creators?|kols?|people|associates?)\\s+(?:signed|contracted)\\s+(?:to|with|for)\\s+${SEED}\\s*\\??$`,
-      'i',
-    ),
-    kind: 'who_rel', linkTypes: ['creator_for', 'signed'], direction: 'both', seedGroups: 1,
-  });
   for (const v of WHO_REL_VERBS) {
     patterns.push({
       re: new RegExp(`\\bwho\\s+(?:${v.verb})\\s+${SEED}\\s*\\??$`, 'i'),
@@ -257,19 +226,69 @@ function validSeed(s: string): boolean {
   return true;
 }
 
+const LINK_TYPE_RE = /^[a-z][a-z0-9_]*$/;
+const DIRECTIONS: ReadonlySet<RelationDirection> = new Set(['in', 'out', 'both']);
+const KINDS: ReadonlySet<RelationalKind> = new Set(['who_rel', 'who_at', 'connects', 'intro']);
+
+function effectiveKnownLinkTypes(vocab: RelationVocab): ReadonlySet<string> {
+  return new Set([...KNOWN_LINK_TYPES, ...(vocab.extraLinkTypes ?? [])]);
+}
+
+function validateLinkTypeNames(linkTypes: readonly string[], known: ReadonlySet<string>, context: string): void {
+  for (const lt of linkTypes) {
+    if (!known.has(lt)) {
+      throw new Error(
+        `relational vocab: unknown link_type "${lt}" for ${context} — must be one of ${[...known].join(', ')}`,
+      );
+    }
+  }
+}
+
 /**
  * Validate that every link_type a vocab emits is one ingest can produce.
  * Throws on an unknown type so a misconfigured schema pack fails loudly at
  * load time rather than silently traversing an edge that never exists.
  */
 export function validateVocab(vocab: RelationVocab): void {
+  for (const lt of vocab.extraLinkTypes ?? []) {
+    if (typeof lt !== 'string' || !LINK_TYPE_RE.test(lt)) {
+      throw new Error(`relational vocab: invalid extra link_type "${String(lt)}"`);
+    }
+  }
+  const known = effectiveKnownLinkTypes(vocab);
   for (const v of vocab.extraVerbs ?? []) {
-    for (const lt of v.linkTypes) {
-      if (!KNOWN_LINK_TYPES.has(lt)) {
-        throw new Error(
-          `relational vocab: unknown link_type "${lt}" for verb /${v.verb}/ — must be one of ${[...KNOWN_LINK_TYPES].join(', ')}`,
-        );
-      }
+    if (typeof v.verb !== 'string' || v.verb.length === 0) {
+      throw new Error('relational vocab: extra verb must include a non-empty verb');
+    }
+    if (!Array.isArray(v.linkTypes)) {
+      throw new Error(`relational vocab: verb /${v.verb}/ linkTypes must be an array`);
+    }
+    if (!DIRECTIONS.has(v.direction)) {
+      throw new Error(`relational vocab: verb /${v.verb}/ has invalid direction "${String(v.direction)}"`);
+    }
+    // Validate regex source early.
+    new RegExp(v.verb);
+    validateLinkTypeNames(v.linkTypes, known, `verb /${v.verb}/`);
+  }
+  for (const p of vocab.extraPatterns ?? []) {
+    if (typeof p.pattern !== 'string' || p.pattern.length === 0) {
+      throw new Error('relational vocab: extra pattern must include a non-empty pattern');
+    }
+    if (!KINDS.has(p.kind)) {
+      throw new Error(`relational vocab: extra pattern /${p.pattern}/ has invalid kind "${String(p.kind)}"`);
+    }
+    if (!DIRECTIONS.has(p.direction)) {
+      throw new Error(`relational vocab: extra pattern /${p.pattern}/ has invalid direction "${String(p.direction)}"`);
+    }
+    if (p.seedGroups !== 1 && p.seedGroups !== 2) {
+      throw new Error(`relational vocab: extra pattern /${p.pattern}/ seedGroups must be 1 or 2`);
+    }
+    new RegExp(p.pattern, 'i');
+    if (p.linkTypes) {
+      validateLinkTypeNames(p.linkTypes, known, `pattern /${p.pattern}/`);
+    }
+    if (p.extraSeeds && !p.extraSeeds.every(s => typeof s === 'string' && validSeed(s))) {
+      throw new Error(`relational vocab: extra pattern /${p.pattern}/ extraSeeds must be valid seed strings`);
     }
   }
 }
@@ -290,7 +309,7 @@ export function parseRelationalQuery(query: string, vocab?: RelationVocab): Rela
       const a = cleanSeed(m[1] ?? '');
       const b = cleanSeed(m[2] ?? '');
       if (!validSeed(a) || !validSeed(b)) continue;
-      return { kind: p.kind, seeds: [a, b], linkTypes: p.linkTypes, direction: p.direction, relationPhrase: m[0].trim() };
+      return { kind: p.kind, seeds: [a, b, ...(p.extraSeeds ?? [])], linkTypes: p.linkTypes, direction: p.direction, relationPhrase: m[0].trim() };
     }
 
     const seed = cleanSeed(m[1] ?? '');
