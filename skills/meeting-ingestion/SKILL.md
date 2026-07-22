@@ -251,6 +251,12 @@ internal-team attendees who recur across most meetings.
 
 ### Phase 4: Entity propagation (MANDATORY)
 
+> **Date grounding (non-negotiable):** every fact, timeline entry, or State line derived from the
+> transcript resolves relative time against the MEETING DATE, never the ingestion date. "Today is my
+> birthday" in a 2026-07-21 meeting is stored as "Birthday: July 21" with the meeting as source —
+> never the deictic phrasing verbatim, which becomes unanswerable ("what's his birthday?") and
+> dates itself to whenever ingestion happened to run.
+
 > **Propagation scope (operator ruling 2026-07-21; personal/taste/architecture-ledger):** propagation
 > means TIMELINE entries (and page creation/State facts) only. **Open Threads NEVER propagate** — a
 > follow-up item is filed ONCE, on the page of the entity that owns the relationship (per the
