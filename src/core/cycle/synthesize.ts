@@ -27,6 +27,7 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
+import { safeLoad as yamlSafeLoad } from 'js-yaml';
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { chat as gatewayChat, validateModelId, type ChatResult } from '../ai/gateway.ts';
 import { AIConfigError } from '../ai/errors.ts';
@@ -2083,6 +2084,46 @@ async function markLogicalTranscriptComplete(
  * engine method). Best-effort per row: a stamp failure never kills the
  * phase (the render-time override still covers the file).
  */
+/**
+ * Deterministic repair for the dream-writer's known YAML flakiness: the model
+ * sometimes closes frontmatter early and emits its `relevant_to`/`derived_from`
+ * links as a second pseudo-block at the head of the body — the pack's typed
+ * edges then never materialize and the page orphans. Detect that stray block,
+ * parse it, and return { extraFrontmatter, repairedBody }; null when clean.
+ * Pure function so it's unit-testable.
+ */
+export function repairStrayLinkBlock(
+  compiledTruth: string,
+): { extraFrontmatter: Record<string, unknown>; repairedBody: string } | null {
+  const m = compiledTruth.match(
+    /^\s*((?:relevant_to|derived_from|aliases|tags|supersedes):[\s\S]{0,2000}?)\n---\n/,
+  );
+  if (!m) return null;
+  let parsed: unknown;
+  try {
+    parsed = yamlSafeLoad(m[1]);
+  } catch {
+    return null; // not actually YAML — leave the body alone
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const allowed = new Set(['relevant_to', 'derived_from', 'aliases', 'tags', 'supersedes']);
+  const extra: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!allowed.has(k)) return null; // unexpected keys → don't guess
+    extra[k] = v;
+  }
+  if (Object.keys(extra).length === 0) return null;
+  return { extraFrontmatter: extra, repairedBody: compiledTruth.slice(m[0].length).replace(/^\s*\n/, '') };
+}
+
+/** True when a dream body looks cut off mid-write (output-cap truncation). */
+export function looksTruncated(compiledTruth: string): boolean {
+  const t = compiledTruth.trimEnd();
+  if (t.length === 0) return true;
+  if (/[:;,—]$/.test(t) || /(^|\n)#{1,6} [^\n]*$/.test(t)) return true;
+  return false;
+}
+
 async function stampDreamProvenance(
   engine: BrainEngine,
   refs: Array<{ slug: string; source_id: string }>,
@@ -2092,13 +2133,37 @@ async function stampDreamProvenance(
   const { executeRawJsonb } = await import('../sql-query.ts');
   for (const { slug, source_id } of refs) {
     try {
+      const stamp: Record<string, unknown> = { dream_generated: true, dream_cycle_date: cycleDate };
+      // Writer-quality repairs (2026-07-22): fix the model's stray-link-block
+      // YAML flakiness at the choke point every child page passes through, and
+      // flag output-cap truncation instead of silently accepting a cut-off page.
+      const page = await engine.getPage(slug, { sourceId: source_id });
+      let repairedBody: string | null = null;
+      if (page?.compiled_truth) {
+        const repair = repairStrayLinkBlock(page.compiled_truth);
+        if (repair) {
+          Object.assign(stamp, repair.extraFrontmatter);
+          repairedBody = repair.repairedBody;
+          process.stderr.write(`[dream] repaired stray link block on ${slug}@${source_id}\n`);
+        }
+        if (looksTruncated(repairedBody ?? page.compiled_truth)) {
+          stamp.status = 'incomplete';
+          process.stderr.write(`[dream] flagged truncated body on ${slug}@${source_id}\n`);
+        }
+      }
+      if (repairedBody !== null) {
+        await engine.executeRaw(
+          `UPDATE pages SET compiled_truth = $3 WHERE slug = $1 AND source_id = $2`,
+          [slug, source_id, repairedBody],
+        );
+      }
       await executeRawJsonb(
         engine,
         `UPDATE pages
             SET frontmatter = COALESCE(frontmatter, '{}'::jsonb) || $3::jsonb
           WHERE slug = $1 AND source_id = $2`,
         [slug, source_id],
-        [{ dream_generated: true, dream_cycle_date: cycleDate }],
+        [stamp],
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
