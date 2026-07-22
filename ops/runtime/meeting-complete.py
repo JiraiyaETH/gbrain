@@ -922,43 +922,26 @@ def sandbox_profile_text(
 ) -> str:
     """Build a deny-default profile with no global filesystem-read grant."""
     root = agent_root.resolve()
-    read_filters: list[tuple[str, Path]] = [
-        ("subpath", root),
-        ("path-ancestors", root),
-        ("subpath", Path("/Library/Apple")),
-        ("subpath", Path("/Library/Filesystems/NetFSPlugins")),
-        ("subpath", Path("/Library/Preferences/Logging")),
-        ("subpath", Path("/System")),
-        ("subpath", Path("/usr/lib")),
-        ("subpath", Path("/usr/share")),
-        ("subpath", Path("/private/var/db/timezone")),
-        ("subpath", Path("/private/var/select")),
-        ("subpath", Path("/private/etc/ssl")),
-        ("literal", Path("/")),
-        ("literal", Path("/etc")),
-        ("literal", Path("/tmp")),
-        ("literal", Path("/var")),
-        ("literal", Path("/private/etc/localtime")),
-        ("literal", Path("/private/var/db/DarwinDirectory/local/recordStore.data")),
-        ("literal", Path("/private/etc/hosts")),
-        ("literal", Path("/private/etc/resolv.conf")),
-        ("literal", Path("/private/etc/services")),
-        ("literal", Path("/private/etc/protocols")),
-        ("literal", Path("/dev/null")),
-        ("literal", Path("/dev/random")),
-        ("literal", Path("/dev/urandom")),
+    # 2026-07-22: the filesystem-READ policy flipped from allowlist to
+    # denylist. The Claude CLI's internal startup read set is not stably
+    # enumerable (each CLI update added paths; a 2026-07 update finally
+    # broke every run with an un-enumerable early read + a keychain
+    # `security` subprocess, silently failing the whole meeting lane for
+    # days). Reads are now open EXCEPT the enumerated sensitive surfaces
+    # (brain corpus, all of ~/.gbrain minus this workspace, credentials,
+    # dotfiles, ~/Library). Write confinement, exec confinement, and the
+    # securityd mach denials are unchanged — the sandbox's real contract
+    # (no brain/secret reads, workspace-only writes, no arbitrary exec)
+    # is preserved and the isolation canary still proves it per run.
+    exec_filters: list[tuple[str, Path]] = [
         ("literal", claude_executable),
+        ("subpath", root),
+        # New Claude CLI versions spawn /usr/bin/security (keychain probe)
+        # during auth resolution; EPERM there kills the CLI before any
+        # output. The keychain itself stays sealed by the securityd
+        # mach-lookup denials below, so the probe fails closed + graceful.
+        ("literal", Path("/usr/bin/security")),
     ]
-    read_filters.extend(("subpath", path) for path in claude_resource_roots(claude_executable))
-    if canary_tools:
-        # These exact system executables are present only in the no-model canary
-        # profile. The model-facing profile cannot read or execute a shell/cat.
-        read_filters.extend(
-            ("literal", path)
-            for path in (Path("/bin/sh"), Path("/bin/bash"), Path("/bin/cat"))
-        )
-    read_clause = "\n    ".join(_sandbox_filter(kind, path) for kind, path in read_filters)
-    exec_filters: list[tuple[str, Path]] = [("literal", claude_executable), ("subpath", root)]
     exec_filters.extend(
         ("subpath", path) for path in claude_resource_roots(claude_executable)
     )
@@ -970,15 +953,21 @@ def sandbox_profile_text(
     exec_clause = "\n    ".join(_sandbox_filter(kind, path) for kind, path in exec_filters)
     denied_reads: list[tuple[str, Path]] = [
         ("subpath", BRAIN_DIR),
-        ("literal", HOME / ".gbrain/config.json"),
+        ("subpath", HOME / ".gbrain"),
         ("literal", HOME / ".zshenv"),
         ("literal", HOME / ".zprofile"),
         ("literal", HOME / ".pgpass"),
         ("subpath", HOME / ".ssh"),
         ("subpath", HOME / ".aws"),
-        ("subpath", HOME / ".config/gcloud"),
+        ("subpath", HOME / ".config"),
         ("subpath", HOME / ".supabase"),
-        ("subpath", HOME / "Library/Keychains"),
+        ("subpath", HOME / ".claude"),
+        ("literal", HOME / ".claude.json"),
+        ("subpath", HOME / ".codex"),
+        ("subpath", HOME / ".hermes"),
+        ("literal", HOME / ".netrc"),
+        ("literal", HOME / ".npmrc"),
+        ("subpath", HOME / "Library"),
     ]
     denied_clause = "\n".join(
         f"(deny file-read* {_sandbox_filter(kind, path)})"
@@ -991,10 +980,6 @@ def sandbox_profile_text(
     # denial, on the exact host runtime before any model invocation.
     return f"""(version 3)
 (allow default)
-(deny file-read* file-test-existence
-    (require-not
-        (require-any
-            {read_clause})))
 (deny file-write*
     (require-not
         (require-any
@@ -1007,6 +992,10 @@ def sandbox_profile_text(
 (deny mach-lookup (global-name \"com.apple.securityd\"))
 (deny mach-lookup (global-name \"com.apple.securityd.xpc\"))
 {denied_clause}
+(allow file-read* file-test-existence
+    (require-any
+        (subpath {json.dumps(str(root))})
+        (path-ancestors {json.dumps(str(root))})))
 """
 
 
@@ -1310,7 +1299,7 @@ def run_isolation_canary(
             "sensitive_sentinel_existed": True,
             "gbrain_config_existed": config_path.exists(),
             "ssh_probe_existed": ssh_probe.exists(),
-            "read_policy": "allowlist",
+            "read_policy": "denylist-sensitive",
             "environment_policy": "allowlist",
             "db_environment_keys_scrubbed": scrubbed,
             "denied_tool_attempts": context["deny_log"].read_text(encoding="utf-8").splitlines(),
@@ -1745,7 +1734,10 @@ def stamp_meeting_ingested(
 
 
 def materialize_edges() -> dict[str, Any]:
-    command = [GBRAIN_BIN, "extract", "links", "--include-frontmatter", "--source", SOURCE_ID]
+    # `extract --source` selects the MODE (fs|db); source SCOPING is
+    # `--source-id`. Un-masked 2026-07-22 by the envelope fix — this stage
+    # had been unreachable while the agent stage failed.
+    command = [GBRAIN_BIN, "extract", "links", "--include-frontmatter", "--source-id", SOURCE_ID]
     environment = {**os.environ, "GBRAIN_SOURCE": SOURCE_ID, "GBRAIN_DISABLE_DIRECT_POOL": "1"}
     try:
         result = subprocess.run(
